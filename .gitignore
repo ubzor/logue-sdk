@@ -5,6 +5,9 @@
 ## Vim Temp Files
 *.swp
 
+# Personal AI session notes (not for the repo)
+CLAUDE.md
+
 # Object files
 *.o
 *.ko
@@ -19,6 +22,8 @@
 .profile
 .bash_history
 tools/gcc/gcc-arm-none-eabi-*
+# ARM toolchain downloaded into the repo root (see tools/gcc/get_gcc_*.sh)
+/gcc-arm-none-eabi-*
 
 # Doxygen documentation
 **/docs/html
