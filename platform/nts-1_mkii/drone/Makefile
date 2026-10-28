@@ -66,8 +66,11 @@ STRIP := $(GCC_BIN_PATH)/$(GCC_TARGET)strip
 HEX   := $(CP) -O ihex
 BIN   := $(CP) -O binary
 
+# LDSCRIPT is set in config.mk to the local ./unit.ld (a copy of ../ld/unit.ld
+# whose .unit_header section is not wrapped in KEEP(), so --gc-sections can
+# drop the weak fallback unit_header from _unit_base.c). Do NOT override it
+# here with $(LDDIR)/unit.ld, or the local script will be ignored.
 RULESPATH := $(LDDIR)
-LDSCRIPT := $(LDDIR)/unit.ld
 DLIBS := -lc
 
 DADEFS := -D$(MCU_MODEL) -DCORTEX_USE_FPU=TRUE -DARM_MATH_CM7
@@ -157,9 +160,9 @@ MCFLAGS   := -mcpu=$(MCU)
 ODFLAGS	  := -x --syms
 ASFLAGS   = $(MCFLAGS) -g $(TOPT) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.s=.lst)) $(ADEFS)
 ASXFLAGS  = $(MCFLAGS) -g $(TOPT) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.S=.lst)) $(ADEFS)
-CFLAGS    = $(MCFLAGS) $(TOPT) $(OPT) $(COPT) $(CWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.c=.lst)) $(DEFS)
-CXXFLAGS  = $(MCFLAGS) $(TOPT) $(OPT) $(CXXOPT) $(CXXWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.cc=.lst)) $(DEFS)
-LDFLAGS   := $(MCFLAGS) $(TOPT) $(OPT) -nostartfiles $(LIBDIR) -Wl,-z,max-page-size=128,-Map=$(BUILDDIR)/$(PROJECT).map,--cref,--no-warn-mismatch,--library-path=$(RULESPATH),--script=$(LDSCRIPT) $(LDOPT)
+CFLAGS    = $(MCFLAGS) $(TOPT) $(OPT) $(UCCOPT) $(COPT) $(CWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.c=.lst)) $(DEFS)
+CXXFLAGS  = $(MCFLAGS) $(TOPT) $(OPT) $(UCXXOPT) $(CXXOPT) $(CXXWARN) -Wa,-alms=$(LSTDIR)/$(notdir $(<:.cc=.lst)) $(DEFS)
+LDFLAGS   := $(MCFLAGS) $(TOPT) $(OPT) -nostartfiles $(LIBDIR) -Wl,-z,max-page-size=128,-Map=$(BUILDDIR)/$(PROJECT).map,--cref,--no-warn-mismatch,--library-path=$(RULESPATH),--script=$(LDSCRIPT) $(LDFLAGS_EXTRA) $(LDOPT)
 
 OUTFILES := $(BUILDDIR)/$(PROJECT).elf \
 	    $(BUILDDIR)/$(PROJECT).hex \
@@ -266,6 +269,13 @@ wasm: $(WASMOBJS)
 		-g -fdebug-compilation-dir='..' \
 		$(WASMOBJS) \
 		-o $(WASMDIR)/$(PROJECT).html
+	# The shell (osc.html) loads assets with relative paths (scripts/, images/),
+	# and serve.sh serves $(WASMDIR) as the document root. Copy them so the
+	# simulator is self-contained and does not depend on the websim/ tree.
+	@echo Copying web assets to $(WASMDIR)
+	@mkdir -p $(WASMDIR)/scripts $(WASMDIR)/images
+	@cp -p $(SANDBOXDIR)/scripts/*.js $(WASMDIR)/scripts/
+	@cp -p $(SANDBOXDIR)/images/*.ico $(WASMDIR)/images/ 2>/dev/null || true
 	@echo Done
 
 $(WASMOBJDIR):
