@@ -126,6 +126,19 @@
         }
       };
 
+      // Browsers start AudioContext in "suspended" state until a user
+      // gesture, so playback is off by default. Resume automatically on
+      // the first click/keypress so the user does not have to press the
+      // Toggle playback button manually.
+      const autoResume = () => {
+        if (context.state !== "running") {
+          context.resume();
+        }
+        // keep the listener for further pauses (e.g. tab-switch)
+      };
+      document.addEventListener("click", autoResume, true);
+      document.addEventListener("keydown", autoResume, true);
+
       // main volume
       let volumeSlider = document.getElementById("VolumeSlider");
       let volumeLabel = document.getElementById("VolumeLabel");

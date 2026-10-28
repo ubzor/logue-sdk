@@ -42,6 +42,33 @@ float fx_get_bpmf(void)
   return BPM_WASM;
 }
 
+// ---- Web-sim stub for the platform noise API --------------------------------
+// On ARM, osc_white() is provided by the runtime (osc_api.h extern). In the
+// web simulator there is no runtime, so we provide a lightweight white-noise
+// source based on the Park-Miller-Carta LCG (matching websim/dsp/osc_api.cpp).
+namespace {
+uint32_t s_pmc_state = 83647U; // Park-Miller-Carta seed (matches websim DEFAULT_SEED)
+inline uint32_t pmc_rand(uint32_t s)
+{
+  uint32_t lo = 16807u * (s & 0xFFFFu);
+  const uint32_t hi = 16807u * (s >> 16);
+  lo += (hi & 0x7FFFu) << 16;
+  lo += hi >> 15;
+  return (lo & 0x7FFFFFFFu) + (lo >> 31);
+}
+} // namespace
+
+extern "C" float osc_white(void)
+{
+  // Uniform noise in [-1, 1] from a Park-Miller-Carta sample.
+  // (The ARM runtime uses a Box-Muller Gaussian; for random-walk detune
+  //  modulation the difference between uniform and Gaussian is inaudible.)
+  // Note: the LCG state s is in [1, 0x7FFFFFFF], so divide by 0x7FFFFFFF
+  // (not 0xFFFFFFFF) to center the distribution on zero.
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return static_cast<float>(s_pmc_state) * (2.0f / 2147483647.0f) - 1.0f;
+}
+
 struct AudioWorkletParameter
 {
   int min;
@@ -168,6 +195,14 @@ std::vector<AudioWorkletParameter> getValidParameters()
   return result;
 }
 
+// Cached native parameter ranges, used by ProcessAudio to map the normalized
+// Web Audio Param value [0,1] back onto each unit parameter's integer range.
+static const std::vector<AudioWorkletParameter> &valid_parameters_ref()
+{
+  static const std::vector<AudioWorkletParameter> params = getValidParameters();
+  return params;
+}
+
 void setOscPitch(float f0)
 {
   processor.setPitch(f0 / static_cast<float>(SAMPLE_RATE));
@@ -232,9 +267,16 @@ bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
 
   for (int i = 0; i < numParams; ++i)
   {
-    // K-rate parameter: use the first sample for the frame
-    float value = params[i].data[0];
-    processor.setParameter(i, value);
+    // K-rate parameter: use the first sample for the frame.
+    // The Web Audio Param carries the unit's native integer range [min,max]
+    // (see AudioThreadInitialized). Round the first sample to the nearest
+    // integer and forward it, exactly as the hardware runtime does
+    // (setParameter takes a 10-bit integer, not a float).
+    const float v = params[i].data[0];
+    const AudioWorkletParameter p = valid_parameters_ref()[i];
+    const int ival = static_cast<int>(v + 0.5f);
+    const int clamped = (ival < p.min) ? p.min : (ival > p.max) ? p.max : ival;
+    processor.setParameter(i, clamped);
   }
 
   // emscripten_log(EM_LOG_CONSOLE, "bpm=%d", fx_get_bpmf());
@@ -280,9 +322,12 @@ void AudioThreadInitialized(EMSCRIPTEN_WEBAUDIO_T audioContext, bool success, vo
   for (int i = 0; i < valid_parameters.size(); ++i)
   {
     params[i].automationRate = WEBAUDIO_PARAM_K_RATE;
-    params[i].defaultValue = valid_parameters[i].init;
-    params[i].minValue = valid_parameters[i].min;
-    params[i].maxValue = valid_parameters[i].max;
+    // Expose each parameter over its native integer range [min,max]; the UI
+    // slider (drone.html) uses param.min/param.max directly and writes values
+    // in that range. ProcessAudio rounds them to int32_t for setParameter().
+    params[i].defaultValue = static_cast<float>(valid_parameters[i].init);
+    params[i].minValue = static_cast<float>(valid_parameters[i].min);
+    params[i].maxValue = static_cast<float>(valid_parameters[i].max);
   }
 
   WebAudioWorkletProcessorCreateOptions opts = {

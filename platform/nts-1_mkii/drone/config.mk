@@ -65,12 +65,14 @@ ULIBDIR =
 ##############################################################################
 # Libraries
 #
-# Note: no -lm. The unit no longer calls any libm function:
+# Note: no -lm. The unit does not pull in any libm code:
 #   - powf() was replaced by a 4th-order Taylor series in update_w0_b()
 #   - tanhf() was replaced by soft_tanhf() (a Padé [5/5] rational approx.)
-# Both run entirely on the Cortex-M7 FPU with no external calls, which
-# removes ~900 B of libm code (tanhf + expm1f + fabsf + __errno + helpers)
-# and the associated dynamic symbols from the final .nts1mkiiunit.
+#   - sqrtf() (random-walk step, once per 128-sample block) is inlined by the
+#     compiler into the single Cortex-M7 FMSQRT instruction via -fno-math-errno
+#     (see UCXXOPT below), so no libm sqrtf / __errno / PLT entry is linked.
+# All math runs entirely on the Cortex-M7 FPU, keeping the final .nts1mkiiunit
+# free of libm code and dynamic symbols.
 #
 
 ULIBS  =
@@ -87,8 +89,13 @@ UDEFS =
 # -ffunction-sections/-fdata-sections: put every function/data object in its
 #   own section so --gc-sections can remove the unused ones at link time.
 # -fno-ident: drop the .comment (compiler id) section from the output.
+# -fno-math-errno (C++/unit.cc): let the compiler emit the Cortex-M7 FMSQRT
+#   instruction directly for sqrtf() instead of calling libm sqrtf(). This is
+#   safe (no errno side effects in an audio unit) and removes the libm sqrtf
+#   code, its PLT entry, and the __errno dependency from the final image.
+#   (The C sources need no math calls, so only UCXXOPT sets it.)
 #
 
 UCCOPT := -ffunction-sections -fdata-sections -fno-ident
-UCXXOPT := -ffunction-sections -fdata-sections -fno-ident
+UCXXOPT := -ffunction-sections -fdata-sections -fno-ident -fno-math-errno
 

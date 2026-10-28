@@ -50,7 +50,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x0U,                                       // ID for this unit. Scoped within the context of a given dev_id.
     .version = 0x00010000U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 2,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -64,7 +64,20 @@ const __unit_header unit_header_t unit_header = {
         // B knob: drive level into the soft-clip saturator, 0 .. 3
         {0, 1023, 0, 341, k_unit_param_type_none, 0, 0, 0, {"SAT"}},
 
-        // 8 Edit menu parameters (unused)
+        // 8 Edit menu parameters
+        // Maximum detune deviation (RATE AMT): 0..100%, default 0% = off
+        // (regression-safe: static detune). Quadratic mapping: knob^2 sets the
+        // hard ceiling for the detune random walk around the DETUNE knob value
+        // (0..+/-10 cents at full). The detune never strays further from the
+        // DETUNE knob value than AMT allows. The low end of the knob gives a
+        // fine "almost off" control.
+        {0, 1023, 0, 0,   k_unit_param_type_none, 0, 0, 0, {"RATE AMT"}},
+
+        // Random-walk restlessness (RATE SPD): 0..100%, default 50%.
+        // Controls the spring relaxation time: high SPD = fast jitter,
+        // low SPD = slow drift.
+        {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"RATE SPD"}},
+
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},

@@ -42,6 +42,14 @@
  *  cents from center, producing phase beating. The B knob (ALT) scales the
  *  drive level before a soft-clip tanh saturator, adding harmonic density.
  *
+ *  An optional random-walk "wandering" mechanism modulates the detune around
+ *  the knob value: RATE AMT sets the maximum deviation (quadratic mapping:
+ *  knob^2 -> 0..+/-10 cents hard ceiling, so the detune never strays further
+ *  from the DETUNE knob value than AMT allows) and RATE SPD sets the
+ *  "restlessness" — how often the target changes and how quickly the detune
+ *  tracks it (0.1 s fast, restless .. 10 s slow, lazy). With RATE AMT at 0
+ *  the detune is static, preserving the original behavior.
+ *
  *  No dynamic allocation: all state lives in static members of this class.
  *
  */
@@ -99,21 +107,31 @@ public:
   // audio parameters
   enum
   {
-    SHAPE = 0U, // knob A: detune of oscillator B (-50 .. +50 cents)
-    ALT,        // knob B: drive level into the soft-clip saturator (0 .. 3)
+    SHAPE = 0U,   // knob A: detune of oscillator B (-50 .. +50 cents)
+    ALT,          // knob B: drive level into the soft-clip saturator (0 .. 3)
+    RATE_AMT,     // edit: random-walk depth (0..100%, default 0% = off)
+    RATE_SPD,     // edit: random-walk speed (0..100%, default 50%)
     NUM_PARAMS
   };
+
+  // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
+  // The detune never strays further from the DETUNE knob value than this.
+  static constexpr float kRwMaxCents = 10.f;
 
   // Note: Make sure that default param values correspond to declarations in header.c
   struct Params
   {
     float detune_cents; // -50.f .. +50.f, knob A
     float drive;        // 0.f .. 3.f, knob B
+    float rw_amount;    // 0.f .. 1.f, edit: random-walk depth
+    float rw_rate;      // 0.f .. 1.f, edit: random-walk speed
 
     void reset()
     {
       detune_cents = 0.f; // default: in tune
       drive = 1.f;        // default: unity drive
+      rw_amount = 0.f;    // default: random walk off
+      rw_rate = 0.5f;     // default: mid speed
     }
 
     Params() { reset(); }
@@ -134,6 +152,31 @@ public:
       params_.drive = param_10bit_to_f32(value) * 3.f;
       break;
 
+    case RATE_AMT:
+      // 0 .. 1023 -> 0.f .. 1.f random-walk depth, quadratic mapping:
+      // small knob positions give very small (barely audible) deviations,
+      // full knob gives full +/-20-cent wander. rw_amount = x^2 where x is
+      // the linear 0..1 knob value. This makes the low end of the knob a
+      // fine "almost off" control instead of a hard on/off step.
+      {
+        const float x = param_10bit_to_f32(value);
+        params_.rw_amount = x * x;
+      }
+      // Recompute the hard ceiling for the deviation (cents)
+      rw_max_dev_ = params_.rw_amount * kRwMaxCents;
+      break;
+
+    case RATE_SPD:
+      // 0 .. 1023 -> 0.f .. 1.f random-walk speed
+      params_.rw_rate = param_10bit_to_f32(value);
+      // Compute the target update interval in samples (recomputed once per parameter change)
+      // period = 0.1 * 100^rw_rate seconds, converted to samples
+      {
+        const float period = 0.1f * fasterpowf(100.f, params_.rw_rate);
+        rw_target_update_interval_ = (uint32_t)(period * 48000.f);
+      }
+      break;
+
     default:
       break;
     }
@@ -147,12 +190,20 @@ public:
     phasor_b_ = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
+    rw_dev_cents_ = 0.f; // random-walk state starts centered
+    rw_target_cents_ = 0.f; // random-walk target starts centered
+    rw_target_update_counter_ = 0; // reset target update counter
+    rw_max_dev_ = 0.f; // random-walk hard ceiling starts at 0 (AMT=0)
+    rw_target_update_interval_ = 48000; // random-walk interval starts at 1s (default)
   }
 
   void reset() override final
   {
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
+    rw_dev_cents_ = 0.f; // re-center the random walk on stop
+    rw_target_cents_ = 0.f; // re-center the random-walk target on stop
+    rw_target_update_counter_ = 0; // reset target update counter
   }
 
   // audio processing callbacks
@@ -177,16 +228,70 @@ public:
     // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
     const Params p = params_;
 
-    // base phase increment and detuned increment for the second oscillator.
-    // w0_b_ is cached and only recomputed in setPitch()/setParameter(SHAPE),
-    // so the expensive powf() never runs in the audio path.
+    // base phase increment
     const float w0 = w0_;
-    const float w0_b = w0_b_;
-
     const float drive = p.drive;
+
+    // ---- Random-walk detune deviation (target-based wandering) ----
+    // When rw_amount == 0 (knob at 0) the walk is disabled and w0_b is the
+    // cached static value (regression: byte-for-byte identical to the old
+    // code). rw_amount is the quadratic-mapped knob value (see setParameter),
+    // so rw_active is true for any non-zero knob position.
+    //
+    // RATE AMT = maximum deviation (hard ceiling): the detune deviation is
+    // limited to +/-rw_max_dev_ = +/-rw_amount*kRwMaxCents cents, so the
+    // detune never strays further from the DETUNE knob value than AMT allows.
+    // The deviation smoothly tracks a random target that is regenerated
+    // periodically, ensuring |dev| <= rw_max_dev_ always.
+    //
+    // RATE SPD = restlessness: controls how often the target changes and how
+    // quickly the deviation tracks it. High SPD -> frequent target updates
+    // and fast tracking (restless), low SPD -> rare updates and slow tracking
+    // (lazy drift).
+    const bool rw_active = p.rw_amount > 0.f;
+    float w0_b = w0_b_; // default: cached static detune
+    if (rw_active)
+    {
+      // Compute the tracking coefficient once per block (rw_rate may change)
+      // period = 0.1 * 100^rw_rate seconds
+      const float period = 0.1f * fasterpowf(100.f, p.rw_rate);
+      // Tracking coefficient: how quickly the deviation moves toward the target.
+      // Higher k = faster tracking. k = 1 / (1 + tau * 48000) where tau is the
+      // relaxation time (we use period as tau for simplicity).
+      rw_k_ = 1.f / (1.f + period * 48000.f);
+      // Initialize the target to the current deviation on first activation
+      if (rw_target_cents_ == 0.f && rw_dev_cents_ != 0.f)
+        rw_target_cents_ = rw_dev_cents_;
+    }
 
     for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
     {
+      // update random-walk detune deviation (cents) around the knob value
+      if (rw_active)
+      {
+        // Update the target periodically
+        if (++rw_target_update_counter_ >= rw_target_update_interval_)
+        {
+          rw_target_update_counter_ = 0;
+          // Generate a new random target in [-rw_max_dev_, +rw_max_dev_]
+          // Using osc_white() which returns values in [-1, 1]
+          rw_target_cents_ = osc_white() * rw_max_dev_;
+        }
+        // Smoothly track the target: dev += (target - dev) * k
+        rw_dev_cents_ += (rw_target_cents_ - rw_dev_cents_) * rw_k_;
+        // Safety clamp (should rarely trigger if target is within bounds)
+        if (rw_dev_cents_ > rw_max_dev_)
+          rw_dev_cents_ = rw_max_dev_;
+        else if (rw_dev_cents_ < -rw_max_dev_)
+          rw_dev_cents_ = -rw_max_dev_;
+        // recompute w0_b from effective detune (base + walk), 4th-order Taylor
+        const float eff_detune = p.detune_cents + rw_dev_cents_;
+        const float x = eff_detune * 5.7762265046261084e-04f; // cents * ln(2)/1200
+        const float detune_factor =
+            1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
+        w0_b = w0 * detune_factor;
+      }
+
       // phasor update
       phasor_a_ += w0;
       phasor_b_ += w0_b;
@@ -224,6 +329,21 @@ private:
   // (setPitch / setParameter(SHAPE)) to keep the audio path lightweight
   float w0_b_ = 0.f;
 
+  // random-walk state: current detune deviation in cents (around the knob value)
+  float rw_dev_cents_ = 0.f;
+  // random-walk tracking coefficient (per sample), recomputed once per block
+  // in process() from RATE SPD. Controls how quickly the deviation tracks the target.
+  float rw_k_ = 0.f;
+  // random-walk target deviation in cents, regenerated periodically.
+  // The target is chosen randomly in [-rw_max_dev_, +rw_max_dev_].
+  float rw_target_cents_ = 0.f;
+  // random-walk hard ceiling for the deviation (cents), set by RATE AMT.
+  float rw_max_dev_ = 0.f;
+  // target update counter: counts samples since the last target update.
+  uint32_t rw_target_update_counter_ = 0;
+  // target update interval in samples (recomputed from RATE SPD each block).
+  uint32_t rw_target_update_interval_ = 0;
+
   // recompute w0_b_ = w0_ * 2^(detune_cents/1200) — only when the base pitch
   // or detune actually changes.
   //
@@ -234,8 +354,12 @@ private:
   // 1.2e-7 (less than 0.003 cents at the extremes) — far under the threshold
   // of audibility. This replaces the libm powf() call, whose support chain
   // (__ieee754_powf, expm1f, scalbnf, ...) adds several hundred bytes of
-  // code and data to the final unit image for a function that only runs in
-  // the parameter-update path, never in the audio loop.
+  // code and data to the final unit image.
+  //
+  // Note: when the random walk is active (RATE AMT > 0), process() recomputes
+  // the same Taylor expansion per sample for the effective (base + walk)
+  // detune, so the audio path does run the 4th-order series there. The cached
+  // w0_b_ above is only used while the walk is disabled.
   void update_w0_b()
   {
     const float x = params_.detune_cents * 5.7762265046261084e-04f; // cents * ln(2) / 1200
