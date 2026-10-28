@@ -1,0 +1,30 @@
+# Правила проекта Logue SDK
+
+## Основная папка проекта
+Основная папка нашего проекта — `/var/www/logue-sdk/platform/nts-1_mkii/drone`.
+Код мы ищем в первую очередь именно в ней.
+
+## Структура основной папки
+- `header.c` — заголовок юнита (имя, параметры, инициализация, callback'и).
+- `osc.h` — DSP-логика (осцилляторы, сатурация и т.д.).
+- `unit.cc` — исходный код юнита.
+- `wasm.cc` — исходник web-симулятора (embind).
+- `Makefile` — сборка: ARM-юнит (`make`) и web-симулятор (`make wasm`).
+- `config.mk` — конфигурация сборки.
+- `build.sh` — сборка ARM-юнита через Docker.
+- `serve.sh` — запуск локального сервера симулятора.
+- `sim/` — результат сборки web-симулятора (`drone.html`, `drone.js`, `drone.wasm`).
+- `build/` — артефакты сборки.
+- `drone.nts1mkiiunit` — собранный ARM-юнит.
+
+## Соседние каталоги (вторичный поиск)
+Если код не найден в основной папке, смотри также:
+- `platform/nts-1_mkii/common/` — общие для платформы библиотеки и заголовки.
+- `platform/nts-1_mkii/ld/` — скрипты линковки.
+- `platform/nts-1_mkii/README.md` — документация по платформе NTS-1 MKII.
+
+## Важные замечания по сборке (не нарушать)
+- Сборка ARM-юнита идёт через Docker: `docker run --rm -v $(pwd):/src -w /src korg/logue-sdk-sdk:latest make`.
+- Сборка WASM-симулятора: `make wasm` (двухэтапная компиляция C и C++ отдельно, линковка через `em++`).
+- Для WASM нужны флаги: `-fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -s AUDIO_WORKLET=1 -s WASM_WORKERS=1 -s SHARED_MEMORY=1 -lembind`.
+- Эмулятор: emsdk, установлен локально; запуск: `emrun --serve 0.0.0.0:8000 sim/drone.html`.
