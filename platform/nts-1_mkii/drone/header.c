@@ -46,11 +46,11 @@ const __unit_header unit_header_t unit_header = {
     .header_size = sizeof(unit_header_t),                  // Size of this header. Leave as is.
     .target = UNIT_TARGET_PLATFORM | k_unit_module_osc,    // Target platform and module pair for this unit
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
-    .dev_id = 0x0U,                                        // Developer ID. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
-    .unit_id = 0x0U,                                       // ID for this unit. Scoped within the context of a given dev_id.
-    .version = 0x00010000U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
+    .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' as displayed on device. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
+    .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
+    .version = 0x00000001U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 5,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -64,7 +64,15 @@ const __unit_header unit_header_t unit_header = {
         // B knob: drive level into the soft-clip saturator, 0 .. 3
         {0, 1023, 0, 341, k_unit_param_type_none, 0, 0, 0, {"SAT"}},
 
-        // 8 Edit menu parameters
+        // 7 Edit menu parameters
+        // Procedural wavefolder depth (FOLD): 0..100%, default 0% = off.
+        // Iterative tri-fold (3 stages) inserted between the voice sum and
+        // the SAT saturator; quadratic mapping (knob^2) makes the low end a
+        // fine control. The NTS-1 Shape LFO (0..-1..+1) modulates the fold
+        // depth +/-100% through a slow 2-pole lowpass, so it "breathes" the
+        // folding instead of phase-scanning it.
+        {0, 1023, 0, 0,   k_unit_param_type_none, 0, 0, 0, {"FOLD"}},
+
         // Maximum detune deviation (RATE AMT): 0..100%, default 0% = off
         // (regression-safe: static detune). Quadratic mapping: knob^2 sets the
         // hard ceiling for the detune random walk around the DETUNE knob value
@@ -78,7 +86,6 @@ const __unit_header unit_header_t unit_header = {
         // low SPD = slow drift.
         {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"RATE SPD"}},
 
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
