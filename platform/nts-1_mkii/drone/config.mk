@@ -17,6 +17,12 @@ PROJECT_TYPE := osc
 #     shrinking .dynsym/.dynstr/.hash and removing their PLT entries.
 #   * --gc-sections drops unreferenced input sections.
 #
+# - Unit metadata (author / version) lives in the ELF header struct:
+#   dev_id encodes the author name as displayed on device ('oobz'), unit_id
+#   is the unit number within the author's scope (0x00000001 = first unit),
+#   and version is the unit's major.minor.patch. These are set in header.c,
+#   so bump the unit counter / version there when shipping new versions.
+#
 
 LDSCRIPT := $(PROJECT_ROOT)/unit.ld
 

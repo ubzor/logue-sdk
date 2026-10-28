@@ -201,6 +201,9 @@
       };
 
       keyboard.keyUp = function (note, frequency) {
+        if (!window.frequencyStack) {
+          window.frequencyStack = [];
+        }
         // Remove the frequency from the stack (last matching entry)
         for (let i = window.frequencyStack.length - 1; i >= 0; --i) {
           if (approximatelyEqual(window.frequencyStack[i], frequency)) {
