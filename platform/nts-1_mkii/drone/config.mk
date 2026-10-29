@@ -39,12 +39,21 @@ LDFLAGS_EXTRA := \
 # worklet engine and libembind in this emscripten version)
 #
 # The web simulator has no NTS-1 runtime, so any LUT the runtime would
-# normally provide (wt_sine_lut_f for osc_sinf, used by the sub-octave
-# sine) must be linked in from the websim stub. Only the sine table is
-# needed; the other wavetable_lut.c symbols (saw/sqr/par) are dropped
-# by --gc-sections since osc.h uses raw phasors for the saws.
+# normally provide must be linked in from the websim stubs:
+#   * wavetable_lut.c  -> wt_sine_lut_f (osc_sinf, sub-octave sine)
+#   * waves-a..f.c     -> wavesA..wavesF (the 91 wavetables scanned by the
+#                         two wavetable oscillators, osc_wave_scanf)
+# On ARM these live in the NTS-1 mkII firmware, so the unit only references
+# them (a few pointer reads). In the browser they add ~46 KB to drone.wasm
+# (91 tables x 129 samples x 4 bytes) — a small fraction of the ~1 MB total.
 WASMSRC_C := $(PROJECT_ROOT)/header.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/wavetable_lut.c
+             $(PROJECT_ROOT)/../../../websim/dsp/wavetable_lut.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-a.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-b.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-c.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-d.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-e.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-f.c
 WASMSRC_CXX := $(PROJECT_ROOT)/wasm.cc
 
 ##############################################################################

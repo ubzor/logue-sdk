@@ -50,7 +50,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x00000001U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 7,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 9,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -96,6 +96,17 @@ const __unit_header unit_header_t unit_header = {
         // half-cycles, generating even harmonics ("warm", "brassy" tone).
         // +100% = positive half driven harder, -100% = negative half harder.
         {0, 1023, 511, 511, k_unit_param_type_percent, 0, 0, 0, {"ASYM"}},
+
+        // Oscillator A wavetable (WAVE A): 0..100% position across the six
+        // Korg banks A-F (91 tables), A = airy/sine-like .. F = dense/saw-like.
+        // 0% = first table of bank A. The morph position also shifts slightly
+        // upward with pitch (see update_waves in osc.h) so the tone stays
+        // consistent across the keyboard.
+        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"WAVE A"}},
+
+        // Oscillator B wavetable (WAVE B): same range as WAVE A, independently
+        // controllable. Detuned against WAVE A by the DETUNE knob (knob A).
+        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"WAVE B"}},
 
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},

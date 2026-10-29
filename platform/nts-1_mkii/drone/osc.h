@@ -35,12 +35,21 @@
 /*
  *  File: osc.h
  *
- *  DRONE -- dual sawtooth drone generator for NTS-1 mkII.
+ *  DRONE -- dual wavetable drone generator for NTS-1 mkII.
  *
- *  Two independent sawtooth phasor accumulators running at the base note
- *  frequency. The A knob (SHPE) detunes the second oscillator up to +/-50
- *  cents from center, producing phase beating. The B knob (ALT) scales the
- *  drive level before a soft-clip tanh saturator, adding harmonic density.
+ *  Two independent wavetable phasor accumulators running at the base note
+ *  frequency. Each voice scans one of the 91 Korg wavetables (six banks A-F,
+ *  airy -> dense) selected by the WAVE A / WAVE B edit knobs; a continuous
+ *  morph position is mapped onto the bank arrays (see resolve_wave), and the
+ *  morph point drifts slightly toward the denser banks as the pitch rises so
+ *  the tone stays consistent across the keyboard. The A knob (DETUNE) detunes
+ *  the second oscillator up to +/-50 cents, producing phase beating. The B
+ *  knob (SAT) scales the drive level before a soft-clip tanh saturator.
+ *
+ *  A sub-octave sine (one octave below, fixed -4 cents and FM'd by the
+ *  platform shape-LFO) is mixed in parallel with the saturator for low-end
+ *  "body". Before the saturator a pre-drive wavefolder (FOLD) can add even
+ *  harmonics, and the saturator itself can be made asymmetric (ASYM).
  *
  *  An optional random-walk "wandering" mechanism modulates the detune around
  *  the knob value: RATE AMT sets the maximum deviation (quadratic mapping:
@@ -73,12 +82,24 @@ public:
     SUB,          // edit: sub-octave sine level (0..100%, default 50%)
     FOLD,         // edit: pre-drive wavefolder depth (0..100%, default 0% = off)
     ASYM,         // edit: asymmetric saturator (−100%..+100%, default 0% = symmetric)
+    WAVE_A,       // edit: oscillator A wavetable (0..90 across banks A-F)
+    WAVE_B,       // edit: oscillator B wavetable (0..90 across banks A-F)
     NUM_PARAMS
   };
 
   // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
   // The detune never strays further from the DETUNE knob value than this.
   static constexpr float kRwMaxCents = 10.f;
+
+  // Total wavetable count across all six Korg banks (A-F), in order of
+  // increasing harmonic density. The WAVE_A / WAVE_B knobs select an index
+  // in [0, kWavesTotal) which resolve_wave() maps onto the bank arrays.
+  static constexpr uint32_t kWavesA = k_waves_a_cnt;
+  static constexpr uint32_t kWavesB = kWavesA + k_waves_b_cnt;
+  static constexpr uint32_t kWavesC = kWavesB + k_waves_c_cnt;
+  static constexpr uint32_t kWavesD = kWavesC + k_waves_d_cnt;
+  static constexpr uint32_t kWavesE = kWavesD + k_waves_e_cnt;
+  static constexpr uint32_t kWavesTotal = kWavesE + k_waves_f_cnt;
 
   // Fixed sub-octave detune: the sub sine runs slightly flat (−4 cents) so
   // it "breathes" against the saws instead of locking to them. A few cents
@@ -95,12 +116,12 @@ public:
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
   // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
 
-  // Key-triggered A-S-R envelope (no sustain/level knob, all times fixed):
+  // Key-triggered A-S-R envelope (no sustain/level knob):
   //   attack   2 s, exponential fade 0 -> 1
-  //   sustain  2 s, full level
+  //   sustain  unlimited (full level until noteOff)
   //   release  2 s, exponential fade 1 -> 0, then the unit goes silent
-  // Triggered by noteOn only; noteOff is intentionally ignored. A second key
-  // press while the sequence is still running restarts it from the top.
+  // Triggered by noteOn; noteOff triggers release. A second key press while
+  // the sequence is still running restarts it from the top.
   //
   // The attack/release curves are first-order relaxations:
   //   env += (target - env) * a  with  a = 1 - exp(-5 / N),
@@ -108,7 +129,6 @@ public:
   // (never in the audio path); five halvings over the phase mean the level
   // covers ~99.3% of the transition by the phase boundary.
   static constexpr uint32_t kEgAttackSamples   = 2U * 48000U; // 2 s
-  static constexpr uint32_t kEgSustainSamples  = 2U * 48000U; // 2 s
   static constexpr uint32_t kEgReleaseSamples  = 2U * 48000U; // 2 s
 
   enum EgPhase : uint8_t
@@ -129,6 +149,8 @@ public:
     float sub_level;    // 0.f .. 1.f, edit: sub-octave sine level
     float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
     float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
+    float wave_a;       // 0.f .. kWavesTotal-1, edit: osc A wavetable index
+    float wave_b;       // 0.f .. kWavesTotal-1, edit: osc B wavetable index
 
     void reset()
     {
@@ -139,6 +161,8 @@ public:
       sub_level = 0.5f;   // default: half-level sub
       fold_depth = 0.f;   // default: wavefolder off (regression-safe)
       asym = 0.f;         // default: symmetric saturator (regression-safe)
+      wave_a = 0.f;       // default: first wave of bank A
+      wave_b = 0.f;       // default: first wave of bank A
     }
 
     Params() { reset(); }
@@ -199,6 +223,18 @@ public:
       params_.asym = param_10bit_to_f32(value) * 2.f - 1.f;
       break;
 
+    case WAVE_A:
+      // 0 .. 1023 -> 0.f .. kWavesTotal-1, continuous morph position across
+      // the six banks (fractional part interpolates between two tables)
+      params_.wave_a = param_10bit_to_f32(value) * (kWavesTotal - 1);
+      update_waves();
+      break;
+
+    case WAVE_B:
+      params_.wave_b = param_10bit_to_f32(value) * (kWavesTotal - 1);
+      update_waves();
+      break;
+
     default:
       break;
     }
@@ -213,6 +249,7 @@ public:
     phasor_sub_ = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
+    update_waves(); // resolve default wavetable pointers from params_
     rw_dev_cents_ = 0.f; // random-walk state starts centered
     rw_target_cents_ = 0.f; // random-walk target starts centered
     rw_target_update_counter_ = 0; // reset target update counter
@@ -254,11 +291,17 @@ public:
     eg_armed_ = true;
   }
 
-  // Deliberately empty: the envelope runs its full 2 s + 2 s + 2 s cycle
-  // regardless of when (or whether) the key is released.
+  // Key release: trigger the release phase (2 s exponential fade 1 -> 0).
+  // If the envelope is still in attack, it transitions directly to release
+  // (skipping sustain). If already in release or idle, nothing happens.
   void noteOff(uint8_t note) override final
   {
     (void)note;
+    if (eg_armed_ && (eg_phase_ == kEgPhaseAttack || eg_phase_ == kEgPhaseSustain))
+    {
+      eg_phase_ = kEgPhaseRelease;
+      eg_elapsed_ = 0;
+    }
   }
 
   // All-notes-off: kill any in-flight envelope immediately (instant silence).
@@ -278,6 +321,7 @@ public:
     w0_ = w0; // base phase increment, osc A uses this directly
     update_w0_b();
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
+    update_waves(); // re-resolve wavetables: morph position shifts with pitch
   }
 
   // lfo in (-1.0f, 1.0f)
@@ -393,15 +437,15 @@ public:
       if (phasor_sub_ >= 1.f)
         phasor_sub_ -= 1.f;
 
-      // generate sawtooth waves in -1..1
-      const float saw_a = 2.f * phasor_a_ - 1.f;
-      const float saw_b = 2.f * phasor_b_ - 1.f;
+      // generate wavetable samples in -1..1 (one LUT scan per voice)
+      const float wav_a = osc_wave_scanf(wave_a_, phasor_a_);
+      const float wav_b = osc_wave_scanf(wave_b_, phasor_b_);
 
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
       const float sub = osc_sinf(phasor_sub_);
 
       // mix both voices equally
-      float mix = 0.5f * (saw_a + saw_b);
+      float mix = 0.5f * (wav_a + wav_b);
 
       // pre-drive wavefolder (FOLD knob): scale mix by (1 + fold_depth) and
       // reflect into [-1, 1] (one reflection handles |x| up to 2). Blends
@@ -465,12 +509,8 @@ public:
           }
           break;
         case kEgPhaseSustain:
+          // Full level, wait for noteOff to trigger release
           env = 1.f;
-          if (++eg_elapsed >= kEgSustainSamples)
-          {
-            eg_elapsed = 0;
-            eg_phase = kEgPhaseRelease;
-          }
           break;
         case kEgPhaseRelease:
           // exponential fade 1 -> 0: env += (0 - env) * alpha_r
@@ -578,6 +618,47 @@ private:
   float phasor_a_;
   float phasor_b_;
   float phasor_sub_; // sub-octave sine phasor (advances at w0/2)
+
+  // resolved wavetable pointers, recomputed in update_waves() (K-rate).
+  // Each voice scans its table with osc_wave_scanf() in the audio path.
+  const float *wave_a_ = nullptr;
+  const float *wave_b_ = nullptr;
+
+  // Map a fractional wavetable index in [0, kWavesTotal) to a table pointer.
+  // The six Korg banks (A-F) live in separate arrays; this walks the bank
+  // thresholds and returns the matching table. (Integer part selects the
+  // table, the fractional part is applied by osc_wave_scanf's phase.)
+  static const float *resolve_wave(float idx)
+  {
+    const uint32_t i = (idx < 0.f) ? 0U : (static_cast<uint32_t>(idx) >= kWavesTotal) ? (kWavesTotal - 1U) : static_cast<uint32_t>(idx);
+    if (i < kWavesA)
+      return wavesA[i];
+    if (i < kWavesB)
+      return wavesB[i - kWavesA];
+    if (i < kWavesC)
+      return wavesC[i - kWavesB];
+    if (i < kWavesD)
+      return wavesD[i - kWavesC];
+    if (i < kWavesE)
+      return wavesE[i - kWavesD];
+    return wavesF[i - kWavesE];
+  }
+
+  // Recompute the wavetable pointers. Called from setParameter(WAVE_A/B) and
+  // setPitch(). A pitch-shifted morph position (higher notes morph toward the
+  // denser F bank) keeps the perceived tone consistent across the keyboard,
+  // mirroring how the SDK's band-limited waves roll off their high harmonics.
+  void update_waves()
+  {
+    // morph shift in table-index units, scaled by normalized pitch.
+    // kWaveMorphShift is the max shift (in tables) applied at the top of the
+    // range; it is clamped so the shifted index stays in [0, kWavesTotal-1].
+    static constexpr float kWaveMorphShift = 10.f; // ~1/9 of the bank range
+    const float pitch_n = (w0_ * 48000.f) / 880.f; // 1.0 at A4
+    const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? kWaveMorphShift : (kWaveMorphShift * pitch_n);
+    wave_a_ = resolve_wave(params_.wave_a + shift);
+    wave_b_ = resolve_wave(params_.wave_b + shift);
+  }
 
   // key-triggered A-S-R envelope state (see the class-top comment for timing)
   EgPhase eg_phase_ = kEgPhaseIdle;
