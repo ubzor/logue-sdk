@@ -112,31 +112,40 @@ public:
   // can't reach (it only sees the whole unit, not the internal sub voice).
   static constexpr float kSubLfoFmCents = 5.f;
 
+  // LFO → wavetable morph depth (±N tables). The platform shape-LFO (the "S"
+  // branch of the OSC B-knob on hardware) arrives in lfo_ in (-1, 1); we scale
+  // it so full depth sweeps ±10 of the 91 tables (~11% of the range) — a
+  // moderate "breathing" of the timbre across the wavetable. The morph is
+  // applied continuously inside the sample loop (see process()), blended with
+  // the pitch-shifted morph position, and resolved through the interpolating
+  // resolve_wave() so the timbre glides between adjacent tables.
+  static constexpr float kLfoMorphDepth = 10.f;
+
   // Pre-drive wavefolder: before the tanh saturator, mix is folded into
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
   // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
 
-  // Key-triggered A-S-R envelope (no sustain/level knob):
-  //   attack   2 s, exponential fade 0 -> 1
-  //   sustain  unlimited (full level until noteOff)
-  //   release  2 s, exponential fade 1 -> 0, then the unit goes silent
-  // Triggered by noteOn; noteOff triggers release. A second key press while
-  // the sequence is still running restarts it from the top.
-  //
-  // The attack/release curves are first-order relaxations:
-  //   env += (target - env) * a  with  a = 1 - exp(-5 / N),
-  // where N is the phase length in samples. a is precomputed once in noteOn()
-  // (never in the audio path); five halvings over the phase mean the level
-  // covers ~99.3% of the transition by the phase boundary.
-  static constexpr uint32_t kEgAttackSamples   = 2U * 48000U; // 2 s
-  static constexpr uint32_t kEgReleaseSamples  = 2U * 48000U; // 2 s
+  // NOTE on envelopes: the NTS-1 mkII platform already applies its own
+  // amplitude EG (AdSr / oPEn, etc.) to the oscillator's output. On the
+  // device the EG mode is set to oPEn (no platform amplitude shaping), so
+  // this unit runs its own single-voice A-H-R envelope to shape the
+  // attack/release of each note:
+  //   Attack  2 s, exponential fade 0 -> 1
+  //   Hold    full level while the note is active
+  //   Release 2 s, exponential fade 1 -> 0, then silent
+  // The note "active" state (note_on_) is set by noteOn/noteOff/allNoteOff
+  // today; later it may be driven algorithmically (self-starting notes) via
+  // the same flag without touching the audio path.
+  static constexpr uint32_t kEgAttackSamples  = 2U * 48000U; // 2 s
+  static constexpr uint32_t kEgReleaseSamples = 2U * 48000U; // 2 s
 
+  // A-H-R envelope phase (single voice)
   enum EgPhase : uint8_t
   {
-    kEgPhaseIdle = 0,
-    kEgPhaseAttack,
-    kEgPhaseSustain,
-    kEgPhaseRelease
+    kEgPhaseIdle = 0,    // silent
+    kEgPhaseAttack,      // 0 -> 1 exponential
+    kEgPhaseHold,        // full level while active
+    kEgPhaseRelease      // 1 -> 0 exponential
   };
 
   // Note: Make sure that default param values correspond to declarations in header.c
@@ -255,10 +264,16 @@ public:
     rw_target_update_counter_ = 0; // reset target update counter
     rw_max_dev_ = 0.f; // random-walk hard ceiling starts at 0 (AMT=0)
     rw_target_update_interval_ = 48000; // random-walk interval starts at 1s (default)
-    eg_phase_ = kEgPhaseIdle; // no note has ever been triggered
+    // A-H-R envelope: start silent, no note active.
+    note_on_ = false;
+    eg_phase_ = kEgPhaseIdle;
     eg_elapsed_ = 0;
-    env_ = 0.f; // silent until the first noteOn
-    eg_armed_ = false;
+    env_ = 0.f;
+    // First-order relaxation coefficients (per sample) for the exponential
+    // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in
+    // samples; five time-constants over the phase means the level covers
+    // ~99.3% of the transition by the phase boundary. Precomputed here, never
+    // in the audio path.
     eg_alpha_a_ = 1.f - expf(-5.f / static_cast<float>(kEgAttackSamples));
     eg_alpha_r_ = 1.f - expf(-5.f / static_cast<float>(kEgReleaseSamples));
   }
@@ -271,46 +286,50 @@ public:
     rw_dev_cents_ = 0.f; // re-center the random walk on stop
     rw_target_cents_ = 0.f; // re-center the random-walk target on stop
     rw_target_update_counter_ = 0; // reset target update counter
-    // stop the note and kill any in-flight envelope (allNoteOff semantics)
+    // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
+    note_on_ = false;
     eg_phase_ = kEgPhaseIdle;
     eg_elapsed_ = 0;
     env_ = 0.f;
-    eg_armed_ = false;
   }
 
   // ---- note handling ---------------------------------------------------------
 
-  // Key press: trigger (or re-trigger) the A-S-R sequence from the top.
+  // Key press: note active. Start (or restart) the A-H-R sequence from the top
+  // of the attack. A second key press while a sequence is still running
+  // restarts it (re-trigger), which is the expected drone behavior.
   void noteOn(uint8_t note, uint8_t velo) override final
   {
     (void)note;
     (void)velo;
+    note_on_ = true;
     eg_phase_ = kEgPhaseAttack;
     eg_elapsed_ = 0;
     env_ = 0.f;
-    eg_armed_ = true;
   }
 
-  // Key release: trigger the release phase (2 s exponential fade 1 -> 0).
-  // If the envelope is still in attack, it transitions directly to release
-  // (skipping sustain). If already in release or idle, nothing happens.
+  // Key release: note inactive. If the envelope is in Attack or Hold, begin
+  // the 2 s exponential release. If already in Release or Idle, nothing
+  // happens (the release runs to completion on its own).
   void noteOff(uint8_t note) override final
   {
     (void)note;
-    if (eg_armed_ && (eg_phase_ == kEgPhaseAttack || eg_phase_ == kEgPhaseSustain))
+    note_on_ = false;
+    if (eg_phase_ == kEgPhaseAttack || eg_phase_ == kEgPhaseHold)
     {
       eg_phase_ = kEgPhaseRelease;
       eg_elapsed_ = 0;
     }
   }
 
-  // All-notes-off: kill any in-flight envelope immediately (instant silence).
+  // All-notes-off: note inactive, kill any in-flight envelope immediately
+  // (instant silence — no release tail).
   void allNoteOff() override final
   {
+    note_on_ = false;
     eg_phase_ = kEgPhaseIdle;
     eg_elapsed_ = 0;
     env_ = 0.f;
-    eg_armed_ = false;
   }
 
   // audio processing callbacks
@@ -329,6 +348,21 @@ public:
   {
     lfo_ = lfo;
   }
+
+#ifdef EMSCRIPTEN
+  // Simulator-only LFO settings (set from the JS UI, K-rate). On hardware
+  // these are the physical OSC-button knobs and are delivered via the
+  // platform's shape_lfo; here they drive the internal sine generator.
+  void setLfoFreq(float freq)
+  {
+    lfo_freq_ = (freq < 0.f) ? 0.f : (freq > 30.f) ? 30.f : freq;
+  }
+
+  void setLfoDepth(float depth)
+  {
+    lfo_depth_ = (depth < 0.f) ? 0.f : (depth > 1.f) ? 1.f : depth;
+  }
+#endif
 
   void process(const float *__restrict in, float *__restrict out, uint32_t frames) override final
   {
@@ -357,19 +391,19 @@ public:
     // quickly the deviation tracks it. High SPD -> frequent target updates
     // and fast tracking (restless), low SPD -> rare updates and slow tracking
     // (lazy drift).
-    // ---- Key-triggered A-S-R envelope -------------------------------------
-    // The state machine advances one *sample* at a time (see the per-sample
-    // block below), so eg_elapsed counts samples and each 2 s phase really
-    // lasts 2 s regardless of the block size. The relaxation coefficient is
-    // cached once per block; the phase only changes inside the sample loop.
+    // (The A-H-R envelope is advanced per-sample inside the loop below; the
+    // relaxation coefficients are cached once per block for cheap access.)
     const float alpha_a = eg_alpha_a_;
     const float alpha_r = eg_alpha_r_;
-    EgPhase eg_phase = eg_phase_;
-    uint32_t eg_elapsed = eg_elapsed_;
-    float env = eg_armed_ ? env_ : 0.f;
 
     const bool rw_active = p.rw_amount > 0.f;
     float w0_b = w0_b_; // default: cached static detune
+
+    // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
+    // offset is added per-sample below. wave_shift_ is recomputed on
+    // setParameter(WAVE_A/B) / setPitch(); wave_a / wave_b are the knobs.
+    const float wave_base_a = p.wave_a + wave_shift_;
+    const float wave_base_b = p.wave_b + wave_shift_;
     if (rw_active)
     {
       // Compute the tracking coefficient once per block (rw_rate may change)
@@ -437,9 +471,31 @@ public:
       if (phasor_sub_ >= 1.f)
         phasor_sub_ -= 1.f;
 
-      // generate wavetable samples in -1..1 (one LUT scan per voice)
-      const float wav_a = osc_wave_scanf(wave_a_, phasor_a_);
-      const float wav_b = osc_wave_scanf(wave_b_, phasor_b_);
+      // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
+      // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
+      // and this block is compiled out, so the two paths share the same
+      // morph code below.
+#ifdef EMSCRIPTEN
+      if (lfo_depth_ > 0.f)
+      {
+        lfo_phase_ += 6.283185307179586f * lfo_freq_ * (1.f / 48000.f);
+        if (lfo_phase_ >= 1.f)
+          lfo_phase_ -= 1.f;
+        lfo_ = osc_sinf(lfo_phase_) * lfo_depth_;
+      }
+      else
+      {
+        lfo_ = 0.f;
+      }
+#endif
+
+      // generate wavetable samples in -1..1. Each voice's table index is the
+      // base position (knob + pitch-shift) plus the LFO morph offset, so the
+      // timbre "breathes" across the wavetable. resolve_wave() crossfades the
+      // fractional part between adjacent tables, so the morph glides smoothly.
+      const float lfo_morph = lfo_ * kLfoMorphDepth;
+      const float wav_a = resolve_wave(wave_base_a + lfo_morph, phasor_a_);
+      const float wav_b = resolve_wave(wave_base_b + lfo_morph, phasor_b_);
 
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
       const float sub = osc_sinf(phasor_sub_);
@@ -493,47 +549,42 @@ public:
       // gain below still has headroom (max |y*0.9| < 0.9).
       const float y = one_minus_d2 * fastertanh2f(d_a / one_minus_d2);
 
-      // ---- advance the A-S-R envelope by one sample ----
+      // ---- advance the A-H-R envelope by one sample ----
       // (per-sample so the 2 s phases are sample-accurate at any block size)
-      if (eg_armed_)
+      switch (eg_phase_)
       {
-        switch (eg_phase)
+      case kEgPhaseAttack:
+        // exponential fade 0 -> 1: env += (1 - env) * alpha_a
+        env_ += (1.f - env_) * alpha_a;
+        if (++eg_elapsed_ >= kEgAttackSamples)
         {
-        case kEgPhaseAttack:
-          // exponential fade 0 -> 1: env += (1 - env) * alpha_a
-          env += (1.f - env) * alpha_a;
-          if (++eg_elapsed >= kEgAttackSamples)
-          {
-            eg_elapsed = 0;
-            eg_phase = kEgPhaseSustain;
-          }
-          break;
-        case kEgPhaseSustain:
-          // Full level, wait for noteOff to trigger release
-          env = 1.f;
-          break;
-        case kEgPhaseRelease:
-          // exponential fade 1 -> 0: env += (0 - env) * alpha_r
-          env -= env * alpha_r;
-          if (++eg_elapsed >= kEgReleaseSamples)
-          {
-            eg_phase = kEgPhaseIdle;
-            env = 0.f;
-            eg_armed_ = false; // sequence finished, silent until next noteOn
-          }
-          break;
-        default: // kEgPhaseIdle
-          env = 0.f;
-          break;
+          eg_elapsed_ = 0;
+          eg_phase_ = kEgPhaseHold;
+          env_ = 1.f; // snap to full at the attack boundary
         }
-      }
-      else
-      {
-        env = 0.f;
+        break;
+      case kEgPhaseHold:
+        // Full level while the note is active. If the note was released
+        // (noteOn not re-firing), noteOff() will have switched us to Release;
+        // if we are here, the note is still held.
+        env_ = 1.f;
+        break;
+      case kEgPhaseRelease:
+        // exponential fade 1 -> 0: env -= env * alpha_r
+        env_ -= env_ * alpha_r;
+        if (++eg_elapsed_ >= kEgReleaseSamples)
+        {
+          eg_phase_ = kEgPhaseIdle;
+          env_ = 0.f;
+        }
+        break;
+      default: // kEgPhaseIdle
+        env_ = 0.f;
+        break;
       }
 
       // scale output to a musical level (saturator max output is ~0.76)
-      // and apply the key-triggered A-S-R envelope level.
+      // and apply the A-H-R envelope level.
       //
       // Sub-octave sine is mixed in parallel with the saturator (it bypasses
       // the soft-clip on purpose: low-frequency sine through tanh would be
@@ -544,13 +595,8 @@ public:
       //   |sum|       < 0.9
       // At the default SUB = 50%, the sub branch is at 0.2 amplitude, which
       // is a balanced "body" level under the saturated saw stack.
-      out[0] = (y * 0.5f + sub * p.sub_level * 0.4f) * env;
+      out[0] = (y * 0.5f + sub * p.sub_level * 0.4f) * env_;
     }
-
-    // write the envelope state machine back for the next block
-    eg_phase_ = eg_phase;
-    eg_elapsed_ = eg_elapsed;
-    env_ = env;
   }
 
 private:
@@ -573,6 +619,22 @@ private:
   uint32_t rw_target_update_counter_ = 0;
   // target update interval in samples (recomputed from RATE SPD each block).
   uint32_t rw_target_update_interval_ = 0;
+
+  // Note "active" flag: true while a note is held (noteOn not yet followed by
+  // noteOff / allNoteOff / reset). Today this is set by the MIDI handlers;
+  // later it may be driven algorithmically (self-starting notes) without
+  // touching the audio path. The A-H-R envelope below is the single voice
+  // that shapes the attack/release of the active note.
+  bool note_on_ = false;
+
+  // A-H-R envelope state (single voice). See the class-top comment for timing.
+  EgPhase eg_phase_ = kEgPhaseIdle;
+  uint32_t eg_elapsed_ = 0;   // samples elapsed in the current phase
+  float env_ = 0.f;           // current envelope level, 0..1
+  // First-order relaxation coefficients for attack/release, precomputed in
+  // init() (never in the audio path).
+  float eg_alpha_a_ = 0.f;
+  float eg_alpha_r_ = 0.f;
 
   // recompute w0_b_ = w0_ * 2^(detune_cents/1200) — only when the base pitch
   // or detune actually changes.
@@ -614,58 +676,75 @@ private:
   float w0_;
   float lfo_;
 
+#ifdef EMSCRIPTEN
+  // Host-side (web simulator) shape-LFO. On hardware the platform generates
+  // the LFO from the OSC-button A/B knobs and delivers it through
+  // setShapeLfo(); in the simulator there is no platform, so we synthesize a
+  // phase-coherent sine at audio rate here. The UI sets frequency (F knob,
+  // 0..30 Hz) and depth (S knob, 0..1) via setLfoFreq()/setLfoDepth().
+  float lfo_freq_ = 1.f;
+  float lfo_depth_ = 0.f; // default 0 = LFO off (regression-safe startup)
+  float lfo_phase_ = 0.f;
+#endif
+
   // local variables related to audio processing
   float phasor_a_;
   float phasor_b_;
   float phasor_sub_; // sub-octave sine phasor (advances at w0/2)
 
-  // resolved wavetable pointers, recomputed in update_waves() (K-rate).
-  // Each voice scans its table with osc_wave_scanf() in the audio path.
-  const float *wave_a_ = nullptr;
-  const float *wave_b_ = nullptr;
-
-  // Map a fractional wavetable index in [0, kWavesTotal) to a table pointer.
-  // The six Korg banks (A-F) live in separate arrays; this walks the bank
-  // thresholds and returns the matching table. (Integer part selects the
-  // table, the fractional part is applied by osc_wave_scanf's phase.)
-  static const float *resolve_wave(float idx)
+  // Map a fractional wavetable index in [0, kWavesTotal) to a blended table
+  // sample at phase ph. The six Korg banks (A-F) live in separate arrays; this
+  // walks the bank thresholds to find the table and the fractional part
+  // linearly crossfades between that table and the next one (or the previous
+  // one, to avoid a wrap-around blend across the F→A boundary). Blending two
+  // adjacent tables is what makes the LFO morph glide smoothly instead of
+  // stepping table-to-table. Falls back to a single-table scan when the index
+  // is effectively integral or at the top edge (no next table to blend).
+  static float resolve_wave(float idx, float ph)
   {
-    const uint32_t i = (idx < 0.f) ? 0U : (static_cast<uint32_t>(idx) >= kWavesTotal) ? (kWavesTotal - 1U) : static_cast<uint32_t>(idx);
-    if (i < kWavesA)
-      return wavesA[i];
-    if (i < kWavesB)
-      return wavesB[i - kWavesA];
-    if (i < kWavesC)
-      return wavesC[i - kWavesB];
-    if (i < kWavesD)
-      return wavesD[i - kWavesC];
-    if (i < kWavesE)
-      return wavesE[i - kWavesD];
-    return wavesF[i - kWavesE];
+    float lo = idx < 0.f ? 0.f : idx;
+    if (lo >= static_cast<float>(kWavesTotal - 1))
+      lo = static_cast<float>(kWavesTotal - 1);
+    const uint32_t i = static_cast<uint32_t>(lo);
+    const float frac = lo - static_cast<float>(i);
+
+    const float *ta =
+        (i < kWavesA) ? wavesA[i] :
+        (i < kWavesB) ? wavesB[i - kWavesA] :
+        (i < kWavesC) ? wavesC[i - kWavesB] :
+        (i < kWavesD) ? wavesD[i - kWavesC] :
+        (i < kWavesE) ? wavesE[i - kWavesD] :
+                       wavesF[i - kWavesE];
+
+    if (frac < 0.001f)
+      return osc_wave_scanf(ta, ph);
+
+    // next table index in the global 0..kWavesTotal-1 space
+    const uint32_t j = i + 1U;
+    const float *tb =
+        (j < kWavesA) ? wavesA[j] :
+        (j < kWavesB) ? wavesB[j - kWavesA] :
+        (j < kWavesC) ? wavesC[j - kWavesB] :
+        (j < kWavesD) ? wavesD[j - kWavesC] :
+        (j < kWavesE) ? wavesE[j - kWavesD] :
+                       wavesF[j - kWavesE];
+
+    return osc_wave_scanf(ta, ph) * (1.f - frac) + osc_wave_scanf(tb, ph) * frac;
   }
 
-  // Recompute the wavetable pointers. Called from setParameter(WAVE_A/B) and
-  // setPitch(). A pitch-shifted morph position (higher notes morph toward the
-  // denser F bank) keeps the perceived tone consistent across the keyboard,
-  // mirroring how the SDK's band-limited waves roll off their high harmonics.
+  // Pitch-shifted morph position (in table-index units). Higher notes morph
+  // toward the denser F bank so the perceived tone stays consistent across the
+  // keyboard, mirroring how the SDK's band-limited waves roll off their high
+  // harmonics. kWaveMorphShift is the max shift (in tables) at the top of the
+  // range. Recomputed on setParameter(WAVE_A/B) and setPitch() (K-rate) and
+  // cached so the audio path only adds the LFO offset (see process()).
+  static constexpr float kWaveMorphShift = 10.f; // ~1/9 of the bank range
+  float wave_shift_ = 0.f;
+
   void update_waves()
   {
-    // morph shift in table-index units, scaled by normalized pitch.
-    // kWaveMorphShift is the max shift (in tables) applied at the top of the
-    // range; it is clamped so the shifted index stays in [0, kWavesTotal-1].
-    static constexpr float kWaveMorphShift = 10.f; // ~1/9 of the bank range
     const float pitch_n = (w0_ * 48000.f) / 880.f; // 1.0 at A4
     const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? kWaveMorphShift : (kWaveMorphShift * pitch_n);
-    wave_a_ = resolve_wave(params_.wave_a + shift);
-    wave_b_ = resolve_wave(params_.wave_b + shift);
+    wave_shift_ = shift;
   }
-
-  // key-triggered A-S-R envelope state (see the class-top comment for timing)
-  EgPhase eg_phase_ = kEgPhaseIdle;
-  uint32_t eg_elapsed_ = 0;
-  float env_ = 0.f;
-  bool eg_armed_ = false;
-  // first-order relaxation coefficients for attack/release, precomputed in init()
-  float eg_alpha_a_ = 0.f;
-  float eg_alpha_r_ = 0.f;
 };

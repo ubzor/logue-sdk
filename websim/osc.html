@@ -43,6 +43,19 @@
   <canvas id="TimeDomain" width="512" height="128"></canvas><br />
   <canvas id="FrequencyDomain" width="512" height="128"></canvas>
 
+  <h2>LFO (Shape)</h2>
+  <p>Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
+  <div>
+    <label style="display:inline-block; width:100px; margin-right:10px;">F (freq, Hz)</label>
+    <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" style="width:200px; margin-right:10px;">
+    <span id="LfoFreqLabel">1.00</span>
+  </div>
+  <div>
+    <label style="display:inline-block; width:100px; margin-right:10px;">S (depth, %)</label>
+    <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" style="width:200px; margin-right:10px;">
+    <span id="LfoDepthLabel">0%</span>
+  </div>
+
   <h2>Parameters</h2>
   <div id="Parameters"></div>
 
@@ -93,7 +106,7 @@
 
       // audio graph
       // let oscillator = new OscillatorNode(context, { frequency: 440.0 });
-      let envelope = new GainNode(context, { gain: 1.0 }); // unity gain: the A-S-R envelope lives in the DSP (processor.noteOn), not here
+      let envelope = new GainNode(context, { gain: 1.0 }); // unity gain: the A-H-R envelope lives in the DSP (processor.noteOn/noteOff)
       let volume = new GainNode(context, { gain: 0.1 })
       let analyser = new AnalyserNode(context, { fftSize: 4096 });
       let data = new Float32Array(analyser.frequencyBinCount);
@@ -178,9 +191,10 @@
         latchEnabled = !latchEnabled;
         this.innerText = `Latch ${latchEnabled ? "On" : "Off"}`;
 
-        // Note: when the DSP key-triggered A-S-R envelope is implemented in
-        // the processor, the latch-off silence below is handled by the
-        // processor's allNoteOff (immediate env = 0), no host-side ramp needed.
+        // Note: this unit runs its own single-voice A-H-R envelope (2 s exp
+        // attack, hold while the key is held, 2 s exp release). The NTS-1 mkII
+        // platform's own EG is set to oPEn on the device, so it does not
+        // double-shape the signal.
       };
 
       keyboard.keyDown = function (note, frequency) {
@@ -191,9 +205,8 @@
         osc_frequency = frequency;
         Module.setOscPitch(osc_frequency);
         Module.noteOn(note, 100); // TODO: add a slider for velocity
-        // The key-triggered A-S-R envelope (2 s exp attack / 2 s sustain /
-        // 2 s exp release) lives in the processor — noteOn above is the
-        // only host-side action needed.
+        // noteOn starts (or restarts) the A-H-R sequence: 2 s exp attack,
+        // then hold at full level while the key is held.
       };
 
       keyboard.keyUp = function (note, frequency) {
@@ -213,8 +226,8 @@
           osc_frequency = window.frequencyStack[window.frequencyStack.length - 1];
           Module.setOscPitch(osc_frequency);
         }
-        // Note: no host-side mute on key-up — the processor's A-S-R envelope
-        // ignores noteOff and runs its full 2 s + 2 s + 2 s cycle on its own.
+        // Note: no host-side mute on key-up. noteOff triggers the 2 s
+        // exponential release; the sound fades out on its own.
 
         Module.noteOff(note);
       };
@@ -309,6 +322,30 @@
         let param = parameters.get(i);
         createSlider(wasmProcessor, param, i);
       }
+
+      // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
+      const lfoFreq = document.getElementById("LfoFreq");
+      const lfoDepth = document.getElementById("LfoDepth");
+      const lfoFreqLabel = document.getElementById("LfoFreqLabel");
+      const lfoDepthLabel = document.getElementById("LfoDepthLabel");
+
+      function updateLfoFreq() {
+        const v = parseFloat(lfoFreq.value);
+        lfoFreqLabel.textContent = v.toFixed(2);
+        Module.setLfoFreq(v);
+      }
+      function updateLfoDepth() {
+        const v = parseInt(lfoDepth.value, 10);
+        lfoDepthLabel.textContent = v + "%";
+        Module.setLfoDepth(v / 100.0);
+      }
+
+      lfoFreq.addEventListener("input", updateLfoFreq);
+      lfoDepth.addEventListener("input", updateLfoDepth);
+
+      // initialize (defaults: F=1 Hz, S=0% = LFO off)
+      updateLfoFreq();
+      updateLfoDepth();
     };
   </script>
 

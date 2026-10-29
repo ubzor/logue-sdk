@@ -80,6 +80,9 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc)
   // cache the context for later use
   context = static_cast<const unit_runtime_osc_context_t *>(desc->hooks.runtime_context);
 
+  // initialize the processor (sets up A-H-R envelope coefficients, etc.)
+  s_osc_instance.init(nullptr);
+
   // initialize cached parameters to defaults
   for (int id = 0; id < UNIT_OSC_MAX_PARAM_COUNT; ++id)
   {
