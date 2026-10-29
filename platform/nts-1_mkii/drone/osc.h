@@ -75,29 +75,25 @@ public:
   // audio parameters
   enum
   {
-    PARAM_STUB = 0U, // knob A: no-op stub (header slot 0, type_none)
-    VALUE_STUB,      // knob B (default mode): no-op stub (header slot 1, type_none)
-    PARAM_SEL,       // optional (header slot 2): parameter selector 0..9, shows name
-    PARAM_VAL,       // optional (header slot 3): raw value 0..1023 of PARAM_SEL, shows value
-    DETUNE,          // detune of osc B (−50..+50 cents, default 0 = in tune)
-    RATE_AMT,        // random-walk depth (0..100%, default 0% = off)
-    RATE_SPD,        // random-walk speed (0..100%, default 50%)
-    SUB,             // sub-octave sine level (0..100%, default 50%)
-    SUB2,            // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
-    SATU,            // saturator drive (0..3.0, default 2.0 = moderate)
-    FOLD,            // pre-drive wavefolder depth (0..100%, default 0% = off)
-    ASYM,            // asymmetric saturator (−100%..+100%, default 0% = symmetric)
-    WAV1,            // oscillator A wavetable (0..90 across banks A-F)
-    WAV2,            // oscillator B wavetable (0..90 across banks A-F)
+    PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..9, shows name
+    PARAM_VAL,      // knob B (header slot 1): raw value 0..1023 of PARAM_SEL, shows value
+    DETUNE,         // detune of osc B (−50..+50 cents, default 0 = in tune)
+    RATE_AMT,       // random-walk depth (0..100%, default 0% = off)
+    RATE_SPD,       // random-walk speed (0..100%, default 50%)
+    SUB,            // sub-octave sine level (0..100%, default 50%)
+    SUB2,           // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
+    SATU,           // saturator drive (0..3.0, default 2.0 = moderate)
+    FOLD,           // pre-drive wavefolder depth (0..100%, default 0% = off)
+    ASYM,           // asymmetric saturator (−100%..+100%, default 0% = symmetric)
+    WAV1,           // oscillator A wavetable (0..90 across banks A-F)
+    WAV2,           // oscillator B wavetable (0..90 across banks A-F)
     NUM_PARAMS
   };
 
   // ---- Parameter selector / value multiplexer ----
-  // The two fixed knobs A (PARAM_STUB) and B (VALUE_STUB) are no-op stubs:
-  // all real control happens through the two optional (edit-menu) parameters
-  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3). PARAM_SEL picks one of the 10
-  // DSP parameters (DETUNE..WAV2), PARAM_VAL edits its raw 10-bit value. The
-  // 10 raw 10-bit values (0..1023) are cached in edit_value_ so that
+  // Knob A (PARAM_SEL, slot 0) picks one of the 10 DSP parameters
+  // (DETUNE..WAV2), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
+  // The 10 raw 10-bit values (0..1023) are cached in edit_value_ so that
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
   static constexpr uint8_t kEditParamCount = 10; // DETUNE..WAV2
@@ -313,26 +309,19 @@ public:
   {
     switch (index)
     {
-    case PARAM_STUB:
-    case VALUE_STUB:
-      // Fixed knobs A and B are no-op stubs: all real control happens
-      // through the optional PARAM_SEL / PARAM_VAL parameters below.
-      break;
-
     case PARAM_SEL:
-      // Optional parameter: parameter selector. 0..9 -> DETUNE, RATE_AMT,
-      // RATE_SPD, SUB, SUB2, SATU, FOLD, ASYM, WAV1, WAV2. On selection
-      // change, re-apply the cached raw value of the newly selected
-      // parameter so the DSP immediately reflects it (PARAM_VAL then edits
-      // that value).
+      // Knob A: parameter selector. 0..9 -> DETUNE, RATE_AMT, RATE_SPD,
+      // SUB, SUB2, SATU, FOLD, ASYM, WAV1, WAV2. On selection change,
+      // re-apply the cached raw value of the newly selected parameter so
+      // the DSP immediately reflects it (PARAM_VAL then edits that value).
       select_ = (uint8_t)(value & 9);
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
       break;
 
     case PARAM_VAL:
-      // Optional parameter: raw 10-bit value (0..1023) of the currently
-      // selected parameter. Write into the cache (so re-selecting later
-      // restores it) and apply to DSP.
+      // Knob B: raw 10-bit value (0..1023) of the currently selected
+      // parameter. Write into the cache (so re-selecting later restores
+      // it) and apply to DSP.
       edit_value_[select_] = value;
       apply_edit_param(kEditParamFirst + select_, value);
       break;
@@ -342,11 +331,10 @@ public:
     }
   }
 
-  // String representations for the two type_strings optional parameters
-  // (the fixed PARAM / VALUE knobs are type_none and never reach here):
-  //   PARAM SEL: the name of the selected parameter ("SUB", "FOLD", ..).
-  //   PARAM VAL: a short representation of the selected parameter's raw
-  //              10-bit value ("50%", "+25%", wavetable index).
+  // String representations for the two type_strings parameters:
+  //   PARAM (knob A): the name of the selected parameter ("SUB", "FOLD", ..).
+  //   VALUE (knob B): a short representation of the selected parameter's raw
+  //                   10-bit value ("50%", "+25%", wavetable index).
   // The manual formatter below avoids pulling printf machinery into the ARM
   // image. Longest possible output is 5 chars ("+100%").
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final

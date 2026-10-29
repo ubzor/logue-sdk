@@ -50,36 +50,18 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x00000006U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 2,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
 
         // See common/runtime.h for type enum and unit_param_t structure
 
-        // ---- Fixed/direct UI parameters (hardwired to knobs A and B) ----
-        // These two are no-op stubs: turning knob A or knob B in the default
-        // mode does nothing. All real control happens through the optional
-        // (edit-menu) parameters below. They are type_none so the display
-        // shows only the static label and never calls
-        // unit_get_param_str_value for them.
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {"PARAM"}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {"VALUE"}},
-
-        // ---- Optional (edit-menu) parameters: the A/B multiplexer ----
-        // PARAM SEL: which of the 10 DSP parameters the optional value edits
-        // (0..9: DETU, RATE, SPEE, SUB, SUB2, SATU, FOLD, ASYM, WAV1, WAV2).
-        // type_strings: in edit mode the display shows the selected
-        // parameter's name via unit_get_param_str_value.
-        {0, 9, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
-
-        // PARAM VAL: raw 10-bit value (0..1023) of the selected parameter.
-        // Each selected parameter maps 0..1023 onto its own range (see
-        // apply_edit_param in osc.h). The raw value is cached per-parameter
-        // so re-selecting a parameter restores its last value. type_strings:
-        // in edit mode the display shows the formatted value (e.g. "50%").
+        // A knob (PARAM): parameter selector, 0..9. The display shows the
+        // name of the selected parameter via unit_get_param_str_value().
+        // Turning the B knob (VALUE) then edits that parameter's raw value.
         //
-        // Selectable parameters (PARAM SEL value -> name -> default raw value):
+        // Selectable parameters (A knob value -> name -> default raw value):
         //   0: DETU - detune of osc B (-50..+50 cents), default 511 (0 cents)
         //   1: RATE - random-walk depth (quadratic, 0..100%), default 0 (off)
         //   2: SPEE - random-walk speed (0..100%), default 511 (50%)
@@ -90,6 +72,13 @@ const __unit_header unit_header_t unit_header = {
         //   7: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
         //   8: WAV1 - osc A wavetable (0..90 across banks A-F), default 0
         //   9: WAV2 - osc B wavetable (0..90 across banks A-F), default 0
+        {0, 9, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+
+        // B knob (VALUE): raw 10-bit value (0..1023) of the selected parameter.
+        // Each selected parameter maps 0..1023 onto its own range (see
+        // apply_edit_param in osc.h). The raw value is cached per-parameter
+        // so re-selecting a parameter restores its last value. Displayed as
+        // a formatted string via unit_get_param_str_value (e.g. "50%").
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
     },
 };
