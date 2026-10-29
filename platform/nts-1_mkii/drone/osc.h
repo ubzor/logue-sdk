@@ -95,11 +95,11 @@ public:
   // ---- Parameter selector / value multiplexer ----
   // The two fixed knobs A (PARAM_STUB) and B (VALUE_STUB) are no-op stubs:
   // all real control happens through the two optional (edit-menu) parameters
-  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3), plus the direct SATU parameter
-  // (slot 4). PARAM_SEL picks one of the 10 DSP parameters (DETUNE..WAV2),
-  // PARAM_VAL edits its raw 10-bit value. The 10 raw 10-bit values (0..1023)
-  // are cached in edit_value_ so that re-selecting a previously used
-  // parameter restores its value instead of resetting it to the default.
+  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3). PARAM_SEL picks one of the 10
+  // DSP parameters (DETUNE..WAV2), PARAM_VAL edits its raw 10-bit value. The
+  // 10 raw 10-bit values (0..1023) are cached in edit_value_ so that
+  // re-selecting a previously used parameter restores its value instead of
+  // resetting it to the default.
   static constexpr uint8_t kEditParamCount = 10; // DETUNE..WAV2
   static constexpr uint8_t kEditParamFirst = RATE_AMT; // first edit-param index
 
@@ -337,21 +337,6 @@ public:
       apply_edit_param(kEditParamFirst + select_, value);
       break;
 
-    case DETUNE:
-    case RATE_AMT:
-    case RATE_SPD:
-    case SUB:
-    case SUB2:
-    case SATU:
-    case FOLD:
-    case ASYM:
-    case WAV1:
-    case WAV2:
-      // Direct edit-menu parameters. Write into the cache and apply to DSP.
-      edit_value_[index - kEditParamFirst] = value;
-      apply_edit_param(index, value);
-      break;
-
     default:
       break;
     }
@@ -372,24 +357,6 @@ public:
     if (id == PARAM_SEL)
     {
       return (value >= 0 && value < (int)kEditParamCount) ? names[value] : "";
-    }
-    if (id == SATU)
-    {
-      // Direct SATU parameter (slot 4): format the value directly.
-      static char buf[8];
-      int v = (int)(param_10bit_to_f32(value) * 300.f);
-      int n = 0;
-      char d[4];
-      int nd = 0;
-      do
-      {
-        d[nd++] = (char)('0' + v % 10);
-        v /= 10;
-      } while (v > 0);
-      for (int i = nd - 1; i >= 0; --i)
-        buf[n++] = d[i];
-      buf[n] = '\0';
-      return buf;
     }
     if (id != PARAM_VAL)
       return "";

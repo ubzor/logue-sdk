@@ -50,7 +50,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x00000006U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 5,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -91,11 +91,5 @@ const __unit_header unit_header_t unit_header = {
         //   8: WAV1 - osc A wavetable (0..90 across banks A-F), default 0
         //   9: WAV2 - osc B wavetable (0..90 across banks A-F), default 0
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
-
-        // ---- Direct parameter: saturator drive (SAT) ----
-        // Always visible in the edit menu (not behind PARAM SEL/VAL).
-        // type_strings so the display shows the formatted drive value.
-        // Maps 0..1023 onto 0..3.0 drive level (see apply_edit_param).
-        {0, 1023, 0, 682, k_unit_param_type_strings, 0, 0, 0, {"SATU"}},
     },
 };
