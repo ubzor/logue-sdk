@@ -83,11 +83,11 @@ std::string getParameterValueString(int index, int value)
 {
   const unit_param_t &p = unit_header.params[index];
 
-  // The Osc processor implements getParameterStrValue() for ALL parameter
-  // indices (SELECT, VALUE, and RATE_AMT..SUB2), returning a per-parameter
-  // human-readable string (parameter name for SELECT, formatted value for
-  // the rest). Route every index through that method so the simulator UI
-  // shows the same strings the hardware display would.
+  // The Osc processor implements getParameterStrValue() for the two
+  // type_strings optional parameters (PARAM SEL: parameter name, PARAM VAL:
+  // formatted value), returning "" for everything else (the fixed PARAM /
+  // VALUE knobs are type_none stubs). Route every index through that method
+  // so the simulator UI shows the same strings the hardware display would.
   const char *s = processor.getParameterStrValue(static_cast<uint8_t>(index), value);
   if (s != nullptr)
     return std::string(s);
@@ -384,7 +384,7 @@ int main()
   emscripten_exit_with_live_runtime();
 }
 
-// ---- Web-sim helpers: read A/B knob cache state from the main thread ----
+// ---- Web-sim helpers: read selector cache state from the main thread ----
 // The processor instance lives on the audio worklet thread, but for the
 // simulator's UI we can safely read the cached values from the main thread
 // (they are written by setParameter on the worklet thread; a benign data

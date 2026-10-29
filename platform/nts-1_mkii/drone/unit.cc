@@ -132,6 +132,12 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
 
 __unit_callback int32_t unit_get_param_value(uint8_t id)
 {
+  // PARAM VAL (optional slot 3) reports the cached value of the currently
+  // selected parameter (the selector's real state); PARAM SEL (slot 2) and
+  // the two fixed stub slots report the last raw value written via
+  // unit_set_param_value.
+  if (id == 3)
+    return s_osc_instance.getValue();
   // just return the cached value
   return cached_values[id];
 }

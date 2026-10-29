@@ -106,13 +106,36 @@
         // name. Chrome and FF work with 0 but Safari requires the correct "0".
         let audio_parameter = wasmProcessor.parameters.get(`${index}`);
 
-        if (param.type === K_UNIT_PARAM_TYPE_STRINGS) {
-          // A knob (PARAM): parameter selector. Render a <select> with one
-          // option per selectable parameter (param.min..param.max). The
-          // option text comes from getParameterValueString(index, i), which
-          // returns the parameter name for the SELECT case.
+        // Stable ids for cross-control sync.
+        const controlId = "param_" + index;
+        // Parameter roles (see header.c):
+        //   index 0 "PARAM"   - fixed knob A: no-op stub (render disabled)
+        //   index 1 "VALUE"   - fixed knob B: no-op stub (render disabled)
+        //   index 2 "PARAM SEL" - optional: parameter selector dropdown (0..7)
+        //   index 3 "PARAM VAL" - optional: value of the selected parameter
+        // The fixed PARAM / VALUE knobs are no-op stubs on hardware (type_none),
+        // so the simulator renders them as disabled sliders for layout parity.
+        if (index === 0 || index === 1) {
+          let input = document.createElement("input");
+          input.type = "range";
+          input.min = 0;
+          input.max = 1023;
+          input.step = 1;
+          input.value = 0;
+          input.id = controlId;
+          input.disabled = true;
+          input.title = "No-op stub: use PARAM SEL / PARAM VAL instead";
+          input.style.width = "200px";
+          input.style.marginRight = "10px";
+          container.appendChild(input);
+          value_string.textContent = "stub";
+        } else if (index === 2) {
+          // PARAM SEL: parameter selector. Render a <select> with one option
+          // per selectable parameter (param.min..param.max). The option text
+          // comes from getParameterValueString(index, i), which returns the
+          // parameter name.
           let select = document.createElement("select");
-          select.id = param.name;
+          select.id = controlId;
           select.style.width = "200px";
           select.style.marginRight = "10px";
           for (let i = param.min; i <= param.max; ++i) {
@@ -127,7 +150,7 @@
           select.onchange = () => {
             value_string.textContent = Module.getParameterValueString(index, select.value);
             audio_parameter.value = select.value;
-            const valueSlider = document.getElementById("VALUE");
+            const valueSlider = document.getElementById("param_3");
             if (valueSlider) {
               // Read the processor's cache directly (no worklet round-trip).
               // getSelectParam() / getEditParamValue() are exported from
@@ -141,40 +164,37 @@
             }
           };
         } else {
-          // B knob (VALUE) and edit-menu knobs: plain range slider.
+          // PARAM VAL (optional, index 3): plain range slider editing the raw
+          // 10-bit value (0..1023) of the currently selected parameter.
           let input = document.createElement("input");
           input.type = "range";
           input.min = param.min;
           input.max = param.max;
           input.step = 1;
           input.value = param.init;
-          input.id = param.name;
+          input.id = controlId;
           input.style.width = "200px";
           input.style.marginRight = "10px";
           container.appendChild(input);
-          // For the VALUE knob, initialize the display from the processor's
-          // cached value of the currently selected parameter (not the raw
-          // 0 that param.init would show). The PARAM select is created
-          // before the VALUE slider, so it is already in the DOM.
-          if (param.name === "VALUE") {
-            const sel = document.getElementById("PARAM");
-            if (sel) {
-              const idx = parseInt(sel.value, 10);
-              const raw = Module.getEditParamValue ? Module.getEditParamValue(idx) : 0;
-              input.value = raw;
-              value_string.textContent = formatParamValue(idx, raw);
-            }
+          // Initialize the display from the processor's cached value of the
+          // currently selected parameter (not the raw 0 that param.init
+          // would show). The PARAM SEL dropdown is created before the PARAM
+          // VAL slider, so it is already in the DOM.
+          const sel = document.getElementById("param_2");
+          if (sel) {
+            const idx = parseInt(sel.value, 10);
+            const raw = Module.getEditParamValue ? Module.getEditParamValue(idx) : 0;
+            input.value = raw;
+            value_string.textContent = formatParamValue(idx, raw);
           } else {
             value_string.textContent = Module.getParameterValueString(index, input.value);
           }
           input.oninput = () => {
             audio_parameter.value = input.value;
-            if (param.name === "VALUE") {
-              const sel = document.getElementById("PARAM");
-              if (sel) {
-                const idx = parseInt(sel.value, 10);
-                value_string.textContent = formatParamValue(idx, input.value);
-              }
+            const sel2 = document.getElementById("param_2");
+            if (sel2) {
+              const idx = parseInt(sel2.value, 10);
+              value_string.textContent = formatParamValue(idx, input.value);
             } else {
               value_string.textContent = Module.getParameterValueString(index, input.value);
             }

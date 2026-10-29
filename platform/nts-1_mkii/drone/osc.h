@@ -75,48 +75,53 @@ public:
   // audio parameters
   enum
   {
-    SELECT = 0U,  // knob A: parameter selector (0..7), displays parameter name
-    VALUE,        // knob B: value of the currently selected parameter (0..1023)
-    RATE_AMT,     // edit (or selected via VALUE): random-walk depth (0..100%, default 0% = off)
-    RATE_SPD,     // edit (or selected via VALUE): random-walk speed (0..100%, default 50%)
-    SUB,          // edit (or selected via VALUE): sub-octave sine level (0..100%, default 50%)
-    FOLD,         // edit (or selected via VALUE): pre-drive wavefolder depth (0..100%, default 0% = off)
-    ASYM,         // edit (or selected via VALUE): asymmetric saturator (−100%..+100%, default 0% = symmetric)
-    WAVE_A,       // edit (or selected via VALUE): oscillator A wavetable (0..90 across banks A-F)
-    WAVE_B,       // edit (or selected via VALUE): oscillator B wavetable (0..90 across banks A-F)
-    SUB2,         // edit (or selected via VALUE): second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
+    PARAM_STUB = 0U, // knob A: no-op stub (header slot 0, type_none)
+    VALUE_STUB,      // knob B (default mode): no-op stub (header slot 1, type_none)
+    PARAM_SEL,       // optional (header slot 2): parameter selector 0..7, shows name
+    PARAM_VAL,       // optional (header slot 3): raw value 0..1023 of PARAM_SEL, shows value
+    RATE_AMT,        // random-walk depth (0..100%, default 0% = off)
+    RATE_SPD,        // random-walk speed (0..100%, default 50%)
+    SUB,             // sub-octave sine level (0..100%, default 50%)
+    FOLD,            // pre-drive wavefolder depth (0..100%, default 0% = off)
+    ASYM,            // asymmetric saturator (−100%..+100%, default 0% = symmetric)
+    WAVE_A,          // oscillator A wavetable (0..90 across banks A-F)
+    WAVE_B,          // oscillator B wavetable (0..90 across banks A-F)
+    SUB2,            // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
     NUM_PARAMS
   };
 
-  // ---- A/B knob (parameter selector + value) support ----
-  // The 8 "edit" parameters (RATE_AMT..SUB2) are addressed by the A/B knob
-  // pair: knob A (SELECT) picks one of them, knob B (VALUE) edits it. The
-  // 8 raw 10-bit values (0..1023) are cached in edit_value_ so that turning
-  // knob A back to a previously used parameter restores its value instead of
-  // resetting it to the default. The header's "edit menu" parameters
-  // (indices RATE_AMT..SUB2, slots 2..9) keep working unchanged: turning a
-  // physical edit knob writes into the same edit_value_ slot, so the two
-  // control paths stay in sync.
+  // ---- Parameter selector / value multiplexer ----
+  // The two fixed knobs A (PARAM_STUB) and B (VALUE_STUB) are no-op stubs:
+  // all real control happens through the two optional (edit-menu) parameters
+  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3). PARAM_SEL picks one of the 8
+  // DSP parameters (RATE_AMT..SUB2), PARAM_VAL edits its raw 10-bit value.
+  // The 8 raw 10-bit values (0..1023) are cached in edit_value_ so that
+  // re-selecting a previously used parameter restores its value instead of
+  // resetting it to the default.
   static constexpr uint8_t kEditParamCount = 8; // RATE_AMT..SUB2
   static constexpr uint8_t kEditParamFirst = RATE_AMT; // first edit-param index
 
   // Raw 10-bit values (0..1023) of the 8 editable parameters, cached so the
-  // A/B knob pair can recall them. Defaults match the header's "init" values:
+  // selector can recall them. Defaults match the header's "init" values:
   // RATE AMT 0, RATE SPD 511, SUB 511, FOLD 0, ASYM 511, WAVE A 0, WAVE B 0,
   // SUB2 0.
   int32_t edit_value_[kEditParamCount] = {0, 511, 511, 0, 511, 0, 0, 0};
 
   // Currently selected parameter (0..7), i.e. edit_value_[select_] is what
-  // knob B (VALUE) edits. 0 = RATE AMT (default, matches header "init" of SELECT).
+  // PARAM_VAL edits. 0 = RATE AMT (default, matches header "init" of PARAM_SEL).
   uint8_t select_ = 0;
 
-  // Public accessors for the web simulator (wasm.cc) to read the A/B knob
+  // Public accessors for the web simulator (wasm.cc) to read the selector
   // cache state without going through the audio worklet thread.
   uint8_t getSelect() const { return select_; }
   int32_t getEditValue(uint8_t idx) const
   {
     return (idx < kEditParamCount) ? edit_value_[idx] : 0;
   }
+
+  // Cached value of the currently selected parameter (PARAM_VAL). Used by the
+  // web simulator's VALUE slider init/display (wasm.cc unit_get_param_value).
+  int32_t getValue() const { return edit_value_[select_]; }
 
   // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
   // The detune never strays further from the DETUNE knob value than this.
@@ -295,36 +300,27 @@ public:
   {
     switch (index)
     {
-    case SELECT:
-      // Knob A: parameter selector. 0..7 -> RATE AMT, RATE SPD, SUB, FOLD,
-      // ASYM, WAVE A, WAVE B, SUB2. On selection change, re-apply the cached
-      // raw value of the newly selected parameter so the DSP immediately
-      // reflects it (the B knob then edits that value).
+    case PARAM_STUB:
+    case VALUE_STUB:
+      // Fixed knobs A and B are no-op stubs: all real control happens
+      // through the optional PARAM_SEL / PARAM_VAL parameters below.
+      break;
+
+    case PARAM_SEL:
+      // Optional parameter: parameter selector. 0..7 -> RATE AMT, RATE SPD,
+      // SUB, FOLD, ASYM, WAVE A, WAVE B, SUB2. On selection change, re-apply
+      // the cached raw value of the newly selected parameter so the DSP
+      // immediately reflects it (PARAM_VAL then edits that value).
       select_ = (uint8_t)(value & 7);
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
       break;
 
-    case VALUE:
-      // Knob B: value of the currently selected parameter (0..1023). Write
-      // into the cache (so re-selecting later restores it) and apply to DSP.
+    case PARAM_VAL:
+      // Optional parameter: raw 10-bit value (0..1023) of the currently
+      // selected parameter. Write into the cache (so re-selecting later
+      // restores it) and apply to DSP.
       edit_value_[select_] = value;
       apply_edit_param(kEditParamFirst + select_, value);
-      break;
-
-    case RATE_AMT:
-    case RATE_SPD:
-    case SUB:
-    case FOLD:
-    case ASYM:
-    case WAVE_A:
-    case WAVE_B:
-    case SUB2:
-      // Edit-menu path (slots 2..9 in header.c). Keep working unchanged, and
-      // also write into the A/B knob cache so the two control paths stay in
-      // sync (turning the physical edit knob updates the cached value that
-      // knob B will show/reuse when that parameter is selected).
-      edit_value_[index - kEditParamFirst] = value;
-      apply_edit_param(index, value);
       break;
 
     default:
@@ -332,19 +328,58 @@ public:
     }
   }
 
-  // String representations for k_unit_param_type_strings parameters.
-  // The runtime only calls this for SELECT (PARAM, slot 0); VALUE (slot 1)
-  // is type_none and the old edit-menu slots no longer exist in the header.
-  // Numeric formatting of the VALUE parameter lives in the web simulator
-  // (drone.html) to keep this C++ side minimal and free of printf machinery.
+  // String representations for the two type_strings optional parameters
+  // (the fixed PARAM / VALUE knobs are type_none and never reach here):
+  //   PARAM SEL: the name of the selected parameter ("SUB", "FOLD", ..).
+  //   PARAM VAL: a short representation of the selected parameter's raw
+  //              10-bit value ("50%", "+25%", wavetable index).
+  // The manual formatter below avoids pulling printf machinery into the ARM
+  // image. Longest possible output is 5 chars ("+100%").
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final
   {
     static const char *const names[kEditParamCount] = {
         "RATE AMT", "RATE SPD", "SUB", "FOLD",
         "ASYM", "WAVE A", "WAVE B", "SUB2"};
-    if (id == SELECT && value >= 0 && value < (int)kEditParamCount)
-      return names[value];
-    return "";
+    if (id == PARAM_SEL)
+    {
+      return (value >= 0 && value < (int)kEditParamCount) ? names[value] : "";
+    }
+    if (id != PARAM_VAL)
+      return "";
+
+    // PARAM VAL: format the currently selected parameter's cached raw value.
+    const uint8_t idx = (select_ < kEditParamCount) ? select_ : 0;
+    const int32_t raw = edit_value_[idx];
+    const int32_t k = kEditParamFirst + idx;
+    static char buf[8];
+    int v;
+    if (k == WAVE_A || k == WAVE_B)
+      v = (int)(param_10bit_to_f32(raw) * (kWavesTotal - 1));
+    else if (k == ASYM)
+      v = (int)((raw * 200) / 1023) - 100;
+    else
+      v = (int)((raw * 100) / 1023);
+
+    const bool percent = (k != WAVE_A && k != WAVE_B);
+    int n = 0;
+    if (v < 0)
+      buf[n++] = '-';
+    else if (k == ASYM)
+      buf[n++] = '+';
+    int t = (v < 0) ? -v : v;
+    char d[4];
+    int nd = 0;
+    do
+    {
+      d[nd++] = (char)('0' + t % 10);
+      t /= 10;
+    } while (t > 0);
+    for (int i = nd - 1; i >= 0; --i)
+      buf[n++] = d[i];
+    if (percent)
+      buf[n++] = '%';
+    buf[n] = '\0';
+    return buf;
   }
 
   // life-cycle methods
@@ -359,11 +394,11 @@ public:
     sub2_gate_ = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
-    // A/B knob: start with RATE AMT (select_ = 0) selected. Re-apply the
-    // cached default values so the DSP and the A/B knob display agree on
-    // startup (the header's "init" values for slots 2..9 already match
-    // edit_value_ defaults, but this keeps the two in sync if either side
-    // is edited independently later).
+    // Parameter selector: start with RATE AMT (select_ = 0) selected.
+    // Re-apply the cached default values so the DSP and the PARAM SEL /
+    // PARAM VAL display agree on startup (the header's "init" value of
+    // PARAM_VAL already matches edit_value_[0], but this keeps the two in
+    // sync if either side is edited independently later).
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
