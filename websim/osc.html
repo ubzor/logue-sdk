@@ -67,6 +67,28 @@
         return Math.abs(a - b) < epsilon;
       }
 
+      // k_unit_param_type_strings in common/runtime.h (enum order:
+      // none=0, percent=1, db=2, cents=3, semi=4, oct=5, hertz=6, khertz=7,
+      // bpm=8, msec=9, sec=10, enum=11, strings=12). We render a <select>
+      // for strings-typed parameters (the A knob / PARAM selector) and a
+      // plain range slider for everything else.
+      const K_UNIT_PARAM_TYPE_STRINGS = 12;
+
+      // Format the raw 10-bit value (0..1023) of one of the 8 A/B-knob
+      // parameters for display. Index order matches the C++ SELECT enum:
+      // 0 RATE AMT, 1 RATE SPD, 2 SUB, 3 FOLD, 4 ASYM, 5 WAVE A, 6 WAVE B,
+      // 7 SUB2. Percentages for all except WAVE A/B (wavetable index 0..90)
+      // and ASYM (-100%..+100% with explicit sign).
+      function formatParamValue(idx, raw) {
+        if (idx === 5 || idx === 6)
+          return String(Math.round((raw / 1023) * 90));
+        if (idx === 4) {
+          const pct = Math.round((raw * 200) / 1023) - 100;
+          return (pct >= 0 ? "+" : "") + pct + "%";
+        }
+        return Math.round((raw * 100) / 1023) + "%";
+      }
+
       function createSlider(wasmProcessor, param, index) {
         let container = document.createElement("div");
 
@@ -77,29 +99,87 @@
         label.style.marginRight = "10px";
         container.appendChild(label);
 
-        let input = document.createElement("input");
-        input.type = "range";
-        input.min = param.min;
-        input.max = param.max;
-        input.step = 1;
-        input.value = param.init;
-        input.id = param.name;
-        input.style.width = "200px";
-        input.style.marginRight = "10px";
-        container.appendChild(input);
-
         let value_string = document.createElement("span");
-        value_string.textContent = Module.getParameterValueString(index, input.value);
         container.appendChild(value_string);
 
         // Emscripten's API creates these from a C array, indexing them instead of a
         // name. Chrome and FF work with 0 but Safari requires the correct "0".
         let audio_parameter = wasmProcessor.parameters.get(`${index}`);
 
-        input.oninput = () => {
-          value_string.textContent = Module.getParameterValueString(index, input.value);
-          audio_parameter.value = input.value;
-        };
+        if (param.type === K_UNIT_PARAM_TYPE_STRINGS) {
+          // A knob (PARAM): parameter selector. Render a <select> with one
+          // option per selectable parameter (param.min..param.max). The
+          // option text comes from getParameterValueString(index, i), which
+          // returns the parameter name for the SELECT case.
+          let select = document.createElement("select");
+          select.id = param.name;
+          select.style.width = "200px";
+          select.style.marginRight = "10px";
+          for (let i = param.min; i <= param.max; ++i) {
+            let opt = document.createElement("option");
+            opt.value = i;
+            opt.textContent = Module.getParameterValueString(index, i);
+            if (i === param.init) opt.selected = true;
+            select.appendChild(opt);
+          }
+          container.appendChild(select);
+          value_string.textContent = Module.getParameterValueString(index, select.value);
+          select.onchange = () => {
+            value_string.textContent = Module.getParameterValueString(index, select.value);
+            audio_parameter.value = select.value;
+            const valueSlider = document.getElementById("VALUE");
+            if (valueSlider) {
+              // Read the processor's cache directly (no worklet round-trip).
+              // getSelectParam() / getEditParamValue() are exported from
+              // wasm.cc and read the processor's select_ / edit_value_.
+              const newSelect = parseInt(select.value, 10);
+              const raw = Module.getEditParamValue ? Module.getEditParamValue(newSelect) : 0;
+              valueSlider.value = raw;
+              const valueSpan = valueSlider.parentElement.querySelector("span");
+              if (valueSpan)
+                valueSpan.textContent = formatParamValue(newSelect, raw);
+            }
+          };
+        } else {
+          // B knob (VALUE) and edit-menu knobs: plain range slider.
+          let input = document.createElement("input");
+          input.type = "range";
+          input.min = param.min;
+          input.max = param.max;
+          input.step = 1;
+          input.value = param.init;
+          input.id = param.name;
+          input.style.width = "200px";
+          input.style.marginRight = "10px";
+          container.appendChild(input);
+          // For the VALUE knob, initialize the display from the processor's
+          // cached value of the currently selected parameter (not the raw
+          // 0 that param.init would show). The PARAM select is created
+          // before the VALUE slider, so it is already in the DOM.
+          if (param.name === "VALUE") {
+            const sel = document.getElementById("PARAM");
+            if (sel) {
+              const idx = parseInt(sel.value, 10);
+              const raw = Module.getEditParamValue ? Module.getEditParamValue(idx) : 0;
+              input.value = raw;
+              value_string.textContent = formatParamValue(idx, raw);
+            }
+          } else {
+            value_string.textContent = Module.getParameterValueString(index, input.value);
+          }
+          input.oninput = () => {
+            audio_parameter.value = input.value;
+            if (param.name === "VALUE") {
+              const sel = document.getElementById("PARAM");
+              if (sel) {
+                const idx = parseInt(sel.value, 10);
+                value_string.textContent = formatParamValue(idx, input.value);
+              }
+            } else {
+              value_string.textContent = Module.getParameterValueString(index, input.value);
+            }
+          };
+        }
 
         document.getElementById("Parameters").appendChild(container);
       }
@@ -348,8 +428,10 @@
       updateLfoDepth();
     };
   </script>
-
   {{{ SCRIPT }}}
+  {{{ SCRIPT }}}
+  {{{ SCRIPT }}}
+  <script async type="text/javascript" src="drone.js"></script>
 </body>
 
 </html>

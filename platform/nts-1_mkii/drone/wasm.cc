@@ -83,6 +83,15 @@ std::string getParameterValueString(int index, int value)
 {
   const unit_param_t &p = unit_header.params[index];
 
+  // The Osc processor implements getParameterStrValue() for ALL parameter
+  // indices (SELECT, VALUE, and RATE_AMT..SUB2), returning a per-parameter
+  // human-readable string (parameter name for SELECT, formatted value for
+  // the rest). Route every index through that method so the simulator UI
+  // shows the same strings the hardware display would.
+  const char *s = processor.getParameterStrValue(static_cast<uint8_t>(index), value);
+  if (s != nullptr)
+    return std::string(s);
+
   std::string suffix;
 
   switch (p.type)
@@ -373,4 +382,25 @@ int main()
                                                    &AudioThreadInitialized, 0);
 
   emscripten_exit_with_live_runtime();
+}
+
+// ---- Web-sim helpers: read A/B knob cache state from the main thread ----
+// The processor instance lives on the audio worklet thread, but for the
+// simulator's UI we can safely read the cached values from the main thread
+// (they are written by setParameter on the worklet thread; a benign data
+// race on a 32-bit aligned int is inaudible and only affects UI timing).
+extern "C" int getSelectParam()
+{
+  return static_cast<int>(processor.getSelect());
+}
+
+extern "C" int getEditParamValue(int idx)
+{
+  return static_cast<int>(processor.getEditValue(static_cast<uint8_t>(idx)));
+}
+
+EMSCRIPTEN_BINDINGS(drone_ui)
+{
+  emscripten::function("getSelectParam", &getSelectParam);
+  emscripten::function("getEditParamValue", &getEditParamValue);
 }

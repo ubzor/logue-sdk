@@ -48,9 +48,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' as displayed on device. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
-    .version = 0x00000002U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
+    .version = 0x00000003U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 10,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 2,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -58,64 +58,27 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // Fixed/direct UI parameters
-        // A knob: detune of the second oscillator, -50 .. +50 cents (511 = in tune)
-        {0, 1023, 511, 511, k_unit_param_type_cents, 0, 0, 0, {"DETUNE"}},
+        // A knob (PARAM): parameter selector, 0..7. The display shows the
+        // name of the selected parameter via unit_get_param_str_value()
+        // (k_unit_param_type_strings). The B knob (VALUE) then edits the
+        // currently selected parameter (0..1023, per-parameter scaling).
+        {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
-        // B knob: drive level into the soft-clip saturator, 0 .. 3
-        {0, 1023, 0, 341, k_unit_param_type_none, 0, 0, 0, {"SAT"}},
-
-        // 8 Edit menu parameters
-        // Maximum detune deviation (RATE AMT): 0..100%, default 0% = off
-        // (regression-safe: static detune). Quadratic mapping: knob^2 sets the
-        // hard ceiling for the detune random walk around the DETUNE knob value
-        // (0..+/-10 cents at full). The detune never strays further from the
-        // DETUNE knob value than AMT allows. The low end of the knob gives a
-        // fine "almost off" control.
-        {0, 1023, 0, 0,   k_unit_param_type_none, 0, 0, 0, {"RATE AMT"}},
-
-        // Random-walk restlessness (RATE SPD): 0..100%, default 50%.
-        // Controls the spring relaxation time: high SPD = fast jitter,
-        // low SPD = slow drift.
-        {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"RATE SPD"}},
-
-        // Sub-octave sine level (SUB): 0..100%, default 50%.
-        // A sine oscillator at half the base frequency (one octave below the
-        // saws) is mixed in parallel with the saturator (it bypasses the
-        // soft-clip so it stays clean and adds "body" to the low end).
-        // 0% = off, 100% = max sub level.
-        {0, 1023, 0, 511, k_unit_param_type_percent, 0, 0, 0, {"SUB"}},
-
-        // Pre-drive wavefolder depth (FOLD): 0..100%, default 0% (off).
-        // Scales the saw mix by (1 + FOLD) and reflects into [-1, 1]
-        // before the tanh saturator, adding even harmonics and a
-        // "metallic" edge. 0% = raw saws, 100% = full fold.
-        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"FOLD"}},
-
-        // Asymmetric saturator (ASYM): -100%..+100%, default 0% (symmetric).
-        // Scales the saturator input differently for positive vs negative
-        // half-cycles, generating even harmonics ("warm", "brassy" tone).
-        // +100% = positive half driven harder, -100% = negative half harder.
-        {0, 1023, 511, 511, k_unit_param_type_percent, 0, 0, 0, {"ASYM"}},
-
-        // Oscillator A wavetable (WAVE A): 0..100% position across the six
-        // Korg banks A-F (91 tables), A = airy/sine-like .. F = dense/saw-like.
-        // 0% = first table of bank A. The morph position also shifts slightly
-        // upward with pitch (see update_waves in osc.h) so the tone stays
-        // consistent across the keyboard.
-        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"WAVE A"}},
-
-        // Oscillator B wavetable (WAVE B): same range as WAVE A, independently
-        // controllable. Detuned against WAVE A by the DETUNE knob (knob A).
-        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"WAVE B"}},
-
-        // Second sub level (SUB2): 0..100%, default 0% (off).
-        // A clean sine two octaves below the saws (f/4), run through a very
-        // soft saturator (adds "body"), then a 200 Hz one-pole LPF (tames the
-        // saturator's harmonics so it stays in the low end) and a pitch gate
-        // (fully silent when f/4 < 30 Hz, i.e. base note below ~C3, to avoid
-        // infrasonic content). Unlike SUB (f/2) it has no fixed detune: it is
-        // a stable low-end anchor. 0% = off, 100% = max sub-2 level.
-        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"SUB2"}},
-
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}}},
+        // B knob (VALUE): value of the currently selected parameter, 0..1023.
+        // Each selected parameter maps 0..1023 onto its own range (see
+        // apply_edit_param in osc.h). The raw value is cached per-parameter
+        // so re-selecting a parameter restores its last value. Displayed as
+        // a formatted string via unit_get_param_str_value (k_unit_param_type_strings).
+        //
+        // Selectable parameters (A knob index -> name -> default raw value):
+        //   0: RATE AMT  - random-walk depth (quadratic, 0..100%), default 0 (off)
+        //   1: RATE SPD  - random-walk speed (0..100%), default 511 (50%)
+        //   2: SUB       - sub-octave (f/2) sine level (0..100%), default 511 (50%)
+        //   3: FOLD      - pre-drive wavefolder depth (0..100%), default 0 (off)
+        //   4: ASYM      - asymmetric saturator (-100%..+100%), default 511 (0%)
+        //   5: WAVE A    - osc A wavetable (0..90 across banks A-F), default 0
+        //   6: WAVE B    - osc B wavetable (0..90 across banks A-F), default 0
+        //   7: SUB2      - second sub (f/4) saturated level (0..100%), default 0 (off)
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"VALUE"}},
+    },
 };
