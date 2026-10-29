@@ -80,12 +80,19 @@
       // 7 SUB2. Percentages for all except WAVE A/B (wavetable index 0..90)
       // and ASYM (-100%..+100% with explicit sign).
       function formatParamValue(idx, raw) {
-        if (idx === 5 || idx === 6)
+        // idx order: 0=DETU, 1=RATE, 2=SPEE, 3=SUB, 4=SUB2, 5=SATU, 6=FOLD, 7=ASYM, 8=WAV1, 9=WAV2
+        if (idx === 8 || idx === 9)
           return String(Math.round((raw / 1023) * 90));
-        if (idx === 4) {
+        if (idx === 7) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
+        if (idx === 0) {
+          const cents = Math.round((raw - 511) / 511 * 50);
+          return (cents >= 0 ? "+" : "") + cents + " c";
+        }
+        if (idx === 5)
+          return String(Math.round((raw / 1023) * 300));
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -111,8 +118,9 @@
         // Parameter roles (see header.c):
         //   index 0 "PARAM"   - fixed knob A: no-op stub (render disabled)
         //   index 1 "VALUE"   - fixed knob B: no-op stub (render disabled)
-        //   index 2 "PARAM SEL" - optional: parameter selector dropdown (0..7)
+        //   index 2 "PARAM SEL" - optional: parameter selector dropdown (0..9)
         //   index 3 "PARAM VAL" - optional: value of the selected parameter
+        //   index 4 "SATU"    - direct: saturator drive (0..1023)
         // The fixed PARAM / VALUE knobs are no-op stubs on hardware (type_none),
         // so the simulator renders them as disabled sliders for layout parity.
         if (index === 0 || index === 1) {
@@ -198,6 +206,23 @@
             } else {
               value_string.textContent = Module.getParameterValueString(index, input.value);
             }
+          };
+        } else if (index === 4) {
+          // SATU (direct, index 4): plain range slider editing the saturator drive.
+          let input = document.createElement("input");
+          input.type = "range";
+          input.min = param.min;
+          input.max = param.max;
+          input.step = 1;
+          input.value = param.init;
+          input.id = controlId;
+          input.style.width = "200px";
+          input.style.marginRight = "10px";
+          container.appendChild(input);
+          value_string.textContent = Module.getParameterValueString(index, input.value);
+          input.oninput = () => {
+            audio_parameter.value = input.value;
+            value_string.textContent = Module.getParameterValueString(index, input.value);
           };
         }
 

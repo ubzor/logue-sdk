@@ -77,38 +77,40 @@ public:
   {
     PARAM_STUB = 0U, // knob A: no-op stub (header slot 0, type_none)
     VALUE_STUB,      // knob B (default mode): no-op stub (header slot 1, type_none)
-    PARAM_SEL,       // optional (header slot 2): parameter selector 0..7, shows name
+    PARAM_SEL,       // optional (header slot 2): parameter selector 0..9, shows name
     PARAM_VAL,       // optional (header slot 3): raw value 0..1023 of PARAM_SEL, shows value
+    DETUNE,          // detune of osc B (−50..+50 cents, default 0 = in tune)
     RATE_AMT,        // random-walk depth (0..100%, default 0% = off)
     RATE_SPD,        // random-walk speed (0..100%, default 50%)
     SUB,             // sub-octave sine level (0..100%, default 50%)
+    SUB2,            // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
+    SATU,            // saturator drive (0..3.0, default 2.0 = moderate)
     FOLD,            // pre-drive wavefolder depth (0..100%, default 0% = off)
     ASYM,            // asymmetric saturator (−100%..+100%, default 0% = symmetric)
-    WAVE_A,          // oscillator A wavetable (0..90 across banks A-F)
-    WAVE_B,          // oscillator B wavetable (0..90 across banks A-F)
-    SUB2,            // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
+    WAV1,            // oscillator A wavetable (0..90 across banks A-F)
+    WAV2,            // oscillator B wavetable (0..90 across banks A-F)
     NUM_PARAMS
   };
 
   // ---- Parameter selector / value multiplexer ----
   // The two fixed knobs A (PARAM_STUB) and B (VALUE_STUB) are no-op stubs:
   // all real control happens through the two optional (edit-menu) parameters
-  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3). PARAM_SEL picks one of the 8
-  // DSP parameters (RATE_AMT..SUB2), PARAM_VAL edits its raw 10-bit value.
-  // The 8 raw 10-bit values (0..1023) are cached in edit_value_ so that
-  // re-selecting a previously used parameter restores its value instead of
-  // resetting it to the default.
-  static constexpr uint8_t kEditParamCount = 8; // RATE_AMT..SUB2
+  // PARAM_SEL (slot 2) and PARAM_VAL (slot 3), plus the direct SATU parameter
+  // (slot 4). PARAM_SEL picks one of the 10 DSP parameters (DETUNE..WAV2),
+  // PARAM_VAL edits its raw 10-bit value. The 10 raw 10-bit values (0..1023)
+  // are cached in edit_value_ so that re-selecting a previously used
+  // parameter restores its value instead of resetting it to the default.
+  static constexpr uint8_t kEditParamCount = 10; // DETUNE..WAV2
   static constexpr uint8_t kEditParamFirst = RATE_AMT; // first edit-param index
 
-  // Raw 10-bit values (0..1023) of the 8 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 10 editable parameters, cached so the
   // selector can recall them. Defaults match the header's "init" values:
-  // RATE AMT 0, RATE SPD 511, SUB 511, FOLD 0, ASYM 511, WAVE A 0, WAVE B 0,
-  // SUB2 0.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 0, 511, 0, 0, 0};
+  // DETUNE 511, RATE 0, SPEE 511, SUB 511, SUB2 0, SATU 682, FOLD 0, ASYM 511,
+  // WAV1 0, WAV2 0.
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 0, 682, 0, 511, 0, 0};
 
-  // Currently selected parameter (0..7), i.e. edit_value_[select_] is what
-  // PARAM_VAL edits. 0 = RATE AMT (default, matches header "init" of PARAM_SEL).
+  // Currently selected parameter (0..9), i.e. edit_value_[select_] is what
+  // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
   uint8_t select_ = 0;
 
   // Public accessors for the web simulator (wasm.cc) to read the selector
@@ -128,7 +130,7 @@ public:
   static constexpr float kRwMaxCents = 10.f;
 
   // Total wavetable count across all six Korg banks (A-F), in order of
-  // increasing harmonic density. The WAVE_A / WAVE_B knobs select an index
+  // increasing harmonic density. The WAV1 / WAV2 knobs select an index
   // in [0, kWavesTotal) which resolve_wave() maps onto the bank arrays.
   static constexpr uint32_t kWavesA = k_waves_a_cnt;
   static constexpr uint32_t kWavesB = kWavesA + k_waves_b_cnt;
@@ -241,14 +243,20 @@ public:
     Params() { reset(); }
   };
 
-  // Map a raw 10-bit value (0..1023) for one of the 8 editable parameters
-  // (RATE_AMT..SUB2) onto the DSP state. This is the single source of truth
+  // Map a raw 10-bit value (0..1023) for one of the 10 editable parameters
+  // (DETUNE..WAV2) onto the DSP state. This is the single source of truth
   // for the parameter scaling: it is used both by the edit-menu path
-  // (setParameter(RATE_AMT..SUB2)) and by the A/B knob path (VALUE).
+  // (setParameter(DETUNE..WAV2)) and by the PARAM_VAL path.
   void apply_edit_param(uint8_t idx, int32_t value)
   {
     switch (idx)
     {
+    case DETUNE:
+      // 0..1023 -> -50..+50 cents (50% = 511 = 0 cents)
+      params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * 50.f;
+      update_w0_b();
+      break;
+
     case RATE_AMT:
       {
         const float x = param_10bit_to_f32(value);
@@ -269,6 +277,15 @@ public:
       params_.sub_level = param_10bit_to_f32(value);
       break;
 
+    case SUB2:
+      params_.sub2_level = param_10bit_to_f32(value);
+      break;
+
+    case SATU:
+      // 0..1023 -> 0..3.0 drive level
+      params_.drive = param_10bit_to_f32(value) * 3.f;
+      break;
+
     case FOLD:
       params_.fold_depth = param_10bit_to_f32(value);
       break;
@@ -277,18 +294,14 @@ public:
       params_.asym = param_10bit_to_f32(value) * 2.f - 1.f;
       break;
 
-    case WAVE_A:
+    case WAV1:
       params_.wave_a = param_10bit_to_f32(value) * (kWavesTotal - 1);
       update_waves();
       break;
 
-    case WAVE_B:
+    case WAV2:
       params_.wave_b = param_10bit_to_f32(value) * (kWavesTotal - 1);
       update_waves();
-      break;
-
-    case SUB2:
-      params_.sub2_level = param_10bit_to_f32(value);
       break;
 
     default:
@@ -307,11 +320,12 @@ public:
       break;
 
     case PARAM_SEL:
-      // Optional parameter: parameter selector. 0..7 -> RATE AMT, RATE SPD,
-      // SUB, FOLD, ASYM, WAVE A, WAVE B, SUB2. On selection change, re-apply
-      // the cached raw value of the newly selected parameter so the DSP
-      // immediately reflects it (PARAM_VAL then edits that value).
-      select_ = (uint8_t)(value & 7);
+      // Optional parameter: parameter selector. 0..9 -> DETUNE, RATE_AMT,
+      // RATE_SPD, SUB, SUB2, SATU, FOLD, ASYM, WAV1, WAV2. On selection
+      // change, re-apply the cached raw value of the newly selected
+      // parameter so the DSP immediately reflects it (PARAM_VAL then edits
+      // that value).
+      select_ = (uint8_t)(value & 9);
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
       break;
 
@@ -321,6 +335,21 @@ public:
       // restores it) and apply to DSP.
       edit_value_[select_] = value;
       apply_edit_param(kEditParamFirst + select_, value);
+      break;
+
+    case DETUNE:
+    case RATE_AMT:
+    case RATE_SPD:
+    case SUB:
+    case SUB2:
+    case SATU:
+    case FOLD:
+    case ASYM:
+    case WAV1:
+    case WAV2:
+      // Direct edit-menu parameters. Write into the cache and apply to DSP.
+      edit_value_[index - kEditParamFirst] = value;
+      apply_edit_param(index, value);
       break;
 
     default:
@@ -338,11 +367,29 @@ public:
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final
   {
     static const char *const names[kEditParamCount] = {
-        "RATE AMT", "RATE SPD", "SUB", "FOLD",
-        "ASYM", "WAVE A", "WAVE B", "SUB2"};
+        "DETU", "RATE", "SPEE", "SUB", "SUB2",
+        "SATU", "FOLD", "ASYM", "WAV1", "WAV2"};
     if (id == PARAM_SEL)
     {
       return (value >= 0 && value < (int)kEditParamCount) ? names[value] : "";
+    }
+    if (id == SATU)
+    {
+      // Direct SATU parameter (slot 4): format the value directly.
+      static char buf[8];
+      int v = (int)(param_10bit_to_f32(value) * 300.f);
+      int n = 0;
+      char d[4];
+      int nd = 0;
+      do
+      {
+        d[nd++] = (char)('0' + v % 10);
+        v /= 10;
+      } while (v > 0);
+      for (int i = nd - 1; i >= 0; --i)
+        buf[n++] = d[i];
+      buf[n] = '\0';
+      return buf;
     }
     if (id != PARAM_VAL)
       return "";
@@ -353,14 +400,18 @@ public:
     const int32_t k = kEditParamFirst + idx;
     static char buf[8];
     int v;
-    if (k == WAVE_A || k == WAVE_B)
+    if (k == WAV1 || k == WAV2)
       v = (int)(param_10bit_to_f32(raw) * (kWavesTotal - 1));
     else if (k == ASYM)
       v = (int)((raw * 200) / 1023) - 100;
+    else if (k == DETUNE)
+      v = (int)((raw - 511) / 511 * 50); // -50..+50 cents
+    else if (k == SATU)
+      v = (int)(param_10bit_to_f32(raw) * 300.f); // 0..300
     else
       v = (int)((raw * 100) / 1023);
 
-    const bool percent = (k != WAVE_A && k != WAVE_B);
+    const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE);
     int n = 0;
     if (v < 0)
       buf[n++] = '-';
@@ -378,6 +429,11 @@ public:
       buf[n++] = d[i];
     if (percent)
       buf[n++] = '%';
+    else if (k == DETUNE)
+    {
+      buf[n++] = ' ';
+      buf[n++] = 'c';
+    }
     buf[n] = '\0';
     return buf;
   }
@@ -394,7 +450,7 @@ public:
     sub2_gate_ = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
-    // Parameter selector: start with RATE AMT (select_ = 0) selected.
+    // Parameter selector: start with DETUNE (select_ = 0) selected.
     // Re-apply the cached default values so the DSP and the PARAM SEL /
     // PARAM VAL display agree on startup (the header's "init" value of
     // PARAM_VAL already matches edit_value_[0], but this keeps the two in
@@ -562,7 +618,7 @@ public:
 
     // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
     // offset is added per-sample below. wave_shift_ is recomputed on
-    // setParameter(WAVE_A/B) / setPitch(); wave_a / wave_b are the knobs.
+    // setParameter(WAV1/WAV2) / setPitch(); wave_a / wave_b are the knobs.
     const float wave_base_a = p.wave_a + wave_shift_;
     const float wave_base_b = p.wave_b + wave_shift_;
     if (rw_active)
@@ -983,7 +1039,7 @@ private:
   // toward the denser F bank so the perceived tone stays consistent across the
   // keyboard, mirroring how the SDK's band-limited waves roll off their high
   // harmonics. kWaveMorphShift is the max shift (in tables) at the top of the
-  // range. Recomputed on setParameter(WAVE_A/B) and setPitch() (K-rate) and
+  // range. Recomputed on setParameter(WAV1/WAV2) and setPitch() (K-rate) and
   // cached so the audio path only adds the LFO offset (see process()).
   static constexpr float kWaveMorphShift = 10.f; // ~1/9 of the bank range
   float wave_shift_ = 0.f;
