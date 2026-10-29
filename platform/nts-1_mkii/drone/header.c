@@ -50,7 +50,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x00000002U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 9,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 10,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -108,12 +108,14 @@ const __unit_header unit_header_t unit_header = {
         // controllable. Detuned against WAVE A by the DETUNE knob (knob A).
         {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"WAVE B"}},
 
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+        // Second sub level (SUB2): 0..100%, default 0% (off).
+        // A clean sine two octaves below the saws (f/4), run through a very
+        // soft saturator (adds "body"), then a 200 Hz one-pole LPF (tames the
+        // saturator's harmonics so it stays in the low end) and a pitch gate
+        // (fully silent when f/4 < 30 Hz, i.e. base note below ~C3, to avoid
+        // infrasonic content). Unlike SUB (f/2) it has no fixed detune: it is
+        // a stable low-end anchor. 0% = off, 100% = max sub-2 level.
+        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"SUB2"}},
+
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}}},
 };

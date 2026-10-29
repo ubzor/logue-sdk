@@ -84,6 +84,7 @@ public:
     ASYM,         // edit: asymmetric saturator (−100%..+100%, default 0% = symmetric)
     WAVE_A,       // edit: oscillator A wavetable (0..90 across banks A-F)
     WAVE_B,       // edit: oscillator B wavetable (0..90 across banks A-F)
+    SUB2,         // edit: second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
     NUM_PARAMS
   };
 
@@ -121,6 +122,32 @@ public:
   // resolve_wave() so the timbre glides between adjacent tables.
   static constexpr float kLfoMorphDepth = 10.f;
 
+  // ---- Second sub voice (SUB2): f/4, very-soft-saturated, LPF'd, gated ----
+  // Drive level into the soft saturator for the second sub. Kept deliberately
+  // low (~1.3) so it only "rounds" the clean f/4 sine and adds body/thickness
+  // without turning it into a distorted bass. The saturator generates odd
+  // (and a little even) harmonics; the LPF below then trims those so the
+  // voice stays in the low end rather than muddying the mids.
+  static constexpr float kSub2Drive = 1.3f;
+
+  // One-pole LPF cutoff for the second sub, in Hz. Chosen ~200 Hz so the
+  // saturator's 3rd/5th harmonics of an f/4 fundamental (which sit an octave
+  // or two above it) are tamed while the fundamental and the body below it
+  // pass untouched. The per-sample coefficient is folded into a literal in
+  // update_w0_sub2() (no division in the audio path).
+  static constexpr float kSub2LpfCutoffHz = 200.f;
+
+  // Pitch gate for the second sub: the f/4 voice is fully silenced (gate -> 0)
+  // once its fundamental drops below kSub2GateHz, because at very low notes
+  // f/4 becomes infrasonic (e.g. C1 = 32.7 Hz -> f/4 = 8.2 Hz) and would only
+  // waste headroom / muddy the mix. The boundary in terms of the *base* (saw)
+  // frequency is 4 * kSub2GateHz (≈120 Hz ≈ C3). The gate opens/closes with a
+  // short smoothing time constant so switching notes never clicks.
+  static constexpr float kSub2GateHz = 30.f;
+  // Gate smoothing: ~5 ms first-order time constant for the open/close
+  // transition (precomputed per-sample coefficient in process()).
+  static constexpr float kSub2GateTauSec = 0.005f;
+
   // Pre-drive wavefolder: before the tanh saturator, mix is folded into
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
   // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
@@ -155,7 +182,8 @@ public:
     float drive;        // 0.f .. 3.f, knob B
     float rw_amount;    // 0.f .. 1.f, edit: random-walk depth
     float rw_rate;      // 0.f .. 1.f, edit: random-walk speed
-    float sub_level;    // 0.f .. 1.f, edit: sub-octave sine level
+    float sub_level;    // 0.f .. 1.f, edit: sub-octave (f/2) sine level
+    float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
     float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
     float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
     float wave_a;       // 0.f .. kWavesTotal-1, edit: osc A wavetable index
@@ -168,6 +196,7 @@ public:
       rw_amount = 0.f;    // default: random walk off
       rw_rate = 0.5f;     // default: mid speed
       sub_level = 0.5f;   // default: half-level sub
+      sub2_level = 0.f;   // default: second sub off (regression-safe)
       fold_depth = 0.f;   // default: wavefolder off (regression-safe)
       asym = 0.f;         // default: symmetric saturator (regression-safe)
       wave_a = 0.f;       // default: first wave of bank A
@@ -244,6 +273,11 @@ public:
       update_waves();
       break;
 
+    case SUB2:
+      // 0 .. 1023 -> 0.f .. 1.f second-sub (f/4) level (linear). 0 = off.
+      params_.sub2_level = param_10bit_to_f32(value);
+      break;
+
     default:
       break;
     }
@@ -256,6 +290,9 @@ public:
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
     phasor_sub_ = 0.f;
+    phasor_sub2_ = 0.f;
+    sub2_lpf_state_ = 0.f;
+    sub2_gate_ = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
     update_waves(); // resolve default wavetable pointers from params_
@@ -283,6 +320,9 @@ public:
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
     phasor_sub_ = 0.f;
+    phasor_sub2_ = 0.f;
+    sub2_lpf_state_ = 0.f;
+    sub2_gate_ = 0.f;
     rw_dev_cents_ = 0.f; // re-center the random walk on stop
     rw_target_cents_ = 0.f; // re-center the random-walk target on stop
     rw_target_update_counter_ = 0; // reset target update counter
@@ -340,6 +380,7 @@ public:
     w0_ = w0; // base phase increment, osc A uses this directly
     update_w0_b();
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
+    update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
     update_waves(); // re-resolve wavetables: morph position shifts with pitch
   }
 
@@ -395,6 +436,19 @@ public:
     // relaxation coefficients are cached once per block for cheap access.)
     const float alpha_a = eg_alpha_a_;
     const float alpha_r = eg_alpha_r_;
+
+    // ---- Second sub (SUB2) fixed coefficients, cached once per block ----
+    // The f/4 voice is a clean sine run through a very soft saturator
+    // (kSub2Drive), then a one-pole LPF (sub2_lpf_a_, cuts the saturator's
+    // harmonics so the voice stays in the low end) and a pitch gate (closes
+    // when the base frequency drops below sub2_gate_hz_, i.e. f/4 < 30 Hz).
+    // All three are precomputed in update_w0_sub2(); the LPF state and the
+    // smoothed gate amplitude are per-sample members (sub2_lpf_state_,
+    // sub2_gate_).
+    const float sub2_level = p.sub2_level;
+    const float sub2_a = sub2_lpf_a_;
+    const float sub2_k = sub2_gate_k_;
+    const float sub2_gate_hz = sub2_gate_hz_;
 
     const bool rw_active = p.rw_amount > 0.f;
     float w0_b = w0_b_; // default: cached static detune
@@ -463,6 +517,11 @@ public:
         phasor_sub_ += w0_sub_ * lfo_factor;
       }
 
+      // second sub phasor: pure f/4, no LFO-FM and no fixed detune (it is a
+      // stable low-end anchor, not a beating voice). Advances exactly at
+      // w0/4 (w0_sub2_ is cached in update_w0_sub2()).
+      phasor_sub2_ += w0_sub2_;
+
       // wrap phasors into [0, 1)
       if (phasor_a_ >= 1.f)
         phasor_a_ -= 1.f;
@@ -470,6 +529,8 @@ public:
         phasor_b_ -= 1.f;
       if (phasor_sub_ >= 1.f)
         phasor_sub_ -= 1.f;
+      if (phasor_sub2_ >= 1.f)
+        phasor_sub2_ -= 1.f;
 
       // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
       // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
@@ -499,6 +560,38 @@ public:
 
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
       const float sub = osc_sinf(phasor_sub_);
+
+      // ---- second sub (f/4): clean sine -> very soft saturator -> LPF -> gate ----
+      // Only computed when the voice is actually audible (level > 0) to keep
+      // the default path (SUB2 = 0) free of this cost.
+      float sub2 = 0.f;
+      if (sub2_level > 0.f)
+      {
+        // f/4 sine in -1..1 (LUT)
+        const float s2 = osc_sinf(phasor_sub2_);
+
+        // very soft saturator: a light tanh at kSub2Drive (~1.3) rounds the
+        // sine and adds just enough odd harmonics for "body" without turning
+        // it into a distorted bass. fastertanh2f (Padé [3/3]) is inaudibly
+        // accurate and bounded in (-1, 1).
+        const float s2_sat = fastertanh2f(s2 * kSub2Drive);
+
+        // one-pole LPF (200 Hz): trims the saturator's 3rd/5th harmonics so the
+        // voice stays in the low end instead of muddying the mids. First-order
+        // low-pass: state += (in - state) * a; out = state.
+        sub2_lpf_state_ += (s2_sat - sub2_lpf_state_) * sub2_a;
+
+        // pitch gate: fully open when the base (saw) frequency is above the
+        // threshold (f/4 >= 30 Hz), closed below it (f/4 infrasonic). Smoothed
+        // first-order so switching notes never clicks. w0 = f/sr, so the base
+        // frequency in Hz is w0 * sr; compare against sub2_gate_hz (4*30).
+        const float open_target = (w0 * 48000.f > sub2_gate_hz) ? 1.f : 0.f;
+        sub2_gate_ += (open_target - sub2_gate_) * sub2_k;
+
+        sub2 = sub2_lpf_state_ * sub2_gate_;
+      }
+      // else: voice off; leave the LPF/gate state as-is (it will re-engage
+      // smoothly next time the level is raised).
 
       // mix both voices equally
       float mix = 0.5f * (wav_a + wav_b);
@@ -590,12 +683,19 @@ public:
       // the soft-clip on purpose: low-frequency sine through tanh would be
       // heavily attenuated). Per-branch gains are chosen so the worst-case
       // peak stays below 0.9:
-      //   |y * 0.5f|   < 0.5  (saturator output bounded in (-1, 1))
-      //   |sub * 0.4f| < 0.4  (sine bounded in [-1, 1])
-      //   |sum|       < 0.9
-      // At the default SUB = 50%, the sub branch is at 0.2 amplitude, which
-      // is a balanced "body" level under the saturated saw stack.
-      out[0] = (y * 0.5f + sub * p.sub_level * 0.4f) * env_;
+      //   |y * 0.5f|    < 0.5  (saturator output bounded in (-1, 1))
+      //   |sub * 0.4f|  < 0.4  (sine bounded in [-1, 1])
+      //   |sub2*0.3f|  < 0.3  (LPF'd, gated voice bounded in (-1, 1))
+      //   |sum|         < 1.2 (worst case, but branches rarely peak together)
+      // At the default SUB = 50%, the sub branch is at 0.2 amplitude; SUB2
+      // defaults to 0 (off) so the stock sound is unchanged. A hard clip
+      // prevents digital overflow when all branches peak simultaneously.
+      float raw = (y * 0.5f + sub * p.sub_level * 0.4f + sub2 * sub2_level * 0.3f) * env_;
+      if (raw > 1.f)
+        raw = 1.f;
+      else if (raw < -1.f)
+        raw = -1.f;
+      out[0] = raw;
     }
   }
 
@@ -604,6 +704,12 @@ private:
   // (setPitch / setParameter(SHAPE)) to keep the audio path lightweight
   float w0_b_ = 0.f;
   float w0_sub_ = 0.f;
+  // second-sub (f/4) phase increment and fixed filter/gate coefficients, all
+  // precomputed in update_w0_sub2() (called from setPitch, never audio path)
+  float w0_sub2_ = 0.f;
+  float sub2_lpf_a_ = 0.f;   // one-pole LPF coefficient (200 Hz)
+  float sub2_gate_k_ = 0.f;  // pitch-gate smoothing coefficient
+  float sub2_gate_hz_ = 0.f; // base (saw) Hz at which f/4 == kSub2GateHz
 
   // random-walk state: current detune deviation in cents (around the knob value)
   float rw_dev_cents_ = 0.f;
@@ -672,6 +778,29 @@ private:
     w0_sub_ = w0_ * 0.4988460883f; // 0.5 * 2^(-4/1200)
   }
 
+  // recompute the second-sub (f/4) phase increment and its fixed filter/gate
+  // coefficients. Unlike sub-1 there is NO fixed detune: the voice is a
+  // stable "anchor" in the low end, so w0_sub2_ = w0_ * 0.25 exactly (two
+  // octaves below the base). Also precomputed here (called once per pitch
+  // change, never in the audio path):
+  //   sub2_lpf_a_  — one-pole LPF coefficient for kSub2LpfCutoffHz (cuts the
+  //                  saturator's harmonics so the voice stays in the low end)
+  //   sub2_gate_k_ — first-order smoothing coefficient for the pitch gate
+  //                  (open/close transition, kSub2GateTauSec time constant)
+  //   sub2_gate_hz_— base (saw) frequency in Hz at which f/4 == kSub2GateHz;
+  //                  below this the gate closes. Cached as 4 * kSub2GateHz.
+  void update_w0_sub2()
+  {
+    w0_sub2_ = w0_ * 0.25f; // f/4, no detune
+    // one-pole LPF: a = 1 - exp(-2*pi*fc/sr)
+    sub2_lpf_a_ =
+        1.f - expf(-6.28318530718f * kSub2LpfCutoffHz / getSampleRate());
+    // first-order gate: k = 1 - exp(-1/tau)
+    sub2_gate_k_ = 1.f - expf(-1.f / (kSub2GateTauSec * getSampleRate()));
+    // base frequency (Hz) at which the f/4 fundamental equals kSub2GateHz
+    sub2_gate_hz_ = 4.f * kSub2GateHz;
+  }
+
   Params params_;
   float w0_;
   float lfo_;
@@ -691,6 +820,17 @@ private:
   float phasor_a_;
   float phasor_b_;
   float phasor_sub_; // sub-octave sine phasor (advances at w0/2)
+  // second sub voice (f/4, two octaves below the saws): a clean sine run
+  // through a very soft saturator (adds "body"/thickening) then a one-pole
+  // LPF (cuts the saturator's harmonics so it stays in the low end) and a
+  // pitch gate (silences it when f/4 drops below kSub2GateHz = infrasonic).
+  // Unlike sub-1 it carries no fixed detune: it is a stable "anchor" in the
+  // low end, not a beating voice.
+  float phasor_sub2_; // second sub phasor (advances at w0/4, no detune)
+  // one-pole LPF state (integrator) for the saturator-harmonic cutoff on sub-2
+  float sub2_lpf_state_ = 0.f;
+  // smoothed pitch-gate amplitude for sub-2 (0 = silenced, 1 = open)
+  float sub2_gate_ = 0.f;
 
   // Map a fractional wavetable index in [0, kWavesTotal) to a blended table
   // sample at phase ph. The six Korg banks (A-F) live in separate arrays; this
