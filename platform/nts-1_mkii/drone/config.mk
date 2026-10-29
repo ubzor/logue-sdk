@@ -38,7 +38,13 @@ LDFLAGS_EXTRA := \
 # C++ sources (compiled with em++, C++17 - required by the wasm audio
 # worklet engine and libembind in this emscripten version)
 #
-WASMSRC_C := $(PROJECT_ROOT)/header.c
+# The web simulator has no NTS-1 runtime, so any LUT the runtime would
+# normally provide (wt_sine_lut_f for osc_sinf, used by the sub-octave
+# sine) must be linked in from the websim stub. Only the sine table is
+# needed; the other wavetable_lut.c symbols (saw/sqr/par) are dropped
+# by --gc-sections since osc.h uses raw phasors for the saws.
+WASMSRC_C := $(PROJECT_ROOT)/header.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/wavetable_lut.c
 WASMSRC_CXX := $(PROJECT_ROOT)/wasm.cc
 
 ##############################################################################

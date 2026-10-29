@@ -7,7 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIM_DIR="$SCRIPT_DIR/sim"
 
 # Build the WASM simulator if it's missing or stale
-if [ ! -f "$SIM_DIR/drone.html" ] || [ "$SCRIPT_DIR/wasm.cc" -nt "$SIM_DIR/drone.html" ] || [ "$SCRIPT_DIR/osc.h" -nt "$SIM_DIR/drone.html" ]; then
+# Stale if any source is newer than drone.html, or if the generated assets
+# are incomplete (html exists but wasm/js are missing -> interrupted build).
+if [ ! -f "$SIM_DIR/drone.html" ] || [ ! -f "$SIM_DIR/drone.wasm" ] || [ ! -f "$SIM_DIR/drone.js" ] || \
+   [ "$SCRIPT_DIR/wasm.cc" -nt "$SIM_DIR/drone.html" ] || \
+   [ "$SCRIPT_DIR/header.c" -nt "$SIM_DIR/drone.html" ] || \
+   [ "$SCRIPT_DIR/osc.h" -nt "$SIM_DIR/drone.html" ] || \
+   [ "$SCRIPT_DIR/Makefile" -nt "$SIM_DIR/drone.html" ] || \
+   [ "$SCRIPT_DIR/config.mk" -nt "$SIM_DIR/drone.html" ]; then
     echo "============================================"
     echo "Building WASM simulator..."
     echo "============================================"

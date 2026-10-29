@@ -50,8 +50,6 @@
     // Expose function globally so EM_ASM can call it
     window.setupWebAudioAndUI = function (context, wasmProcessor) {
 
-      const AHREnvelopeTime = 0.1;
-
       function approximatelyEqual(a, b, epsilon = 1e-4) {
         return Math.abs(a - b) < epsilon;
       }
@@ -95,7 +93,7 @@
 
       // audio graph
       // let oscillator = new OscillatorNode(context, { frequency: 440.0 });
-      let envelope = new GainNode(context, { gain: 0.0 });
+      let envelope = new GainNode(context, { gain: 1.0 }); // unity gain: the A-S-R envelope lives in the DSP (processor.noteOn), not here
       let volume = new GainNode(context, { gain: 0.1 })
       let analyser = new AnalyserNode(context, { fftSize: 4096 });
       let data = new Float32Array(analyser.frequencyBinCount);
@@ -180,12 +178,9 @@
         latchEnabled = !latchEnabled;
         this.innerText = `Latch ${latchEnabled ? "On" : "Off"}`;
 
-        if (!latchEnabled) {
-          if (window.frequencyStack.length === 0) {
-            envelope.gain.cancelAndHoldAtTime(context.currentTime);
-            envelope.gain.linearRampToValueAtTime(0.0, context.currentTime + AHREnvelopeTime);
-          }
-        }
+        // Note: when the DSP key-triggered A-S-R envelope is implemented in
+        // the processor, the latch-off silence below is handled by the
+        // processor's allNoteOff (immediate env = 0), no host-side ramp needed.
       };
 
       keyboard.keyDown = function (note, frequency) {
@@ -196,8 +191,9 @@
         osc_frequency = frequency;
         Module.setOscPitch(osc_frequency);
         Module.noteOn(note, 100); // TODO: add a slider for velocity
-        envelope.gain.cancelAndHoldAtTime(context.currentTime);
-        envelope.gain.linearRampToValueAtTime(1.0, context.currentTime + AHREnvelopeTime);
+        // The key-triggered A-S-R envelope (2 s exp attack / 2 s sustain /
+        // 2 s exp release) lives in the processor — noteOn above is the
+        // only host-side action needed.
       };
 
       keyboard.keyUp = function (note, frequency) {
@@ -217,12 +213,8 @@
           osc_frequency = window.frequencyStack[window.frequencyStack.length - 1];
           Module.setOscPitch(osc_frequency);
         }
-        else {
-          if (!latchEnabled) {
-            envelope.gain.cancelAndHoldAtTime(context.currentTime);
-            envelope.gain.linearRampToValueAtTime(0.0, context.currentTime + AHREnvelopeTime);
-          }
-        }
+        // Note: no host-side mute on key-up — the processor's A-S-R envelope
+        // ignores noteOff and runs its full 2 s + 2 s + 2 s cycle on its own.
 
         Module.noteOff(note);
       };

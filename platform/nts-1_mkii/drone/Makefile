@@ -204,11 +204,11 @@ $(ASMXOBJS) : $(OBJDIR)/%.o : %.S Makefile
 	@echo Assembling $(<F)
 	@$(CC) -c $(ASXFLAGS) -I. $(INCDIR) $< -o $@
 
-$(COBJS) : $(OBJDIR)/%.o : %.c Makefile
+$(COBJS) : $(OBJDIR)/%.o : %.c Makefile config.mk
 	@echo Compiling $(<F)
 	@$(CC) -c $(CFLAGS) -I. $(INCDIR) $< -o $@
 
-$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile
+$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk
 	@echo Compiling $(<F)
 	@$(CXXC) -c $(CXXFLAGS) -I. $(INCDIR) $< -o $@
 
@@ -287,7 +287,7 @@ $(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
 	@$(EMCC_BIN_PATH)/emcc -c $(INCDIR) -O2 -g -fdebug-compilation-dir='..' $< -o $@
 
 # C++ sources are compiled with C++17 as required by the wasm audio worklet engine
-$(WASMOBJDIR)/%.o: %.cc | $(WASMOBJDIR)
+$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h | $(WASMOBJDIR)
 	@echo Compiling wasm C++ object $(<F)
 	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) -fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -O2 -g -fdebug-compilation-dir='..' $< -o $@
 

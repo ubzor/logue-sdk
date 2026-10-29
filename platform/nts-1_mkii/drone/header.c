@@ -50,7 +50,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x00000001U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 7,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -77,6 +77,25 @@ const __unit_header unit_header_t unit_header = {
         // Controls the spring relaxation time: high SPD = fast jitter,
         // low SPD = slow drift.
         {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"RATE SPD"}},
+
+        // Sub-octave sine level (SUB): 0..100%, default 50%.
+        // A sine oscillator at half the base frequency (one octave below the
+        // saws) is mixed in parallel with the saturator (it bypasses the
+        // soft-clip so it stays clean and adds "body" to the low end).
+        // 0% = off, 100% = max sub level.
+        {0, 1023, 0, 511, k_unit_param_type_percent, 0, 0, 0, {"SUB"}},
+
+        // Pre-drive wavefolder depth (FOLD): 0..100%, default 0% (off).
+        // Scales the saw mix by (1 + FOLD) and reflects into [-1, 1]
+        // before the tanh saturator, adding even harmonics and a
+        // "metallic" edge. 0% = raw saws, 100% = full fold.
+        {0, 1023, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"FOLD"}},
+
+        // Asymmetric saturator (ASYM): -100%..+100%, default 0% (symmetric).
+        // Scales the saturator input differently for positive vs negative
+        // half-cycles, generating even harmonics ("warm", "brassy" tone).
+        // +100% = positive half driven harder, -100% = negative half harder.
+        {0, 1023, 511, 511, k_unit_param_type_percent, 0, 0, 0, {"ASYM"}},
 
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
