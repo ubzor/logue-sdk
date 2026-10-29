@@ -227,7 +227,7 @@ public:
     void reset()
     {
       detune_cents = 0.f; // default: in tune
-      drive = 1.f;        // default: unity drive
+      drive = 2.f;        // default: moderate drive (50% of 0..3 range)
       rw_amount = 0.f;    // default: random walk off
       rw_rate = 0.5f;     // default: mid speed
       sub_level = 0.5f;   // default: half-level sub
