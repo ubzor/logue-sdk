@@ -29,7 +29,7 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..10. The display
+        // A knob (PARAM, slot 0): parameter selector, 0..12. The display
         // shows the name of the selected parameter via unit_get_param_str_value().
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
@@ -45,7 +45,9 @@ const __unit_header unit_header_t unit_header = {
         //   8: FOLD - pre-drive wavefolder depth (0..100%), default 0 (off)
         //   9: WAV1 - osc A wavetable (0..90 across banks A-F), default 0
         //   10: WAV2 - osc B wavetable (0..90 across banks A-F), default 0
-        {0, 10, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        //   11: CHRD - chord-voice level (0..100%), default 0 (off)
+        //   12: CINT - chord interval (0..1900 cents, continuous), default 0
+        {0, 12, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -64,8 +66,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..10. Identical to slot 0.
-        {0, 10, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..12. Identical to slot 0.
+        {0, 12, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

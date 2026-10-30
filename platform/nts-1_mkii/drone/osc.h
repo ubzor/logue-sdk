@@ -47,6 +47,7 @@
 #include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
 #include "osc_random_walk.h"  // RandomWalk: dual-channel detune wandering
 #include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
+#include "osc_chord.h"        // ChordVoice: third oscillator at selectable interval
 #include "osc_detune.h"       // Detune: cent-based pitch scaling (Taylor series)
 #ifdef EMSCRIPTEN
 #include "osc_lfo_sim.h"      // ShapeLfoSim: simulator-only shape-LFO synthesizer
@@ -64,11 +65,11 @@ public:
 
   // ---- Audio parameters ----------------------------------------------------
   // PARAM_SEL / PARAM_VAL are the user-facing header slots (header.c slots 0/1
-  // and 2/3). DETUNE..WAV2 are the 11 internal DSP parameters that the
+  // and 2/3). DETUNE..CHORD are the 12 internal DSP parameters that the
   // multiplexer edits.
   enum
   {
-    PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..10, shows name
+    PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..11, shows name
     PARAM_VAL,      // knob B (header slot 1): raw value 0..1023 of PARAM_SEL, shows value
     DETUNE,         // detune of osc B (−100..+100 cents, default 0 = in tune)
     DETUNE_A,       // detune of osc A (−100..+100 cents, default 0 = in tune)
@@ -81,17 +82,19 @@ public:
     FOLD,           // pre-drive wavefolder depth (0..100%, default 0% = off)
     WAV1,           // oscillator A wavetable (0..90 across banks A-F)
     WAV2,           // oscillator B wavetable (0..90 across banks A-F)
+    CHORD,          // third (chord) oscillator level (0..100%, default 0% = off)
+    CHRD_INT,       // chord interval (0..1900 cents, continuous)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..WAV2).
-  static constexpr uint8_t kEditParamCount = 11; // DETUNE..WAV2
-  // The first editable enum value. The UI (header.c PARAM slot, 0..10) expects
+  // Number of editable DSP parameters (DETUNE..CHRD_INT).
+  static constexpr uint8_t kEditParamCount = 13; // DETUNE..CHRD_INT
+  // The first editable enum value. The UI (header.c PARAM slot, 0..12) expects
   // this order: 0 DET1 (DETUNE), 1 DET2 (DETUNE_A), 2 RATE (RATE_AMT),
   // 3 SPEE (RATE_SPD), 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM, 8 FOLD, 9 WAV1,
-  // 10 WAV2. So kEditParamFirst + select_ (select_ 0..10) maps to
-  // DETUNE..WAV2 correctly.
+  // 10 WAV2, 11 CHRD (CHORD), 12 CINT (CHRD_INT). So kEditParamFirst +
+  // select_ (select_ 0..12) maps to DETUNE..CHRD_INT correctly.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -112,19 +115,19 @@ public:
   static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
 
   // ---- Parameter selector / value multiplexer (state) ----
-  // Knob A (PARAM_SEL, slot 0) picks one of the 11 DSP parameters
-  // (DETUNE..WAV2), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
-  // The 11 raw 10-bit values (0..1023) are cached in edit_value_ so that
+  // Knob A (PARAM_SEL, slot 0) picks one of the 12 DSP parameters
+  // (DETUNE..CHORD), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
+  // The 12 raw 10-bit values (0..1023) are cached in edit_value_ so that
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 11 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 13 editable parameters, cached so the
   // selector can recall them. Defaults match the header's "init" values:
   // DETUNE 511, DETUNE_A 511, RATE 0, SPEE 511, SUB1 511, SUB2 0, SATU 682,
-  // ASYM 511, FOLD 0, WAV1 0, WAV2 0.
-  int32_t edit_value_[kEditParamCount] = {511, 511, 0, 511, 511, 0, 682, 511, 0, 0, 0};
+  // ASYM 511, FOLD 0, WAV1 0, WAV2 0, CHORD 0, CINT 0 (0 cents, regression-safe).
+  int32_t edit_value_[kEditParamCount] = {511, 511, 0, 511, 511, 0, 682, 511, 0, 0, 0, 0, 0};
 
-  // Currently selected parameter (0..10), i.e. edit_value_[select_] is what
+  // Currently selected parameter (0..12), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
   uint8_t select_ = 0;
 
@@ -173,6 +176,18 @@ public:
   static constexpr float kMixSub  = 0.4f;
   static constexpr float kMixSub2 = 0.3f;
   // (The saturator drive limit lives in Saturator::kDriveLimit, see osc_saturator.h.)
+
+  // ---- Chord voice (CHORD / CHRD_INT edit params) --------------------------
+  // The third oscillator runs at a continuous interval above the base
+  // (CINT knob: 0..1900 cents, any harmonic reachable). The CHORD knob
+  // (0..100%) sets the voice level. All interval/gain logic lives in
+  // ChordVoice (osc_chord.h): the audio path is one multiply
+  // (w0 * 2^(cents/1200) via Taylor) plus one wavetable lookup.
+  //
+  // The CHORD knob (0..100%) sets the voice level. The per-voice gain is
+  // normalized: gain = ChordVoice::kMixChord * lvl / (1 + lvl). At lvl=0 the
+  // voice is silent (regression-safe). At lvl=1 (full knob) it reaches
+  // kMixChord with no increase in the main mix's peak.
 
   // ---- Sample-rate / reference-frequency helpers ----
   // getSampleRate() (Processor base) returns 48000.f for all logue products;
@@ -257,6 +272,22 @@ public:
       waves_.update(w0_);
       break;
 
+    case CHORD:
+      // 0..1023 -> 0..1 chord-voice level. The per-voice gain is applied in
+      // process() as ChordVoice::kMixChord * lvl / (1 + lvl) — see osc_chord.h.
+      params_.chord_level = param_10bit_to_f32(value);
+      break;
+
+    case CHRD_INT:
+      // 0..1023 -> 0..1900 cents (linear). Continuous interval: any harmonic
+      // is reachable, no quantization. Recompute the chord phasor's phase
+      // increment (K-rate, Taylor via Detune::factor).
+      {
+        float cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
+        chord_.update(w0_, cents);
+      }
+      break;
+
     default:
       break;
     }
@@ -267,12 +298,11 @@ public:
     switch (index)
     {
     case PARAM_SEL:
-      // Knob A: parameter selector. 0..10 -> DETUNE, DETUNE_A, RATE_AMT,
-      // RATE_SPD, SUB1, SUB2, SATU, ASYM, FOLD, WAV1, WAV2. Mask the low
-      // nibble (& 0xF) so any in-range index (0..10) maps to itself; a
-      // narrower mask (the old & 9) corrupted indices 5..10, e.g. WAV2 (10)
-      // -> RATE (2). On selection change, re-apply the cached raw value of
-      // the newly selected parameter so the DSP immediately reflects it
+      // Knob A: parameter selector. 0..12 -> DETUNE, DETUNE_A, RATE_AMT,
+      // RATE_SPD, SUB1, SUB2, SATU, ASYM, FOLD, WAV1, WAV2, CHORD, CHRD_INT.
+      // Mask the low nibble (& 0xF) so any in-range index (0..12) maps to
+      // itself. On selection change, re-apply the cached raw value of the
+      // newly selected parameter so the DSP immediately reflects it
       // (PARAM_VAL then edits that value).
       select_ = (uint8_t)(value & 0xF);
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
@@ -306,7 +336,7 @@ public:
   {
     static const char *const names[kEditParamCount] = {
         "DET1", "DET2", "RATE", "SPEE", "SUB1",
-        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2"};
+        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
     const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
     if (is_param_sel)
@@ -320,7 +350,30 @@ public:
     const uint8_t idx = (select_ < kEditParamCount) ? select_ : 0;
     const int32_t raw = edit_value_[idx];
     const int32_t k = kEditParamFirst + idx;
+
     static char buf[8];
+
+    // CINT (chord interval): display cents (0..1900), not a name.
+    if (k == CHRD_INT)
+    {
+      int ci = (int)(param_10bit_to_f32(raw) * ChordVoice::kMaxCents + 0.5f);
+      // format as "NNNc" (e.g. "700c", "1900c")
+      int n2 = 0;
+      int t2 = ci;
+      char d2[5];
+      int nd2 = 0;
+      do
+      {
+        d2[nd2++] = (char)('0' + t2 % 10);
+        t2 /= 10;
+      } while (t2 > 0);
+      for (int i = nd2 - 1; i >= 0; --i)
+        buf[n2++] = d2[i];
+      buf[n2++] = 'c';
+      buf[n2] = '\0';
+      return buf;
+    }
+
     int v;
     if (k == WAV1 || k == WAV2)
       v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
@@ -361,6 +414,7 @@ public:
     params_.reset();
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
+    chord_.reset(); // chord-voice phasor + interval (default OCT+5TH)
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
@@ -393,6 +447,7 @@ public:
   {
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
+    chord_.reset();
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
@@ -442,6 +497,7 @@ public:
     w0_ = w0; // base phase increment, osc A uses this directly
     update_w0_b();
     update_w0_a();
+    chord_.update(w0_, chord_.cents); // chord phasor: f * 2^(cents/1200)
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
     update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
     waves_.update(w0_); // re-resolve wavetables: morph position shifts with pitch
@@ -508,6 +564,14 @@ public:
     // ---- Second sub (SUB2) level (see osc_sub2.h for the voice DSP) ----
     const float sub2_level = p.sub2_level;
 
+    // ---- Chord voice gain (precomputed once per block) ----
+    // Normalized gain: ChordVoice::kMixChord * lvl / (1 + lvl). At lvl=0 the
+    // voice is silent (regression-safe: identical to the 2-osc sound). At
+    // lvl=1 (full knob) it reaches kMixChord. See osc_chord.h for details.
+    const float chord_gain = (p.chord_level > 0.f)
+        ? (ChordVoice::kMixChord * p.chord_level / (1.f + p.chord_level))
+        : 0.f;
+
     const bool rw_active = p.rw_amount > 0.f;
     float w0_a = w0_a_; // default: cached static detune (osc A)
     float w0_b = w0_b_; // default: cached static detune (osc B)
@@ -544,6 +608,11 @@ public:
       // phasor update
       phasor_a_ += w0_a;
       phasor_b_ += w0_b;
+      // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
+      // No random-walk modulation — the chord voice is a stable "anchor"
+      // like SUB2, not a beating voice. advance() returns false if the
+      // interval is OFF (no oscillator).
+      const bool chord_active = chord_.advance();
 
       // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
       // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
@@ -586,6 +655,16 @@ public:
       const float wav_a = WaveTable::resolve_wave(wave_base_a + lfo_morph, phasor_a_);
       const float wav_b = WaveTable::resolve_wave(wave_base_b + lfo_morph, phasor_b_);
 
+      // Chord voice: third oscillator at a selectable interval above the base
+      // (CINT knob: OFF/5TH/OCT/O+5/M3). Uses the WAV1 (osc A) wavetable so
+      // it blends with the main voice. Computed only when both the interval
+      // is active (chord_active) and the level is non-zero (chord_gain > 0)
+      // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
+      // wavetable lookup. See osc_chord.h for the interval table.
+      const float wav_c = (chord_active && chord_gain > 0.f)
+          ? WaveTable::resolve_wave(wave_base_a + lfo_morph, chord_.phasor)
+          : 0.f;
+
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
       const float sub = osc_sinf(phasor_sub_);
 
@@ -598,7 +677,12 @@ public:
       // mix both voices equally, then run through the pre-drive wavefolder
       // (FOLD knob) and the asymmetric soft-clip saturator (SATU/ASYM knobs).
       // See osc_saturator.h for the DSP details.
-      const float mix = kMixOsc * (wav_a + wav_b);
+      // The chord voice (wav_c * chord_gain) is added to the mix before the
+      // folder/saturator — it shares the same timbre chain so it stays
+      // cohesive with the main voice. The normalized gain (kMixChord * lvl
+      // / (1 + lvl)) keeps the saturator's peak budget unchanged from the
+      // 2-osc case.
+      const float mix = kMixOsc * (wav_a + wav_b + wav_c * chord_gain);
       const float folded = Saturator::fold(mix, p.fold_depth);
       const float y = Saturator::saturate(folded, p.drive, p.asym);
 
@@ -639,6 +723,8 @@ private:
   float w0_sub2_ = 0.f;
   // Second sub voice (f/4, saturated, LPF'd, gated). See osc_sub2.h.
   Sub2Voice sub2_;
+  // Chord voice (third oscillator at selectable interval). See osc_chord.h.
+  ChordVoice chord_;
 
   // Random-walk detune wandering (dual channel). See osc_random_walk.h.
   RandomWalk rw_;

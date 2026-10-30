@@ -37,6 +37,7 @@ struct OscParamsData
   float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
   float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
   float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
+  float chord_level;  // 0.f .. 1.f, edit: chord-voice level
 
   void reset()
   {
@@ -51,6 +52,7 @@ struct OscParamsData
     asym = 0.f;         // default: symmetric saturator (regression-safe)
     wave_a = 0.f;       // default: first wave of bank A
     wave_b = 0.f;       // default: first wave of bank A
+    chord_level = 0.f;  // default: chord voice off (regression-safe)
   }
 
   OscParamsData() { reset(); }

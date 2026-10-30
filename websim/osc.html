@@ -13,51 +13,68 @@
       font-family: 'Space Grotesk', sans-serif;
       -webkit-font-smoothing: subpixel-antialiased;
     }
+    .columns {
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+    }
+    .col-main {
+      flex: 0 0 auto;
+    }
+    .col-side {
+      flex: 0 0 auto;
+    }
   </style>
 </head>
 
 <body>
-  <!-- add buttons and sliders here -->
-  <button id="TogglePlaybackButton">Toggle playback</button>
-  <h2>Master Volume</h2>
-  <input type="range" min=0 max=1 value=0.5 step=0.01 id="VolumeSlider">
-  <span id="VolumeLabel"></span>
+  <div class="columns">
+    <div class="col-main">
+    <!-- add buttons and sliders here -->
+    <button id="TogglePlaybackButton">Toggle playback</button>
+    <h2>Master Volume</h2>
+    <input type="range" min=0 max=1 value=0.5 step=0.01 id="VolumeSlider">
+    <span id="VolumeLabel"></span>
 
-  <!-- <h2>BPM</h2>
-  <input type="range" min=30 max=240 value=120 step=0.1 id="BpmSlider">
-  <span id="BpmLabel"></span> -->
+    <!-- <h2>BPM</h2>
+    <input type="range" min=30 max=240 value=120 step=0.1 id="BpmSlider">
+    <span id="BpmLabel"></span> -->
 
-  <h2>Oscillator</h2>
-  <p>Tips: play with a QWERTY keyboard, Z and X to switch octave </p>
-  <!-- <select id="OscillatorType">
-    <option value="sawtooth">Sawtooth</option>
-    <option value="square">Square</option>
-    <option value="triangle">Triangle</option>
-    <option value="sine">Sine</option>
-    <option value="noise">Noise</option>
-  </select> -->
-  <button id="OscLatchButton">Latch Off</button>
-  <div id="keyboard"></div>
+    <h2>Oscillator</h2>
+    <p>Tips: play with a QWERTY keyboard, Z and X to switch octave </p>
+    <!-- <select id="OscillatorType">
+      <option value="sawtooth">Sawtooth</option>
+      <option value="square">Square</option>
+      <option value="triangle">Triangle</option>
+      <option value="sine">Sine</option>
+      <option value="noise">Noise</option>
+    </select> -->
+    <button id="OscLatchButton">Latch Off</button>
+    <div id="keyboard"></div>
 
-  <h2>Scope</h2>
-  <canvas id="TimeDomain" width="512" height="128"></canvas><br />
-  <canvas id="FrequencyDomain" width="512" height="128"></canvas>
+    <h2>Scope</h2>
+    <canvas id="TimeDomain" width="512" height="128"></canvas><br />
+    <canvas id="FrequencyDomain" width="512" height="128"></canvas>
+    </div>
 
-  <h2>LFO (Shape)</h2>
-  <p>Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
-  <div>
-    <label style="display:inline-block; width:100px; margin-right:10px;">F (freq, Hz)</label>
-    <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" style="width:200px; margin-right:10px;">
-    <span id="LfoFreqLabel">1.00</span>
+    <div class="col-side">
+    <h2>LFO (Shape)</h2>
+    <p>Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
+    <div>
+      <label style="display:inline-block; width:100px; margin-right:10px;">F (freq, Hz)</label>
+      <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" style="width:200px; margin-right:10px;">
+      <span id="LfoFreqLabel">1.00</span>
+    </div>
+    <div>
+      <label style="display:inline-block; width:100px; margin-right:10px;">S (depth, %)</label>
+      <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" style="width:200px; margin-right:10px;">
+      <span id="LfoDepthLabel">0%</span>
+    </div>
+
+    <h2>Parameters</h2>
+    <div id="Parameters"></div>
+    </div>
   </div>
-  <div>
-    <label style="display:inline-block; width:100px; margin-right:10px;">S (depth, %)</label>
-    <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" style="width:200px; margin-right:10px;">
-    <span id="LfoDepthLabel">0%</span>
-  </div>
-
-  <h2>Parameters</h2>
-  <div id="Parameters"></div>
 
   <script>
     // Expose function globally so EM_ASM can call it
@@ -69,25 +86,25 @@
 
       // The unit exposes its DSP knobs through a PARAM/VALUE multiplexer on
       // the hardware (knob A = PARAM_SEL, knob B = PARAM_VAL; see header.c and
-      // osc.h). The simulator renders each of the 11 selectable parameters as
+      // osc.h). The simulator renders each of the 13 selectable parameters as
       // its own slider instead of the 4 header slots, which is equivalent but
       // more convenient. Every slider drives the same two WebAudioParams the
       // multiplexer uses:
-      //   slot 0 "PARAM" (PARAM_SEL, 0..10)  -> selects the parameter
+      //   slot 0 "PARAM" (PARAM_SEL, 0..12)  -> selects the parameter
       //   slot 1 "VALUE" (PARAM_VAL, 0..1023) -> its raw 10-bit value
       // The worklet (wasm.cc ProcessAudio) applies only slots 0/1 and skips the
       // duplicate slots 2/3.
-      const EDIT_PARAM_COUNT = 11;
+      const EDIT_PARAM_COUNT = 13;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DET1, 1 DET2, 2 RATE, 3 SPEE, 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
-      // 8 FOLD, 9 WAV1, 10 WAV2.
+      // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD, 12 CINT.
       const EDIT_PARAM_NAMES = [
         "DET1", "DET2", "RATE", "SPEE", "SUB1",
-        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2",
+        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
       ];
 
-      // Format the raw 10-bit value (0..1023) of one of the 11 editable
-      // parameters for display (idx = select_ index 0..10):
+      // Format the raw 10-bit value (0..1023) of one of the 13 editable
+      // parameters for display (idx = select_ index 0..12):
       //   0: DET1  - detune osc B (-100..+100 cents)
       //   1: DET2  - detune osc A (-100..+100 cents)
       //   2: RATE  - random-walk depth (0..100%)
@@ -99,6 +116,8 @@
       //   8: FOLD  - pre-drive wavefolder depth (0..100%)
       //   9: WAV1  - osc A wavetable (0..90)
       //  10: WAV2  - osc B wavetable (0..90)
+      //  11: CHRD  - chord-voice level (0..100%)
+      //  12: CINT  - chord interval (0..1900 cents, continuous)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
         //   WAV1/WAV2 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
@@ -106,6 +125,7 @@
         //   DET1/DET2 -> +/-100 cents, centered on the raw MIDPOINT (511),
         //                NOT 1023: (raw-511)*100/511. Full knob (1023) reads +100.
         //   SATU      -> 0..300 (drive 0..3.0)
+        //   CINT      -> interval name (OFF/5TH/OCT/O+5/M3)
         //   others    -> 0..100%
         if (idx === 9 || idx === 10)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
@@ -119,6 +139,10 @@
         }
         if (idx === 6)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100
+        if (idx === 12) {
+          // CINT: 0..1900 cents (continuous interval)
+          return Math.round((raw / 1023) * 1900) + "c";
+        }
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -383,7 +407,7 @@
         requestAnimationFrame(draw);
       }
 
-      // one slider per selectable DSP parameter (the 11 edit parameters
+      // one slider per selectable DSP parameter (the 13 edit parameters
       // behind the hardware's PARAM/VALUE multiplexer), in select_ order
       for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
         createEditableParam(wasmProcessor, i);
