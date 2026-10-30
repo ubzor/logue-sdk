@@ -127,15 +127,21 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
   // cache value for unit_get_param_value(id)
   cached_values[id] = value;
 
-  s_osc_instance.setParameter(id, value);
+  // Slots 0/1 are the fixed A/B knobs (PARAM selector / VALUE). Slots 2/3 are
+  // their full optional (edit-menu) duplicates (see header.c) — they must
+  // read/write the exact same underlying state. Remap the header slot index
+  // onto the Osc's internal parameter ids (PARAM_SEL=0, PARAM_VAL=1) before
+  // forwarding; Osc::setParameter then only ever sees 0 or 1.
+  const uint8_t pid = (id == 0U || id == 2U) ? 0U : 1U;
+  s_osc_instance.setParameter(pid, value);
 }
 
 __unit_callback int32_t unit_get_param_value(uint8_t id)
 {
-  // VALUE (knob B, slot 1) reports the cached value of the currently
-  // selected parameter (the selector's real state); PARAM (knob A, slot 0)
-  // reports the last raw value written via unit_set_param_value.
-  if (id == 1)
+  // VALUE slots (1 and 3) report the cached value of the currently selected
+  // parameter (the selector's real state); PARAM slots (0 and 2) report the
+  // last raw value written via unit_set_param_value for that slot.
+  if (id == 1U || id == 3U)
     return s_osc_instance.getValue();
   // just return the cached value
   return cached_values[id];

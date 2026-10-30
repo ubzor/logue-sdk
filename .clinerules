@@ -28,3 +28,71 @@
 - Сборка WASM-симулятора: `make wasm` (двухэтапная компиляция C и C++ отдельно, линковка через `em++`).
 - Для WASM нужны флаги: `-fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -s AUDIO_WORKLET=1 -s WASM_WORKERS=1 -s SHARED_MEMORY=1 -lembind`.
 - Эмулятор: emsdk, установлен локально; запуск: `emrun --serve 0.0.0.0:8000 sim/drone.html`.
+
+## Система параметров (Важно: не перепутать)
+
+### Слои
+У юнита **2 разных слоя** параметров:
+1. **Слоты `header.c` (`.params`)** — то, что видит runtime и UI (Kontrol Editor / loguecli / web-симулятор). Максимум 10 (`UNIT_OSC_MAX_PARAM_COUNT`).
+2. **Edit-параметры (`enum` в `osc.h`)** — внутренние DSP-параметры, которые редактируются через мультиплексор PARAM/VALUE. Их может быть сколько угодно (сейчас 11).
+
+### Текущая структура слотов `header.c` (4 слота)
+
+| Слот | Имя | min..max | type | Канал | Что редактирует |
+|---|---|---|---|---|---|
+| 0 | `PARAM` | 0..10 | strings | **fixed** (ручка A) | `select_` — какой из 11 edit-параметров выбран |
+| 1 | `VALUE` | 0..1023 | strings | **fixed** (ручка B) | `edit_value_[select_]` — значение выбранного |
+| 2 | `PARAM` | 0..10 | strings | **optional** (edit-меню) | дубликат слота 0 |
+| 3 | `VALUE` | 0..1023 | strings | **optional** (edit-меню) | дубликат слота 1 |
+
+**Слоты 2/3 — полные дубликаты 0/1.** Нужны для видимости мультиплексора в edit-меню (Kontrol Editor / loguecli) и для рендера в web-симуляторе.
+
+### Единое состояние (в `Osc`)
+```cpp
+uint8_t select_;           // 0..10 — какой edit-параметр выбран
+int32_t edit_value_[11];   // raw 10-bit значения каждого edit-параметра
+```
+Все 4 слота читают/пишут **одни и те же** переменные: слоты 0/2 → `select_`, слоты 1/3 → `edit_value_[select_]`. Никакого копирования — 2 индекса, сходящихся в одну точку памяти.
+
+### Маппинг в `unit.cc`
+```cpp
+void unit_set_param_value(uint8_t id, int32_t value) {
+  value = clipminmaxi32(unit_header.params[id].min, value, unit_header.params[id].max);
+  cached_values[id] = value;
+  const uint8_t pid = (id == 0U || id == 2U) ? 0U : 1U;  // 2→0, 3→1
+  s_osc_instance.setParameter(pid, value);               // Osc видит только 0 / 1
+}
+int32_t unit_get_param_value(uint8_t id) {
+  if (id == 1U || id == 3U) return s_osc_instance.getValue();  // edit_value_[select_]
+  return cached_values[id];
+}
+```
+`Osc::setParameter` принимает **только** `PARAM_SEL` (0) и `PARAM_VAL` (1). Маппинг 2→0, 3→1 делается **до** входа в `Osc`.
+
+### `getParameterStrValue` (osc.h)
+Принимает **header-индекс** (0..3):
+- `id == 0 || id == 2` → имя выбранного edit-параметра (`"DET1"`, `"RATE"`, ...).
+- `id == 1 || id == 3` → форматированное значение (`"50%"`, `"+25 c"`, `42`).
+
+### Web-симулятор
+**ВАЖНО:** `make wasm` использует `websim/osc.html` как shell (см. `SANDBOXDIR` в Makefile), а **не** `sim/drone.html`. `sim/drone.html` — это **результат** сборки, перезаписывается при каждом `make wasm`. **Все правки UI делать в `websim/osc.html`.**
+
+- `ProcessAudio` (wasm.cc): **пропускает** индексы 2 и 3, чтобы не применять дубликаты дважды.
+- `getParameterValueString` (wasm.cc): для всех 4 индексов делегирует в `processor.getParameterStrValue`.
+- `createSlider` (websim/osc.html): `isParamSel = (index===0||index===2)` → `<select>` с 11 опциями; `isParamVal = (index===1||index===3)` → `<input type="range">`. Кросс-синхронизация: `onchange` селектора зеркалит в другой селектор + оба value-слайдера; `oninput` value-слайдера зеркалит в другой.
+- `formatParamValue` (websim/osc.html): принимает **edit-индекс** (0..10), **не** header-индекс: 0=DET1, 1=DET2, 2=RATE, 3=SPEE, 4=SUB1, 5=SUB2, 6=SATU, 7=ASYM, 8=FOLD, 9=WAV1, 10=WAV2.
+
+### Частые ошибки (не повторять)
+1. **Править `sim/drone.html`** — правки потеряются при `make wasm`. Править `websim/osc.html`.
+2. **Считать edit-параметры = слотам `header.c`** — их 11, слотов 4.
+3. **Забывать маппинг 2→0, 3→1** в `unit_set_param_value` — `Osc::setParameter` упадёт в `default: break;`.
+4. **Считать DET1/DET2 в 50-cent** в `formatParamValue` — DSP использует 100-cent.
+5. **Использовать 10 edit-индексов** (старый порядок) — их 11: WAV1=9, WAV2=10 (не 8/9).
+6. **Добавлять edit-параметр без обновления `formatParamValue`** — новый индекс отрендерится как %.
+7. **Забудить обновить `edit_value_[]`** при добавлении edit-параметра.
+
+### Как добавить новый edit-параметр
+1. `osc.h`: `enum` (после `WAV2`), `Params` struct, `Params::reset()`, `edit_value_[kEditParamCount]` (увеличить `kEditParamCount`), `apply_edit_param` (новый `case`), `names[]` в `getParameterStrValue`, `formatParamValue`-логика.
+2. `header.c`: **не менять** — мультиплексор подхватит автоматически.
+3. `websim/osc.html`: новый `if (idx === N)` в `formatParamValue`.
+4. `make install` + `make wasm`.

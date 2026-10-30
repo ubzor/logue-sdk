@@ -74,24 +74,32 @@
       // plain range slider for everything else.
       const K_UNIT_PARAM_TYPE_STRINGS = 12;
 
-      // Format the raw 10-bit value (0..1023) of one of the 8 A/B-knob
-      // parameters for display. Index order matches the C++ SELECT enum:
-      // 0 RATE AMT, 1 RATE SPD, 2 SUB, 3 FOLD, 4 ASYM, 5 WAVE A, 6 WAVE B,
-      // 7 SUB2. Percentages for all except WAVE A/B (wavetable index 0..90)
-      // and ASYM (-100%..+100% with explicit sign).
+      // Format the raw 10-bit value (0..1023) of one of the 11 editable
+      // parameters for display. Index order matches the C++ enum in osc.h
+      // (kEditParamFirst = DETUNE = 2, so the editable range is 2..12):
+      //   0: DET1  - detune osc B (-100..+100 cents)
+      //   1: DET2  - detune osc A (-100..+100 cents)
+      //   2: RATE  - random-walk depth (0..100%)
+      //   3: SPEE  - random-walk speed (0..100%)
+      //   4: SUB1  - sub-octave sine level (0..100%)
+      //   5: SUB2  - second sub level (0..100%)
+      //   6: SATU  - saturator drive (0..300)
+      //   7: ASYM  - asymmetric saturator (-100%..+100%)
+      //   8: FOLD  - pre-drive wavefolder depth (0..100%)
+      //   9: WAV1  - osc A wavetable (0..90)
+      //  10: WAV2  - osc B wavetable (0..90)
       function formatParamValue(idx, raw) {
-        // idx order: 0=DETU, 1=RATE, 2=SPEE, 3=SUB, 4=SUB2, 5=SATU, 6=FOLD, 7=ASYM, 8=WAV1, 9=WAV2
-        if (idx === 8 || idx === 9)
+        if (idx === 9 || idx === 10)
           return String(Math.round((raw / 1023) * 90));
         if (idx === 7) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
-        if (idx === 0) {
-          const cents = Math.round((raw - 511) / 511 * 50);
+        if (idx === 0 || idx === 1) {
+          const cents = Math.round(((raw - 511) / 511) * 100);
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 5)
+        if (idx === 6)
           return String(Math.round((raw / 1023) * 300));
         return Math.round((raw * 100) / 1023) + "%";
       }
@@ -115,10 +123,18 @@
 
         // Stable ids for cross-control sync.
         const controlId = "param_" + index;
+
         // Parameter roles (see header.c):
-        //   index 0 "PARAM" - knob A: parameter selector dropdown (0..9)
-        //   index 1 "VALUE" - knob B: value of the selected parameter (0..1023)
-        if (index === 0) {
+        //   slot 0 "PARAM" (fixed A)  - parameter selector dropdown (0..10)
+        //   slot 1 "VALUE" (fixed B)  - raw value of selected param (0..1023)
+        //   slot 2 "PARAM" (optional) - full duplicate of slot 0
+        //   slot 3 "VALUE" (optional) - full duplicate of slot 1
+        // All four share the same underlying state (select_ / edit_value_)
+        // on the C++ side; the JS side keeps the four DOM controls in sync.
+        const isParamSel = (index === 0 || index === 2);
+        const isParamVal = (index === 1 || index === 3);
+
+        if (isParamSel) {
           // PARAM (knob A): parameter selector. Render a <select> with one
           // option per selectable parameter (param.min..param.max). The
           // option text comes from getParameterValueString(index, i), which
@@ -137,22 +153,35 @@
           container.appendChild(select);
           value_string.textContent = Module.getParameterValueString(index, select.value);
           select.onchange = () => {
-            value_string.textContent = Module.getParameterValueString(index, select.value);
+            // Write to this slot's WebAudioParam (the worklet skips 2/3, so
+            // only slot 0's param actually reaches the DSP — but keeping both
+            // in sync mirrors what the hardware does for a duplicate slot).
             audio_parameter.value = select.value;
-            const valueSlider = document.getElementById("param_1");
-            if (valueSlider) {
-              // Read the processor's cache directly (no worklet round-trip).
-              // getSelectParam() / getEditParamValue() are exported from
-              // wasm.cc and read the processor's select_ / edit_value_.
-              const newSelect = parseInt(select.value, 10);
-              const raw = Module.getEditParamValue ? Module.getEditParamValue(newSelect) : 0;
-              valueSlider.value = raw;
-              const valueSpan = valueSlider.parentElement.querySelector("span");
-              if (valueSpan)
-                valueSpan.textContent = formatParamValue(newSelect, raw);
+            // Mirror into the other PARAM selector (slot 0 <-> slot 2).
+            const otherSelect = document.getElementById(index === 0 ? "param_2" : "param_0");
+            if (otherSelect && otherSelect.value !== select.value) {
+              otherSelect.value = select.value;
+              const otherSpan = otherSelect.parentElement.querySelector("span");
+              if (otherSpan)
+                otherSpan.textContent = Module.getParameterValueString(index === 0 ? 2 : 0, otherSelect.value);
+            }
+            // Update this selector's own label.
+            value_string.textContent = Module.getParameterValueString(index, select.value);
+            // Sync both VALUE sliders (slot 1 and 3) to the newly selected
+            // parameter's cached raw value.
+            const newSelect = parseInt(select.value, 10);
+            const raw = Module.getEditParamValue ? Module.getEditParamValue(newSelect) : 0;
+            for (const valId of ["param_1", "param_3"]) {
+              const valueSlider = document.getElementById(valId);
+              if (valueSlider) {
+                valueSlider.value = raw;
+                const valueSpan = valueSlider.parentElement.querySelector("span");
+                if (valueSpan)
+                  valueSpan.textContent = formatParamValue(newSelect, raw);
+              }
             }
           };
-        } else {
+        } else if (isParamVal) {
           // VALUE (knob B): plain range slider editing the raw 10-bit value
           // (0..1023) of the currently selected parameter.
           let input = document.createElement("input");
@@ -179,13 +208,29 @@
             value_string.textContent = Module.getParameterValueString(index, input.value);
           }
           input.oninput = () => {
+            // Write to this slot's WebAudioParam (worklet skips 2/3).
             audio_parameter.value = input.value;
             const sel2 = document.getElementById("param_0");
+            const rawNow = parseInt(input.value, 10);
             if (sel2) {
               const idx = parseInt(sel2.value, 10);
-              value_string.textContent = formatParamValue(idx, input.value);
+              value_string.textContent = formatParamValue(idx, rawNow);
             } else {
               value_string.textContent = Module.getParameterValueString(index, input.value);
+            }
+            // Mirror into the other VALUE slider (slot 1 <-> slot 3).
+            const otherId = index === 1 ? "param_3" : "param_1";
+            const otherInput = document.getElementById(otherId);
+            if (otherInput && parseInt(otherInput.value, 10) !== rawNow) {
+              otherInput.value = rawNow;
+              const otherSpan = otherInput.parentElement.querySelector("span");
+              if (otherSpan) {
+                if (sel2) {
+                  otherSpan.textContent = formatParamValue(parseInt(sel2.value, 10), rawNow);
+                } else {
+                  otherSpan.textContent = Module.getParameterValueString(index, rawNow);
+                }
+              }
             }
           };
         }
@@ -438,9 +483,6 @@
     };
   </script>
   {{{ SCRIPT }}}
-  {{{ SCRIPT }}}
-  {{{ SCRIPT }}}
-  <script async type="text/javascript" src="drone.js"></script>
 </body>
 
 </html>

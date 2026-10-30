@@ -83,11 +83,13 @@ std::string getParameterValueString(int index, int value)
 {
   const unit_param_t &p = unit_header.params[index];
 
-  // The Osc processor implements getParameterStrValue() for the two
-  // type_strings optional parameters (PARAM SEL: parameter name, PARAM VAL:
-  // formatted value), returning "" for everything else (the fixed PARAM /
-  // VALUE knobs are type_none stubs). Route every index through that method
-  // so the simulator UI shows the same strings the hardware display would.
+  // The Osc processor implements getParameterStrValue() for the four
+  // type_strings header slots (PARAM in slots 0/2, VALUE in slots 1/3).
+  // Slots 2/3 are full duplicates of 0/1 (see header.c); the processor
+  // routes all four to the same underlying state. Every other index
+  // returns "" and we fall through to the suffix-based formatter below.
+  // Routing every index through the processor first keeps the simulator UI
+  // in lockstep with the hardware display.
   const char *s = processor.getParameterStrValue(static_cast<uint8_t>(index), value);
   if (s != nullptr)
     return std::string(s);
@@ -294,6 +296,15 @@ bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
 
   for (int i = 0; i < numParams; ++i)
   {
+    // Slots 2/3 are the optional (edit-menu) duplicates of slots 0/1 (see
+    // header.c). They carry the same state as 0/1, so applying them here
+    // would be a redundant second write of the same value to the same
+    // underlying state (select_ / edit_value_). Skip them; the UI keeps the
+    // four WebAudioParams in sync on the JS side, so 0/1 always reflect the
+    // latest user input.
+    if (i == 2 || i == 3)
+      continue;
+
     // K-rate parameter: use the first sample for the frame.
     // The Web Audio Param carries the unit's native integer range [min,max]
     // (see AudioThreadInitialized). Round the first sample to the nearest
