@@ -19,7 +19,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' as displayed on device. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
-    .version = 0x00000009U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
+    .version = 0x0000000AU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
     .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
@@ -29,7 +29,7 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..12. The display
+        // A knob (PARAM, slot 0): parameter selector, 0..16. The display
         // shows the name of the selected parameter via unit_get_param_str_value().
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
@@ -37,17 +37,21 @@ const __unit_header unit_header_t unit_header = {
         //   0: DET1 - detune of osc B (-100..+100 cents), default 511 (0 cents)
         //   1: DET2 - detune of osc A (-100..+100 cents), default 511 (0 cents)
         //   2: RATE - random-walk depth (quadratic, 0..100%), default 0 (off)
-        //   3: SPEE - random-walk speed (0..100%), default 511 (50%)
-        //   4: SUB1 - sub-octave (f/2) sine level (0..100%), default 511 (50%)
-        //   5: SUB2 - second sub (f/4) saturated level (0..100%), default 0 (off)
-        //   6: SATU - saturator drive (0..300), default 682 (200 = 2.0x)
-        //   7: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
-        //   8: FOLD - pre-drive wavefolder depth (0..100%), default 0 (off)
-        //   9: WAV1 - osc A wavetable (0..90 across banks A-F), default 0
-        //   10: WAV2 - osc B wavetable (0..90 across banks A-F), default 0
-        //   11: CHRD - chord-voice level (0..100%), default 0 (off)
-        //   12: CINT - chord interval (0..1900 cents, continuous), default 0
-        {0, 12, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        //   3: SPEE - random-walk period (0..100% -> 0.1 s..10 s, log), default 511
+        //   4: SMTH - random-walk time constant (0..100% -> 10 ms..1.5 s, log), default 511
+        //   5: SUB1 - sub-octave (f/2) sine level (0..100%), default 511 (50%)
+        //   6: SUB2 - second sub (f/4) saturated level (0..100%), default 205 (~20%)
+        //   7: SATU - saturator drive (0..300), default 341 (100 = 1.0x, gentle)
+        //   8: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
+        //   9: FOLD - pre-drive wavefolder depth (0..100%), default 0 (off)
+        //   10: WAV1 - osc A wavetable (0..90 across banks A-F), default 0
+        //   11: WAV2 - osc B wavetable (0..90 across banks A-F), default 128 (~11)
+        //   12: CHRD - chord-voice level (0..100%), default 205 (~20%)
+        //   13: CINT - chord interval (0..1900 cents, continuous), default 377 (~700c, fifth)
+        //   14: RWAV - random-walk depth on wavetable morph (0..100%), default 0 (off)
+        //   15: RDRV - random-walk depth on saturator drive (0..100%), default 0 (off)
+        //   16: RFLD - random-walk depth on wavefolder depth (0..100%), default 0 (off)
+        {0, 16, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -66,8 +70,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..12. Identical to slot 0.
-        {0, 12, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..16. Identical to slot 0.
+        {0, 16, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

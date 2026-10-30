@@ -81,11 +81,13 @@ struct ChordVoice
     return true;
   }
 
-  // Reset the chord voice state.
+  // Reset the chord voice state. Only the phasor / cached phase increment are
+  // cleared here — the CINT interval (cents) now lives in
+  // OscParamsData::chord_cents (osc_params.h), so the single place to change
+  // the CINT default is OscParamsData::reset().
   void reset()
   {
     phasor = 0.f;
     w0 = 0.f;
-    cents = 0.f;
   }
 };

@@ -24,15 +24,20 @@
  *  harmonics, and the saturator itself can be made asymmetric (ASYM).
  *
  *  An optional random-walk "wandering" mechanism modulates the detunes of
- *  BOTH oscillators around their knob values: RATE AMT sets the maximum
- *  deviation (quadratic mapping: knob^2 -> 0..+/-10 cents hard ceiling, so
- *  neither voice strays further from its DETUNE knob value than AMT allows)
- *  and RATE SPD sets the "restlessness" — how often the targets change and
- *  how quickly the deviations track them (0.1 s fast, restless .. 10 s slow,
- *  lazy). The two voices wander with independent random targets on the same
- *  period, so the inter-voice beat frequency shifts over time (asymmetric
- *  chorus). With RATE AMT at 0 the detunes are static, preserving the
- *  original behavior.
+ *  BOTH oscillators around their knob values:
+ *    RATE AMT  — maximum deviation (quadratic mapping: knob^2 -> 0..1
+ *                normalized, scaled to +/-10 cents at the audio path, so
+ *                neither voice strays further from its DETUNE knob value than
+ *                AMT allows),
+ *    RATE SPD  — how often the random targets are regenerated (0.1 s
+ *                fast/restless .. 10 s slow/lazy, log mapping),
+ *    RATE SMTH — how quickly the deviations track the targets (a time
+ *                constant, 10 ms snappy .. 1.5 s glacial, log mapping).
+ *  The two voices wander with independent random targets on the same period,
+ *  so the inter-voice beat frequency shifts over time (asymmetric chorus).
+ *  Keeping the time constant (SMTH) independent of the period (SPD) makes the
+ *  audible depth stable regardless of SPEED. With RATE AMT at 0 the detunes
+ *  are static, preserving the original behavior.
  *
  *  No dynamic allocation: all state lives in static members of this class.
  *
@@ -74,7 +79,8 @@ public:
     DETUNE,         // detune of osc B (−100..+100 cents, default 0 = in tune)
     DETUNE_A,       // detune of osc A (−100..+100 cents, default 0 = in tune)
     RATE_AMT,       // random-walk depth (0..100%, default 0% = off)
-    RATE_SPD,       // random-walk speed (0..100%, default 50%)
+    RATE_SPD,       // random-walk period (0..100% -> 0.1 s..10 s, log, default 50%)
+    RATE_SMTH,      // random-walk time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
     SUB1,           // sub-octave sine level (0..100%, default 50%)
     SUB2,           // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
     SATU,           // saturator drive (0..3.0, default 2.0 = moderate)
@@ -84,17 +90,21 @@ public:
     WAV2,           // oscillator B wavetable (0..90 across banks A-F)
     CHORD,          // third (chord) oscillator level (0..100%, default 0% = off)
     CHRD_INT,       // chord interval (0..1900 cents, continuous)
+    RW_WAV,         // random-walk depth on wavetable morph (0..100%, default 0% = off)
+    RW_DRV,         // random-walk depth on saturator drive (0..100%, default 0% = off)
+    RW_FLD,         // random-walk depth on wavefolder depth (0..100%, default 0% = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..CHRD_INT).
-  static constexpr uint8_t kEditParamCount = 13; // DETUNE..CHRD_INT
-  // The first editable enum value. The UI (header.c PARAM slot, 0..12) expects
+  // Number of editable DSP parameters (DETUNE..RW_FLD).
+  static constexpr uint8_t kEditParamCount = 17; // DETUNE..RW_FLD
+  // The first editable enum value. The UI (header.c PARAM slot, 0..16) expects
   // this order: 0 DET1 (DETUNE), 1 DET2 (DETUNE_A), 2 RATE (RATE_AMT),
-  // 3 SPEE (RATE_SPD), 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM, 8 FOLD, 9 WAV1,
-  // 10 WAV2, 11 CHRD (CHORD), 12 CINT (CHRD_INT). So kEditParamFirst +
-  // select_ (select_ 0..12) maps to DETUNE..CHRD_INT correctly.
+  // 3 SPEE (RATE_SPD), 4 SMTH (RATE_SMTH), 5 SUB1, 6 SUB2, 7 SATU, 8 ASYM,
+  // 9 FOLD, 10 WAV1, 11 WAV2, 12 CHRD (CHORD), 13 CINT (CHRD_INT),
+  // 14 RW_WAV, 15 RW_DRV, 16 RW_FLD. So kEditParamFirst + select_
+  // (select_ 0..16) maps to DETUNE..RW_FLD.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -113,6 +123,29 @@ public:
   static constexpr float    kSatuMax        = 3.f;   // 0..3.0 drive level
   static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
   static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
+  // Random-walk detune scale: the normalized walk deviations (rw_.dev_a/b,
+  // in [-1, +1]) are multiplied by this (cents) in the audio path, so RATE AMT
+  // at 100% (rw_amount = 1) wanders each voice by +/-kRwDetuneScaleCents around
+  // its DETUNE knob value. Kept here (not in RandomWalk) because the scale is
+  // a per-target choice: each walk target gets its own scale at its point of
+  // use (detune below; wavetable morph / drive / fold in the process() audio
+  // path, gated by the RW_WAV / RW_DRV / RW_FLD depth knobs).
+  static constexpr float    kRwDetuneScaleCents = 10.f; // +/-10 cents at RW depth 100%
+  // Random-walk wavetable-morph scale: the normalized deviation is multiplied
+  // by this (in tables) so RW_WAV at 100% wanders the morph position by
+  // +/-kRwMorphScaleTables around the WAV1/WAV2 knob. Matches the platform
+  // LFO morph depth (WaveTable::kLfoMorphDepth = 10 tables) so the walk can
+  // sweep the same span the LFO does.
+  static constexpr float    kRwMorphScaleTables = 10.f; // +/-10 tables at RW_WAV 100%
+  // Random-walk drive scale: the normalized deviation is multiplied by this
+  // (in drive units) so RW_DRV at 100% wanders the saturator drive by
+  // +/-kRwDriveScale around the SATU knob. Drive is in 0..kSatuMax (0..3.0),
+  // so +/-0.5 is a gentle-but-audible swing (e.g. 2.0 -> 1.5..2.5).
+  static constexpr float    kRwDriveScale = 0.5f;       // +/-0.5 drive at RW_DRV 100%
+  // Random-walk wavefolder scale: the normalized deviation is multiplied by
+  // this (in fold-depth units) so RW_FLD at 100% wanders the folder depth by
+  // +/-kRwFoldScale around the FOLD knob. Fold depth is 0..1; +/-0.3 is a
+  // moderate metallic shimmer. Negative results are clamped to 0 in the path.
 
   // ---- Parameter selector / value multiplexer (state) ----
   // Knob A (PARAM_SEL, slot 0) picks one of the 12 DSP parameters
@@ -121,11 +154,13 @@ public:
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 13 editable parameters, cached so the
-  // selector can recall them. Defaults match the header's "init" values:
-  // DETUNE 511, DETUNE_A 511, RATE 0, SPEE 511, SUB1 511, SUB2 0, SATU 682,
-  // ASYM 511, FOLD 0, WAV1 0, WAV2 0, CHORD 0, CINT 0 (0 cents, regression-safe).
-  int32_t edit_value_[kEditParamCount] = {511, 511, 0, 511, 511, 0, 682, 511, 0, 0, 0, 0, 0};
+  // Raw 10-bit values (0..1023) of the 17 editable parameters, cached so the
+  // selector can recall them. Defaults match the DSP defaults in
+  // OscParamsData::reset() (osc_params.h):
+  // DETUNE 511, DETUNE_A 511, RATE 0, SPEE 511, SMTH 511, SUB1 511,
+  // SUB2 205, SATU 341, ASYM 511, FOLD 0, WAV1 0, WAV2 128, CHORD 205,
+  // CINT 377, RW_WAV 0, RW_DRV 0, RW_FLD 0.
+  int32_t edit_value_[kEditParamCount] = {511, 511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0};
 
   // Currently selected parameter (0..12), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -142,6 +177,44 @@ public:
   // Cached value of the currently selected parameter (PARAM_VAL). Used by the
   // web simulator's VALUE slider init/display (wasm.cc unit_get_param_value).
   int32_t getValue() const { return edit_value_[select_]; }
+
+#ifdef __EMSCRIPTEN__
+  // ---- Direct edit-parameter channel (web simulator only) -------------------
+  // On hardware the PARAM/VALUE multiplexer is driven by the platform's
+  // unit_set_param_value() callback (K-rate, atomic per knob turn). The web
+  // simulator's per-parameter sliders used to write to the WebAudioParam
+  // slots 0/1 (PARAM_SEL / PARAM_VAL), but K-rate WebAudioParam smoothing
+  // causes select_ to sweep through intermediate values (0 -> 1 -> 2 -> ...
+  // -> target), each of which re-applies a different edit parameter to the
+  // DSP -- producing audible glitches that look like a phantom LFO.
+  //
+  // To fix this, the UI bypasses WebAudioParam entirely and writes a
+  // packed (index, raw) request to this single 32-bit slot. The request is
+  // consumed once per block by process() (audio worklet thread), so the
+  // (select_, PARAM_VAL) pair is applied atomically -- the same write
+  // semantics the hardware has.
+  //
+  // Layout: bit 31 = valid flag, bits 0..4 = index (0..15), bits 8..17 =
+  // raw value (0..1023). A 32-bit aligned store on x86 is atomic; even if
+  // the worklet observed a torn value it would just skip the request
+  // (valid bit would not be consistent with the payload).
+  //
+  // The hardware build does not use this channel: under non-EMSCRIPTEN
+  // the volatile slot is absent (zero size) and process() never touches it.
+  volatile uint32_t sim_edit_request_;
+
+  // Write an edit-parameter request from the main thread (UI). Index is
+  // 0..16 (kEditParamCount - 1), raw is 0..1023. Safe to call from any
+  // thread; the audio worklet thread picks it up on the next block.
+  void simEditRequest(uint8_t index, int32_t raw)
+  {
+    if (index >= kEditParamCount)
+      return;
+    const uint32_t packed = (1U << 31) | (static_cast<uint32_t>(index) & 0x1FU) |
+                            ((static_cast<uint32_t>(raw) & 0x3FFU) << 8);
+    sim_edit_request_ = packed;
+  }
+#endif
 
   // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
   // The detune never strays further from the DETUNE knob value than this.
@@ -227,17 +300,23 @@ public:
     case RATE_AMT:
       {
         const float x = param_10bit_to_f32(value);
-        params_.rw_amount = x * x;
+        params_.rw_amount = x * x; // quadratic: knob^2 -> 0..1 normalized depth
       }
-      rw_.max_dev = params_.rw_amount * RandomWalk::kMaxCents;
       break;
 
     case RATE_SPD:
+      // Target-update period only (the tracking time constant is RATE_SMTH).
+      // The full setup (ceiling + interval + tracking) is recomputed from all
+      // three RATE parameters so a change to any of them stays consistent.
       params_.rw_rate = param_10bit_to_f32(value);
-      {
-        const float period = RandomWalk::kPeriodMinSec * fasterpowf(100.f, params_.rw_rate);
-        rw_.interval = (uint32_t)(period * kSampleRate);
-      }
+      rw_.setup(params_.rw_rate, params_.rw_amount, params_.rw_smooth);
+      break;
+
+    case RATE_SMTH:
+      // Tracking time constant only (10 ms .. 1.5 s, log). Recompute the full
+      // setup so the tracking coefficient k picks up the new value.
+      params_.rw_smooth = param_10bit_to_f32(value);
+      rw_.setup(params_.rw_rate, params_.rw_amount, params_.rw_smooth);
       break;
 
     case SUB1:
@@ -280,12 +359,33 @@ public:
 
     case CHRD_INT:
       // 0..1023 -> 0..1900 cents (linear). Continuous interval: any harmonic
-      // is reachable, no quantization. Recompute the chord phasor's phase
-      // increment (K-rate, Taylor via Detune::factor).
+      // is reachable, no quantization. The interval is stored in params_
+      // (OscParamsData::chord_cents — the single source of truth for the
+      // CINT default), then the chord phasor's phase increment is recomputed
+      // (K-rate, Taylor via Detune::factor).
       {
-        float cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        chord_.update(w0_, cents);
+        params_.chord_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
+        chord_.update(w0_, params_.chord_cents);
       }
+      break;
+
+    case RW_WAV:
+      // 0..1023 -> 0..1 random-walk depth on the wavetable morph. The actual
+      // table scale (kRwMorphScaleTables) is applied in the audio path; here we
+      // only store the 0..1 depth gate.
+      params_.rw_wav = param_10bit_to_f32(value);
+      break;
+
+    case RW_DRV:
+      // 0..1023 -> 0..1 random-walk depth on the saturator drive. The drive
+      // scale (kRwDriveScale) is applied in the audio path.
+      params_.rw_drv = param_10bit_to_f32(value);
+      break;
+
+    case RW_FLD:
+      // 0..1023 -> 0..1 random-walk depth on the wavefolder depth. The fold
+      // scale (kRwFoldScale) is applied in the audio path.
+      params_.rw_fld = param_10bit_to_f32(value);
       break;
 
     default:
@@ -327,16 +427,18 @@ public:
   // accepts any of the four slot indices and routes them to the same
   // underlying state (select_ / edit_value_):
   //   PARAM (slot 0 or 2): the name of the selected parameter
-  //                        ("DET1", "SUB1", ..).
+  //                        ("DET1", "SUB1", .., "RWAV", "RDRV", "RFLD").
   //   VALUE (slot 1 or 3): a short representation of the selected parameter's
   //                        raw 10-bit value ("50%", "+25%", wavetable index).
+  // The RW_WAV / RW_DRV / RW_FLD depths format as 0..100% (the default branch).
   // The manual formatter below avoids pulling printf machinery into the ARM
   // image. Longest possible output is 5 chars ("+100%").
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final
   {
     static const char *const names[kEditParamCount] = {
-        "DET1", "DET2", "RATE", "SPEE", "SUB1",
-        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT"};
+        "DET1", "DET2", "RATE", "SPEE", "SMTH",
+        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
+        "RWAV", "RDRV", "RFLD"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
     const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
     if (is_param_sel)
@@ -352,6 +454,11 @@ public:
     const int32_t k = kEditParamFirst + idx;
 
     static char buf[8];
+
+    // SMTH (random-walk time constant): display as 0..100% (same format as
+    // RATE / SPEE). The actual ms value (10..1500) is a log mapping of the
+    // raw 0..1023 value; showing % keeps the display consistent and avoids
+    // pulling a fasterpowf into the K-rate display path.
 
     // CINT (chord interval): display cents (0..1900), not a name.
     if (k == CHRD_INT)
@@ -414,7 +521,7 @@ public:
     params_.reset();
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
-    chord_.reset(); // chord-voice phasor + interval (default OCT+5TH)
+    chord_.reset(); // chord-voice phasor (the CINT interval default lives in params_.chord_cents)
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
@@ -434,6 +541,11 @@ public:
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_.reset();
+#ifdef __EMSCRIPTEN__
+    // Clear any pending direct edit-parameter request (the UI may have
+    // already sent one before init ran on the worklet thread).
+    sim_edit_request_ = 0;
+#endif
     // First-order relaxation coefficients (per sample) for the exponential
     // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in
     // samples; five time-constants over the phase means the level covers
@@ -497,7 +609,7 @@ public:
     w0_ = w0; // base phase increment, osc A uses this directly
     update_w0_b();
     update_w0_a();
-    chord_.update(w0_, chord_.cents); // chord phasor: f * 2^(cents/1200)
+    chord_.update(w0_, params_.chord_cents); // chord phasor: f * 2^(cents/1200)
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
     update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
     waves_.update(w0_); // re-resolve wavetables: morph position shifts with pitch
@@ -529,6 +641,29 @@ public:
   {
     (void)in; // drone generator does not use the audio input
 
+#ifdef __EMSCRIPTEN__
+    // Consume any pending direct edit-parameter request from the UI thread
+    // (see simEditRequest). The (select_, PARAM_VAL) pair is applied
+    // atomically here so the DSP never sees an intermediate select_ value --
+    // the hardware's unit_set_param_value() path does the same thing (K-rate,
+    // one knob turn = one apply).
+    {
+      const uint32_t req = sim_edit_request_;
+      if (req & (1U << 31))
+      {
+        const uint8_t idx = (uint8_t)(req & 0x1FU);
+        const int32_t raw = (int32_t)((req >> 8) & 0x3FFU);
+        if (idx < kEditParamCount)
+        {
+          edit_value_[idx] = raw;
+          select_ = idx;
+          apply_edit_param(kEditParamFirst + idx, raw);
+        }
+        sim_edit_request_ = 0;
+      }
+    }
+#endif
+
     // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
     const Params p = params_;
 
@@ -541,21 +676,19 @@ public:
     // code). rw_amount is the quadratic-mapped knob value (see setParameter),
     // so rw_active is true for any non-zero knob position.
     //
-    // RATE AMT = maximum deviation (hard ceiling) for BOTH osc A and osc B:
-    // each voice's detune deviation is limited to +/-rw_.max_dev =
-    // +/-rw_amount*RandomWalk::kMaxCents cents, so neither voice strays further from its
-    // DETUNE knob value than AMT allows. The two channels wander with
-    // INDEPENDENT random targets (chosen on the same period), so the
-    // inter-voice beat frequency shifts over time — an asymmetric, ever-
-    // changing chorus.
+    // The walk state (rw_.dev_a/b) is NORMALIZED to [-1, +1]; RATE AMT (the
+    // quadratic-mapped rw_amount) is the depth ceiling, and the audio path
+    // scales it to cents (kRwDetuneScaleCents = +/-10 cents) so neither voice
+    // strays further from its DETUNE knob value than AMT allows. The two
+    // channels wander with INDEPENDENT random targets (chosen on the same
+    // period), so the inter-voice beat frequency shifts over time — an
+    // asymmetric, ever-changing chorus.
     //
-    // The deviations smoothly track random targets that are regenerated
-    // periodically, ensuring |dev| <= rw_.max_dev always.
-    //
-    // RATE SPD = restlessness: controls how often the targets change and how
-    // quickly the deviations track them. High SPD -> frequent target updates
-    // and fast tracking (restless), low SPD -> rare updates and slow tracking
-    // (lazy drift).
+    // The deviations smoothly track random targets (see RandomWalk::advance)
+    // that are regenerated every `interval` samples. RATE SPD sets that period
+    // (0.1 s .. 10 s), RATE SMTH sets the tracking time constant (10 ms ..
+    // 1.5 s); keeping them independent makes the audible depth stable
+    // regardless of SPEED.
     // (The A-H-R envelope is advanced per-sample inside the loop below; the
     // relaxation coefficients are cached once per block for cheap access.)
     const float alpha_a = eg_alpha_a_;
@@ -583,9 +716,9 @@ public:
     const float wave_base_b = p.wave_b + waves_.wave_shift_;
     if (rw_active)
     {
-      // Recompute the tracking coefficient and target update interval from the
-      // rate parameters (rw_rate / rw_amount may have changed).
-      rw_.setup(p.rw_rate, p.rw_amount);
+      // Recompute the ceiling / interval / tracking from the rate parameters
+      // (any of rw_rate / rw_amount / rw_smooth may have changed).
+      rw_.setup(p.rw_rate, p.rw_amount, p.rw_smooth);
       // Initialize the targets to the current deviations on first activation
       if (rw_.target_a == 0.f && rw_.dev_a != 0.f)
         rw_.target_a = rw_.dev_a;
@@ -593,17 +726,40 @@ public:
         rw_.target_b = rw_.dev_b;
     }
 
+    // Random-walk scaled values (computed per-sample inside the loop below).
+    // rw_.dev_a/b are normalized to [-1, +1] and advance per-sample via
+    // rw_.advance(). Each walk target scales them to its own units at the
+    // point of use: detune (cents), morph (tables), drive, fold. The scaled
+    // values must be recomputed every sample (not cached per-block) because
+    // rw_.advance() moves dev_a/b on every sample.
+    const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
+    const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
+    const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
+
     for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
     {
-      // update random-walk detune deviations (cents) around the knob values
+      // update random-walk deviations (advance once per sample when active).
+      float rw_dev_a_cents = 0.f;
+      float rw_dev_b_cents = 0.f;
       if (rw_active)
       {
         rw_.advance(p.rw_amount, osc_white);
-        // recompute w0_a / w0_b from effective detune (base + walk).
+        // Per-sample scaled walk values (dev_a/b change every sample).
+        rw_dev_a_cents = rw_.dev_a * kRwDetuneScaleCents;
+        rw_dev_b_cents = rw_.dev_b * kRwDetuneScaleCents;
+        // recompute w0_a / w0_b from effective detune (base + scaled walk).
         // 4th-order Taylor via Detune::w0_detuned (see osc_detune.h).
-        w0_a = Detune::w0_detuned(w0, p.detune_a_cents + rw_.dev_a);
-        w0_b = Detune::w0_detuned(w0, p.detune_cents + rw_.dev_b);
+        w0_a = Detune::w0_detuned(w0, p.detune_a_cents + rw_dev_a_cents);
+        w0_b = Detune::w0_detuned(w0, p.detune_cents + rw_dev_b_cents);
       }
+      const float rw_dev_a_tables = rw_wav_active ? rw_.dev_a * kRwMorphScaleTables : 0.f;
+      const float rw_dev_b_tables = rw_wav_active ? rw_.dev_b * kRwMorphScaleTables : 0.f;
+      const float rw_dev_drive    = rw_drv_active ? rw_.dev_a * kRwDriveScale : 0.f;
+      // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld).
+      // p.rw_fld is 0..1 (RFLD knob). At RFLD=0 -> eff_fold = p.fold_depth (no mod).
+      // At RFLD=100% -> eff_fold wanders from 0 to 2*p.fold_depth (clamped to 1).
+      // When p.fold_depth = 0, eff_fold = 0 regardless of rw_dev_fold (no fold).
+      const float rw_fold_mod = rw_fld_active ? rw_.dev_b * p.rw_fld : 0.f;
 
       // phasor update
       phasor_a_ += w0_a;
@@ -652,8 +808,15 @@ public:
       // timbre "breathes" across the wavetable. WaveTable::resolve_wave() crossfades the
       // fractional part between adjacent tables, so the morph glides smoothly.
       const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
-      const float wav_a = WaveTable::resolve_wave(wave_base_a + lfo_morph, phasor_a_);
-      const float wav_b = WaveTable::resolve_wave(wave_base_b + lfo_morph, phasor_b_);
+      // Wavetable scan positions: base (WAV1/WAV2 knob) + LFO morph (platform
+      // shape-LFO) + random-walk morph (RW_WAV knob, via rw_dev_a/b_tables).
+      // The walk morph is added so each voice wanders through the 91 Korg
+      // wavetables around its knob position — an unpredictable, organic
+      // timbre drift that the static LFO sweep alone cannot produce.
+      const float wav_a_pos = wave_base_a + lfo_morph + rw_dev_a_tables;
+      const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables;
+      const float wav_a = WaveTable::resolve_wave(wav_a_pos, phasor_a_);
+      const float wav_b = WaveTable::resolve_wave(wav_b_pos, phasor_b_);
 
       // Chord voice: third oscillator at a selectable interval above the base
       // (CINT knob: OFF/5TH/OCT/O+5/M3). Uses the WAV1 (osc A) wavetable so
@@ -683,8 +846,23 @@ public:
       // / (1 + lvl)) keeps the saturator's peak budget unchanged from the
       // 2-osc case.
       const float mix = kMixOsc * (wav_a + wav_b + wav_c * chord_gain);
-      const float folded = Saturator::fold(mix, p.fold_depth);
-      const float y = Saturator::saturate(folded, p.drive, p.asym);
+      // Wavefolder depth: FOLD knob modulated by random-walk fold (RW_FLD knob).
+      // Multiplicative: eff_fold = p.fold_depth * (1 + rw_fold_mod), where
+      // rw_fold_mod = dev_b * p.rw_fld (normalized -1..1 * 0..1 = -1..1).
+      // At RFLD=0: eff_fold = p.fold_depth (no modulation).
+      // At RFLD=100%: eff_fold wanders from 0 to 2*p.fold_depth (clamped to 1).
+      // When p.fold_depth = 0: eff_fold = 0 (no fold, RFLD has no effect).
+      float eff_fold = p.fold_depth * (1.f + rw_fold_mod);
+      if (eff_fold < 0.f) eff_fold = 0.f;
+      else if (eff_fold > 1.f) eff_fold = 1.f;
+      // Saturator drive: SATU knob + random-walk drive (RW_DRV knob, via
+      // rw_dev_drive, per-sample). Clamp to 0..kSatuMax so the walk never
+      // pushes the drive beyond the saturator's stable range.
+      float eff_drive_clamped = p.drive + rw_dev_drive;
+      if (eff_drive_clamped < 0.f) eff_drive_clamped = 0.f;
+      else if (eff_drive_clamped > kSatuMax) eff_drive_clamped = kSatuMax;
+      const float folded = Saturator::fold(mix, eff_fold);
+      const float y = Saturator::saturate(folded, eff_drive_clamped, p.asym);
 
       // ---- advance the A-H-R envelope by one sample ----
       // (per-sample so the 2 s phases are sample-accurate at any block size)

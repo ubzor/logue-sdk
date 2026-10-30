@@ -29,8 +29,9 @@ struct OscParamsData
   float detune_cents;   // -100.f .. +100.f, knob A (osc B)
   float detune_a_cents; // -100.f .. +100.f, knob A (osc A)
   float drive;          // 0.f .. 3.f, knob B
-  float rw_amount;    // 0.f .. 1.f, edit: random-walk depth
-  float rw_rate;      // 0.f .. 1.f, edit: random-walk speed
+  float rw_amount;    // 0.f .. 1.f, edit: random-walk depth (quadratic-mapped)
+  float rw_rate;      // 0.f .. 1.f, edit: random-walk period (0.1 s .. 10 s, log)
+  float rw_smooth;    // 0.f .. 1.f, edit: random-walk time constant (10 ms .. 1.5 s, log)
   float sub_level;    // 0.f .. 1.f, edit: sub-octave (f/2) sine level
   float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
   float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
@@ -38,21 +39,32 @@ struct OscParamsData
   float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
   float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
   float chord_level;  // 0.f .. 1.f, edit: chord-voice level
+  float chord_cents;  // 0.f .. ChordVoice::kMaxCents (1900), edit: chord interval (CINT)
+  float rw_wav;       // 0.f .. 1.f, edit: random-walk depth on wavetable morph (RW_WAV)
+  float rw_drv;       // 0.f .. 1.f, edit: random-walk depth on saturator drive (RW_DRV)
+  float rw_fld;       // 0.f .. 1.f, edit: random-walk depth on wavefolder depth (RW_FLD)
 
   void reset()
   {
     detune_cents = 0.f;     // default: in tune
     detune_a_cents = 0.f;   // default: in tune
-    drive = 2.f;            // default: moderate drive (50% of 0..3 range)
+    drive = 1.0f;           // default: gentle drive (transparent, ~33% of 0..3)
     rw_amount = 0.f;    // default: random walk off
-    rw_rate = 0.5f;     // default: mid speed
+    rw_rate = 0.5f;     // default: mid period (~3.2 s)
+    rw_smooth = 0.5f;   // default: mid time constant (~0.12 s)
     sub_level = 0.5f;   // default: half-level sub
-    sub2_level = 0.f;   // default: second sub off (regression-safe)
-    fold_depth = 0.f;   // default: wavefolder off (regression-safe)
-    asym = 0.f;         // default: symmetric saturator (regression-safe)
+    sub2_level = 0.2f;  // default: light f/4 sub for low-end body
+    fold_depth = 0.f;   // default: wavefolder off
+    asym = 0.f;         // default: symmetric saturator
     wave_a = 0.f;       // default: first wave of bank A
-    wave_b = 0.f;       // default: first wave of bank A
-    chord_level = 0.f;  // default: chord voice off (regression-safe)
+    wave_b = 11.f;      // default: a different (still airy) wave from bank A
+    chord_level = 0.2f; // default: soft chord voice
+    chord_cents = 700.f;// default: perfect fifth (~700 cents)
+    rw_wav = 0.f;       // default: walk off for wavetable morph
+    rw_drv = 0.f;       // default: walk off for drive
+    rw_fld = 0.f;       // default: walk off for fold depth (was 0.5: dead knob at stock RATE=0,
+                        // and the multiplexer bug made it sound like a phantom LFO before the
+                        // direct-channel fix. 0 keeps the stock sound bit-identical.)
   }
 
   OscParamsData() { reset(); }

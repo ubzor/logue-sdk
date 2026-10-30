@@ -296,25 +296,16 @@ bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
 
   for (int i = 0; i < numParams; ++i)
   {
-    // Slots 2/3 are the optional (edit-menu) duplicates of slots 0/1 (see
-    // header.c). They carry the same state as 0/1, so applying them here
-    // would be a redundant second write of the same value to the same
-    // underlying state (select_ / edit_value_). Skip them; the UI keeps the
-    // four WebAudioParams in sync on the JS side, so 0/1 always reflect the
-    // latest user input.
-    if (i == 2 || i == 3)
-      continue;
-
-    // K-rate parameter: use the first sample for the frame.
-    // The Web Audio Param carries the unit's native integer range [min,max]
-    // (see AudioThreadInitialized). Round the first sample to the nearest
-    // integer and forward it, exactly as the hardware runtime does
-    // (setParameter takes a 10-bit integer, not a float).
-    const float v = params[i].data[0];
-    const AudioWorkletParameter p = valid_parameters_ref()[i];
-    const int ival = static_cast<int>(v + 0.5f);
-    const int clamped = (ival < p.min) ? p.min : (ival > p.max) ? p.max : ival;
-    processor.setParameter(i, clamped);
+    // Web simulator only: the per-parameter sliders drive the DSP through
+    // the direct edit-parameter channel (Osc::simEditRequest, see wasm.cc
+    // setEditParam), NOT through WebAudioParam slots 0..3. The slots are
+    // kept in the descriptor only so the audio-worklet engine can
+    // instantiate the node with the same shape the hardware uses (4
+    // type_strings parameters), but their values are ignored here. On
+    // hardware these slots are the PARAM/VALUE multiplexer and are driven
+    // by the platform's unit_set_param_value() callback; the web simulator
+    // has no platform, so the UI talks to the DSP directly.
+    (void)i;
   }
 
   // emscripten_log(EM_LOG_CONSOLE, "bpm=%d", fx_get_bpmf());
@@ -410,8 +401,22 @@ extern "C" int getEditParamValue(int idx)
   return static_cast<int>(processor.getEditValue(static_cast<uint8_t>(idx)));
 }
 
+// Write one edit-parameter (index 0..16, raw 0..1023) to the DSP through
+// the direct channel (Osc::simEditRequest). The audio worklet thread picks
+// the request up on its next process() call and applies the (select_,
+// PARAM_VAL) pair atomically -- the same semantics the hardware's
+// unit_set_param_value() has. This replaces the old per-slider WebAudioParam
+// writes, which suffered K-rate smoothing and caused select_ to sweep
+// through intermediate values, re-applying a different edit parameter each
+// time (audible as a phantom LFO).
+extern "C" void setEditParam(int idx, int raw)
+{
+  processor.simEditRequest(static_cast<uint8_t>(idx), static_cast<int32_t>(raw));
+}
+
 EMSCRIPTEN_BINDINGS(drone_ui)
 {
   emscripten::function("getSelectParam", &getSelectParam);
   emscripten::function("getEditParamValue", &getEditParamValue);
+  emscripten::function("setEditParam", &setEditParam);
 }

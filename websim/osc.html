@@ -86,38 +86,49 @@
 
       // The unit exposes its DSP knobs through a PARAM/VALUE multiplexer on
       // the hardware (knob A = PARAM_SEL, knob B = PARAM_VAL; see header.c and
-      // osc.h). The simulator renders each of the 13 selectable parameters as
+      // osc.h). The simulator renders each of the 17 selectable parameters as
       // its own slider instead of the 4 header slots, which is equivalent but
-      // more convenient. Every slider drives the same two WebAudioParams the
-      // multiplexer uses:
-      //   slot 0 "PARAM" (PARAM_SEL, 0..12)  -> selects the parameter
-      //   slot 1 "VALUE" (PARAM_VAL, 0..1023) -> its raw 10-bit value
-      // The worklet (wasm.cc ProcessAudio) applies only slots 0/1 and skips the
-      // duplicate slots 2/3.
-      const EDIT_PARAM_COUNT = 13;
+      // more convenient.
+      //
+      // Each slider talks to the DSP through the direct edit-parameter
+      // channel (Module.setEditParam, see wasm.cc), NOT through WebAudioParam
+      // slots 0/1. The direct channel packs (index, raw) into a single 32-bit
+      // slot that the audio worklet thread consumes once per block -- the
+      // (select_, PARAM_VAL) pair is applied atomically, exactly like the
+      // hardware's unit_set_param_value() callback. The old WebAudioParam
+      // path suffered K-rate smoothing: moving a slider made select_ sweep
+      // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
+      // which re-applied a different edit parameter to the DSP, producing
+      // audible glitches that looked like a phantom LFO.
+      const EDIT_PARAM_COUNT = 17;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
-      // 0 DET1, 1 DET2, 2 RATE, 3 SPEE, 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
-      // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD, 12 CINT.
+      // 0 DET1, 1 DET2, 2 RATE, 3 SPEE, 4 SMTH, 5 SUB1, 6 SUB2, 7 SATU, 8 ASYM,
+      // 9 FOLD, 10 WAV1, 11 WAV2, 12 CHRD, 13 CINT, 14 RWAV, 15 RDRV, 16 RFLD.
       const EDIT_PARAM_NAMES = [
-        "DET1", "DET2", "RATE", "SPEE", "SUB1",
+        "DET1", "DET2", "RATE", "SPEE", "SMTH", "SUB1",
         "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
+        "RWAV", "RDRV", "RFLD",
       ];
 
-      // Format the raw 10-bit value (0..1023) of one of the 13 editable
-      // parameters for display (idx = select_ index 0..12):
+      // Format the raw 10-bit value (0..1023) of one of the 17 editable
+      // parameters for display (idx = select_ index 0..16):
       //   0: DET1  - detune osc B (-100..+100 cents)
       //   1: DET2  - detune osc A (-100..+100 cents)
       //   2: RATE  - random-walk depth (0..100%)
-      //   3: SPEE  - random-walk speed (0..100%)
-      //   4: SUB1  - sub-octave sine level (0..100%)
-      //   5: SUB2  - second sub level (0..100%)
-      //   6: SATU  - saturator drive (0..300)
-      //   7: ASYM  - asymmetric saturator (-100%..+100%)
-      //   8: FOLD  - pre-drive wavefolder depth (0..100%)
-      //   9: WAV1  - osc A wavetable (0..90)
-      //  10: WAV2  - osc B wavetable (0..90)
-      //  11: CHRD  - chord-voice level (0..100%)
-      //  12: CINT  - chord interval (0..1900 cents, continuous)
+      //   3: SPEE  - random-walk period (0.1 s .. 10 s, log) -> %
+      //   4: SMTH  - random-walk time constant (10 ms .. 1.5 s, log) -> ms
+      //   5: SUB1  - sub-octave sine level (0..100%)
+      //   6: SUB2  - second sub level (0..100%)
+      //   7: SATU  - saturator drive (0..300)
+      //   8: ASYM  - asymmetric saturator (-100%..+100%)
+      //   9: FOLD  - pre-drive wavefolder depth (0..100%)
+      //  10: WAV1  - osc A wavetable (0..90)
+      //  11: WAV2  - osc B wavetable (0..90)
+      //  12: CHRD  - chord-voice level (0..100%)
+      //  13: CINT  - chord interval (0..1900 cents, continuous)
+      //  14: RWAV  - random-walk depth on wavetable morph (0..100%)
+      //  15: RDRV  - random-walk depth on saturator drive (0..100%)
+      //  16: RFLD  - random-walk depth on wavefolder depth (0..100%)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
         //   WAV1/WAV2 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
@@ -125,11 +136,12 @@
         //   DET1/DET2 -> +/-100 cents, centered on the raw MIDPOINT (511),
         //                NOT 1023: (raw-511)*100/511. Full knob (1023) reads +100.
         //   SATU      -> 0..300 (drive 0..3.0)
-        //   CINT      -> interval name (OFF/5TH/OCT/O+5/M3)
+        //   SMTH      -> 10..1500 ms (tau_ms = 10 * 100^(raw/1023), log)
+        //   CINT      -> interval cents (0..1900)
         //   others    -> 0..100%
-        if (idx === 9 || idx === 10)
+        if (idx === 10 || idx === 11)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
-        if (idx === 7) {
+        if (idx === 8) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
@@ -137,9 +149,12 @@
           const cents = Math.round(((raw - 511) * 100) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 6)
+        if (idx === 7)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100
-        if (idx === 12) {
+        // SMTH: display as 0..100% (same as RATE / SPEE); the actual ms value
+        // (10..1500) is a log mapping, but % keeps the display consistent.
+        // (idx === 4 falls through to the default % branch below)
+        if (idx === 13) {
           // CINT: 0..1900 cents (continuous interval)
           return Math.round((raw / 1023) * 1900) + "c";
         }
@@ -147,10 +162,10 @@
       }
 
       // One slider per selectable parameter (instead of the hardware's
-      // PARAM/VALUE knob pair). Moving slider i selects parameter i (slot 0)
-      // and writes its raw value (slot 1) in the same JS tick, so the worklet
-      // always sees a consistent (select_, PARAM_VAL) pair — the same atomic
-      // write the old PARAM-selector + VALUE-slider UI had to do manually.
+      // PARAM/VALUE knob pair). Moving slider i writes (i, raw) to the DSP
+      // through the direct edit-parameter channel (Module.setEditParam) —
+      // the (select_, PARAM_VAL) pair is applied atomically by the worklet
+      // thread, the same write the hardware's unit_set_param_value() does.
       function createEditableParam(wasmProcessor, index) {
         let container = document.createElement("div");
 
@@ -174,14 +189,14 @@
         let value_string = document.createElement("span");
         container.appendChild(value_string);
 
-        const paramSel = wasmProcessor.parameters.get("0"); // PARAM_SEL (slot 0)
-        const paramVal = wasmProcessor.parameters.get("1"); // PARAM_VAL (slot 1)
-
         const apply = (raw) => {
           input.value = raw;
           value_string.textContent = formatParamValue(index, raw);
-          paramSel.value = index; // select this parameter
-          paramVal.value = raw;   // its raw 10-bit value
+          // Direct channel: bypasses WebAudioParam smoothing. The worklet
+          // thread applies (select_ = index, PARAM_VAL = raw) atomically on
+          // its next block, so the DSP never sees an intermediate select_
+          // value (the old path's phantom-LFO bug).
+          if (Module.setEditParam) Module.setEditParam(index, raw);
         };
 
         input.oninput = () => apply(parseInt(input.value, 10));
