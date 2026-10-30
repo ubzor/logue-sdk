@@ -74,6 +74,23 @@
       // plain range slider for everything else.
       const K_UNIT_PARAM_TYPE_STRINGS = 12;
 
+      // JS-side cache of the raw 10-bit value (0..1023) for each of the 11
+      // editable parameters. Kept in sync with the worklet's edit_value_[] by
+      // every write the UI performs. Used to make PARAM-selector changes
+      // atomic with the VALUE: when the user switches the selected parameter,
+      // we write BOTH the new selector AND the newly-selected parameter's own
+      // cached value in the same JS tick, so the worklet never sees a frame
+      // where select_=new but value=old (or vice versa) — which is what caused
+      // the audible "hiccup" when switching parameters.
+      //
+      // Initialized from the main-thread processor at startup (before the
+      // worklet has diverged, so main-thread == worklet state).
+      const editCache = new Array(11).fill(0);
+      for (let i = 0; i < 11; ++i) {
+        editCache[i] = (Module.getEditParamValue) ? Module.getEditParamValue(i) : 0;
+      }
+
+
       // Format the raw 10-bit value (0..1023) of one of the 11 editable
       // parameters for display. Index order matches the C++ enum in osc.h
       // (kEditParamFirst = DETUNE = 2, so the editable range is 2..12):
@@ -117,10 +134,6 @@
         let value_string = document.createElement("span");
         container.appendChild(value_string);
 
-        // Emscripten's API creates these from a C array, indexing them instead of a
-        // name. Chrome and FF work with 0 but Safari requires the correct "0".
-        let audio_parameter = wasmProcessor.parameters.get(`${index}`);
-
         // Stable ids for cross-control sync.
         const controlId = "param_" + index;
 
@@ -133,6 +146,17 @@
         // on the C++ side; the JS side keeps the four DOM controls in sync.
         const isParamSel = (index === 0 || index === 2);
         const isParamVal = (index === 1 || index === 3);
+
+        // The worklet (wasm.cc ProcessAudio) applies ONLY slots 0/1 and skips
+        // 2/3 (they are duplicates that would write the same state twice). So
+        // the WebAudioParam that actually reaches the DSP is:
+        //   - slot 0 for the PARAM selectors (index 0 or 2)
+        //   - slot 1 for the VALUE sliders  (index 1 or 3)
+        // All four controls write to that single "truth" param, so the right-
+        // hand (optional) duplicates are fully functional, not decorative.
+        const dsp_param = isParamSel
+          ? wasmProcessor.parameters.get("0")
+          : wasmProcessor.parameters.get("1");
 
         if (isParamSel) {
           // PARAM (knob A): parameter selector. Render a <select> with one
@@ -153,10 +177,20 @@
           container.appendChild(select);
           value_string.textContent = Module.getParameterValueString(index, select.value);
           select.onchange = () => {
-            // Write to this slot's WebAudioParam (the worklet skips 2/3, so
-            // only slot 0's param actually reaches the DSP — but keeping both
-            // in sync mirrors what the hardware does for a duplicate slot).
-            audio_parameter.value = select.value;
+            const newSelect = parseInt(select.value, 10);
+            // The newly-selected parameter's raw value, from the JS-side cache
+            // (kept in sync by every VALUE write). This is the value the
+            // worklet will apply as soon as select_ flips — so we must write
+            // it to slot 1 in the SAME tick as the new select_, or the worklet
+            // will apply the old select_ with the new value (or vice versa)
+            // for one audio block, causing an audible hiccup.
+            const raw = editCache[newSelect];
+            // ATOMIC: write the new selector (slot 0) AND the newly-selected
+            // parameter's own cached value (slot 1) in one synchronous block.
+            // Both land in the next worklet ProcessAudio() call, so the DSP
+            // sees a consistent (select_, edit_value_[select_]) pair.
+            dsp_param.value = select.value;                              // slot 0 (select)
+            wasmProcessor.parameters.get("1").value = raw;               // slot 1 (value)
             // Mirror into the other PARAM selector (slot 0 <-> slot 2).
             const otherSelect = document.getElementById(index === 0 ? "param_2" : "param_0");
             if (otherSelect && otherSelect.value !== select.value) {
@@ -167,10 +201,7 @@
             }
             // Update this selector's own label.
             value_string.textContent = Module.getParameterValueString(index, select.value);
-            // Sync both VALUE sliders (slot 1 and 3) to the newly selected
-            // parameter's cached raw value.
-            const newSelect = parseInt(select.value, 10);
-            const raw = Module.getEditParamValue ? Module.getEditParamValue(newSelect) : 0;
+            // Sync both VALUE sliders (slot 1 and 3) DOM to the cached value.
             for (const valId of ["param_1", "param_3"]) {
               const valueSlider = document.getElementById(valId);
               if (valueSlider) {
@@ -194,24 +225,35 @@
           input.style.width = "200px";
           input.style.marginRight = "10px";
           container.appendChild(input);
-          // Initialize the display from the processor's cached value of the
-          // currently selected parameter (not the raw 0 that param.init
+          // Initialize the display from the JS-side cache of the currently
+          // selected parameter's raw value (not the raw 0 that param.init
           // would show). The PARAM dropdown is created before the VALUE
           // slider, so it is already in the DOM.
           const sel = document.getElementById("param_0");
           if (sel) {
             const idx = parseInt(sel.value, 10);
-            const raw = Module.getEditParamValue ? Module.getEditParamValue(idx) : 0;
+            const raw = editCache[idx];
             input.value = raw;
             value_string.textContent = formatParamValue(idx, raw);
           } else {
             value_string.textContent = Module.getParameterValueString(index, input.value);
           }
           input.oninput = () => {
-            // Write to this slot's WebAudioParam (worklet skips 2/3).
-            audio_parameter.value = input.value;
             const sel2 = document.getElementById("param_0");
             const rawNow = parseInt(input.value, 10);
+            // Keep the JS-side cache in sync BEFORE writing to the DSP, so a
+            // subsequent PARAM-selector change in the same or next tick reads
+            // the up-to-date value (this is what makes the atomic PARAM+VALUE
+            // write in select.onchange correct).
+            if (sel2) {
+              const selIdx = parseInt(sel2.value, 10);
+              editCache[selIdx] = rawNow;
+            }
+            // Write to the DSP-truth WebAudioParam (slot 1). The worklet
+            // applies only slot 1 for VALUE sliders (it skips slot 3), so both
+            // the fixed (1) and optional (3) sliders drive the same parameter
+            // that reaches the DSP.
+            dsp_param.value = input.value;
             if (sel2) {
               const idx = parseInt(sel2.value, 10);
               value_string.textContent = formatParamValue(idx, rawNow);
