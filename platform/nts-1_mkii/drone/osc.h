@@ -72,6 +72,9 @@
 #include "utils/float_math.h" // fastertanh2f()
 #include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
 #include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
+#include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
+#include "osc_random_walk.h"  // RandomWalk: dual-channel detune wandering
+#include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
 
 class Osc : public Processor
 {
@@ -140,7 +143,6 @@ public:
 
   // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
   // The detune never strays further from the DETUNE knob value than this.
-  static constexpr float kRwMaxCents = 10.f;
 
   // Fixed sub-octave detune: the sub sine runs slightly flat (−4 cents) so
   // it "breathes" against the saws instead of locking to them. A few cents
@@ -156,31 +158,6 @@ public:
   // (The LFO -> wavetable morph depth lives in WaveTable::kLfoMorphDepth,
   // see osc_waves.h.)
 
-  // ---- Second sub voice (SUB2): f/4, very-soft-saturated, LPF'd, gated ----
-  // Drive level into the soft saturator for the second sub. Kept deliberately
-  // low (~1.3) so it only "rounds" the clean f/4 sine and adds body/thickness
-  // without turning it into a distorted bass. The saturator generates odd
-  // (and a little even) harmonics; the LPF below then trims those so the
-  // voice stays in the low end rather than muddying the mids.
-  static constexpr float kSub2Drive = 1.3f;
-
-  // One-pole LPF cutoff for the second sub, in Hz. Chosen ~200 Hz so the
-  // saturator's 3rd/5th harmonics of an f/4 fundamental (which sit an octave
-  // or two above it) are tamed while the fundamental and the body below it
-  // pass untouched. The per-sample coefficient is folded into a literal in
-  // update_w0_sub2() (no division in the audio path).
-  static constexpr float kSub2LpfCutoffHz = 200.f;
-
-  // Pitch gate for the second sub: the f/4 voice is fully silenced (gate -> 0)
-  // once its fundamental drops below kSub2GateHz, because at very low notes
-  // f/4 becomes infrasonic (e.g. C1 = 32.7 Hz -> f/4 = 8.2 Hz) and would only
-  // waste headroom / muddy the mix. The boundary in terms of the *base* (saw)
-  // frequency is 4 * kSub2GateHz (≈120 Hz ≈ C3). The gate opens/closes with a
-  // short smoothing time constant so switching notes never clicks.
-  static constexpr float kSub2GateHz = 30.f;
-  // Gate smoothing: ~5 ms first-order time constant for the open/close
-  // transition (precomputed per-sample coefficient in process()).
-  static constexpr float kSub2GateTauSec = 0.005f;
 
   // Pre-drive wavefolder: before the tanh saturator, mix is folded into
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
@@ -195,24 +172,20 @@ public:
   //
   // DET1/DET2 span +/-kDetuneMaxCents around 0 cents, centered on the raw
   // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
-  // RATE SPD spans kRwPeriodMinSec..kRwPeriodMaxSec (log, 100^x) — 0.1 s to 10 s.
+  // RATE SPD spans RandomWalk::kPeriodMinSec..RandomWalk::kPeriodMaxSec (log, 100^x) — 0.1 s to 10 s.
   static constexpr float    kDetuneMaxCents    = 100.f;
   static constexpr float    kSatuMax           = 3.f;   // 0..3.0 drive level
-  static constexpr float    kRwPeriodMinSec    = 0.1f;  // fastest random-walk period
-  static constexpr float    kRwPeriodMaxSec    = 10.f;  // slowest  (ratio = 100)
   static constexpr int32_t  kRawMid            = 511;   // raw 10-bit value == 0%
   static constexpr int32_t  kRawMax            = 1023;  // raw 10-bit value == 100%
 
-  // ---- Audio-path mix & saturator constants ----
+  // ---- Audio-path mix constants ----
   // Final-mix gains. Worst-case peaks: |y*kMixOsc|<0.5,
   // |sub*kMixSub|<0.4, |sub2*kMixSub2|<0.3 (branches rarely peak together,
   // and the final hard-clip guards the sum).
   static constexpr float kMixOsc  = 0.5f;
   static constexpr float kMixSub  = 0.4f;
   static constexpr float kMixSub2 = 0.3f;
-  // Stable drive limit for the asymmetric saturator: keeps the tanh argument
-  // in (-1, 1) even when |asym| scales a half up (see process()).
-  static constexpr float kSatDriveLimit = 0.9f;
+  // (The saturator drive limit lives in Saturator::kDriveLimit, see osc_saturator.h.)
 
   // ---- Sample-rate / reference-frequency helpers ----
   // getSampleRate() (Processor base) returns 48000.f for all logue products;
@@ -285,14 +258,14 @@ public:
         const float x = param_10bit_to_f32(value);
         params_.rw_amount = x * x;
       }
-      rw_max_dev_ = params_.rw_amount * kRwMaxCents;
+      rw_.max_dev = params_.rw_amount * RandomWalk::kMaxCents;
       break;
 
     case RATE_SPD:
       params_.rw_rate = param_10bit_to_f32(value);
       {
-        const float period = kRwPeriodMinSec * fasterpowf(100.f, params_.rw_rate);
-        rw_target_update_interval_ = (uint32_t)(period * kSampleRate);
+        const float period = RandomWalk::kPeriodMinSec * fasterpowf(100.f, params_.rw_rate);
+        rw_.interval = (uint32_t)(period * kSampleRate);
       }
       break;
 
@@ -434,8 +407,8 @@ public:
     phasor_b_ = 0.f;
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
-    sub2_lpf_state_ = 0.f;
-    sub2_gate_ = 0.f;
+    sub2_.lpf_state = 0.f;
+    sub2_.gate = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
     // Parameter selector: start with DETUNE (select_ = 0) selected.
@@ -447,13 +420,7 @@ public:
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
     waves_.update(w0_); // resolve default wavetable pointers from params_
-    rw_dev_a_cents_ = 0.f; // random-walk state (osc A) starts centered
-    rw_dev_b_cents_ = 0.f; // random-walk state (osc B) starts centered
-    rw_target_a_cents_ = 0.f; // random-walk target (osc A) starts centered
-    rw_target_b_cents_ = 0.f; // random-walk target (osc B) starts centered
-    rw_target_update_counter_ = 0; // reset target update counter
-    rw_max_dev_ = 0.f; // random-walk hard ceiling starts at 0 (AMT=0)
-    rw_target_update_interval_ = (uint32_t)kSampleRate; // random-walk interval starts at 1s (default)
+    rw_.reset(); // random-walk state starts centered, AMT=0
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_.reset();
@@ -472,13 +439,9 @@ public:
     phasor_b_ = 0.f;
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
-    sub2_lpf_state_ = 0.f;
-    sub2_gate_ = 0.f;
-    rw_dev_a_cents_ = 0.f; // re-center the random walk (osc A) on stop
-    rw_dev_b_cents_ = 0.f; // re-center the random walk (osc B) on stop
-    rw_target_a_cents_ = 0.f; // re-center the random-walk target (osc A) on stop
-    rw_target_b_cents_ = 0.f; // re-center the random-walk target (osc B) on stop
-    rw_target_update_counter_ = 0; // reset target update counter
+    sub2_.lpf_state = 0.f;
+    sub2_.gate = 0.f;
+    rw_.reset(); // re-center the random walk on stop
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
     eg_.reset();
@@ -558,7 +521,6 @@ public:
 
     // base phase increment
     const float w0 = w0_;
-    const float drive = p.drive;
 
     // ---- Random-walk detune deviation (target-based wandering, dual channel) ----
     // When rw_amount == 0 (knob at 0) the walk is disabled and w0_a / w0_b are
@@ -567,15 +529,15 @@ public:
     // so rw_active is true for any non-zero knob position.
     //
     // RATE AMT = maximum deviation (hard ceiling) for BOTH osc A and osc B:
-    // each voice's detune deviation is limited to +/-rw_max_dev_ =
-    // +/-rw_amount*kRwMaxCents cents, so neither voice strays further from its
+    // each voice's detune deviation is limited to +/-rw_.max_dev =
+    // +/-rw_amount*RandomWalk::kMaxCents cents, so neither voice strays further from its
     // DETUNE knob value than AMT allows. The two channels wander with
     // INDEPENDENT random targets (chosen on the same period), so the
     // inter-voice beat frequency shifts over time — an asymmetric, ever-
     // changing chorus.
     //
     // The deviations smoothly track random targets that are regenerated
-    // periodically, ensuring |dev| <= rw_max_dev_ always.
+    // periodically, ensuring |dev| <= rw_.max_dev always.
     //
     // RATE SPD = restlessness: controls how often the targets change and how
     // quickly the deviations track them. High SPD -> frequent target updates
@@ -586,18 +548,8 @@ public:
     const float alpha_a = eg_alpha_a_;
     const float alpha_r = eg_alpha_r_;
 
-    // ---- Second sub (SUB2) fixed coefficients, cached once per block ----
-    // The f/4 voice is a clean sine run through a very soft saturator
-    // (kSub2Drive), then a one-pole LPF (sub2_lpf_a_, cuts the saturator's
-    // harmonics so the voice stays in the low end) and a pitch gate (closes
-    // when the base frequency drops below sub2_gate_hz_, i.e. f/4 < 30 Hz).
-    // All three are precomputed in update_w0_sub2(); the LPF state and the
-    // smoothed gate amplitude are per-sample members (sub2_lpf_state_,
-    // sub2_gate_).
+    // ---- Second sub (SUB2) level (see osc_sub2.h for the voice DSP) ----
     const float sub2_level = p.sub2_level;
-    const float sub2_a = sub2_lpf_a_;
-    const float sub2_k = sub2_gate_k_;
-    const float sub2_gate_hz = sub2_gate_hz_;
 
     const bool rw_active = p.rw_amount > 0.f;
     float w0_a = w0_a_; // default: cached static detune (osc A)
@@ -610,20 +562,14 @@ public:
     const float wave_base_b = p.wave_b + waves_.wave_shift_;
     if (rw_active)
     {
-      // Compute the tracking coefficient once per block (rw_rate may change)
-      // period = 0.1 * 100^rw_rate seconds
-      const float period = kRwPeriodMinSec * fasterpowf(100.f, p.rw_rate);
-      // Tracking coefficient: how quickly the deviations move toward the targets.
-      // Higher k = faster tracking. k = 1 / (1 + tau * 48000) where tau is the
-      // relaxation time (we use period as tau for simplicity). Shared by both
-      // channels so the two voices drift in lockstep in speed, only the targets
-      // differ.
-      rw_k_ = 1.f / (1.f + period * kSampleRate);
+      // Recompute the tracking coefficient and target update interval from the
+      // rate parameters (rw_rate / rw_amount may have changed).
+      rw_.setup(p.rw_rate, p.rw_amount);
       // Initialize the targets to the current deviations on first activation
-      if (rw_target_a_cents_ == 0.f && rw_dev_a_cents_ != 0.f)
-        rw_target_a_cents_ = rw_dev_a_cents_;
-      if (rw_target_b_cents_ == 0.f && rw_dev_b_cents_ != 0.f)
-        rw_target_b_cents_ = rw_dev_b_cents_;
+      if (rw_.target_a == 0.f && rw_.dev_a != 0.f)
+        rw_.target_a = rw_.dev_a;
+      if (rw_.target_b == 0.f && rw_.dev_b != 0.f)
+        rw_.target_b = rw_.dev_b;
     }
 
     for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
@@ -631,35 +577,15 @@ public:
       // update random-walk detune deviations (cents) around the knob values
       if (rw_active)
       {
-        // Update the targets periodically (independent per voice)
-        if (++rw_target_update_counter_ >= rw_target_update_interval_)
-        {
-          rw_target_update_counter_ = 0;
-          // Generate new random targets in [-rw_max_dev_, +rw_max_dev_]
-          // Using osc_white() which returns values in [-1, 1]
-          rw_target_a_cents_ = osc_white() * rw_max_dev_;
-          rw_target_b_cents_ = osc_white() * rw_max_dev_;
-        }
-        // Smoothly track the targets: dev += (target - dev) * k
-        rw_dev_a_cents_ += (rw_target_a_cents_ - rw_dev_a_cents_) * rw_k_;
-        rw_dev_b_cents_ += (rw_target_b_cents_ - rw_dev_b_cents_) * rw_k_;
-        // Safety clamps (should rarely trigger if targets are within bounds)
-        if (rw_dev_a_cents_ > rw_max_dev_)
-          rw_dev_a_cents_ = rw_max_dev_;
-        else if (rw_dev_a_cents_ < -rw_max_dev_)
-          rw_dev_a_cents_ = -rw_max_dev_;
-        if (rw_dev_b_cents_ > rw_max_dev_)
-          rw_dev_b_cents_ = rw_max_dev_;
-        else if (rw_dev_b_cents_ < -rw_max_dev_)
-          rw_dev_b_cents_ = -rw_max_dev_;
+        rw_.advance(p.rw_amount, osc_white);
         // recompute w0_a from effective detune (base + walk), 4th-order Taylor
-        const float eff_detune_a = p.detune_a_cents + rw_dev_a_cents_;
+        const float eff_detune_a = p.detune_a_cents + rw_.dev_a;
         const float x_a = eff_detune_a * kCentsToX; // cents * ln(2)/1200
         const float detune_factor_a =
             1.f + x_a * (1.f + x_a * (0.5f + x_a * (1.f / 6.f + x_a * (1.f / 24.f))));
         w0_a = w0 * detune_factor_a;
         // recompute w0_b from effective detune (base + walk), 4th-order Taylor
-        const float eff_detune_b = p.detune_cents + rw_dev_b_cents_;
+        const float eff_detune_b = p.detune_cents + rw_.dev_b;
         const float x_b = eff_detune_b * kCentsToX;
         const float detune_factor_b =
             1.f + x_b * (1.f + x_b * (0.5f + x_b * (1.f / 6.f + x_b * (1.f / 24.f))));
@@ -730,83 +656,15 @@ public:
       // ---- second sub (f/4): clean sine -> very soft saturator -> LPF -> gate ----
       // Only computed when the voice is actually audible (level > 0) to keep
       // the default path (SUB2 = 0) free of this cost.
-      float sub2 = 0.f;
-      if (sub2_level > 0.f)
-      {
-        // f/4 sine in -1..1 (LUT)
-        const float s2 = osc_sinf(phasor_sub2_);
+      // See osc_sub2.h for the DSP details (sine -> soft saturator -> LPF -> gate).
+      const float sub2 = sub2_.process(phasor_sub2_, w0, sub2_level);
 
-        // very soft saturator: a light tanh at kSub2Drive (~1.3) rounds the
-        // sine and adds just enough odd harmonics for "body" without turning
-        // it into a distorted bass. fastertanh2f (Padé [3/3]) is inaudibly
-        // accurate and bounded in (-1, 1).
-        const float s2_sat = fastertanh2f(s2 * kSub2Drive);
-
-        // one-pole LPF (200 Hz): trims the saturator's 3rd/5th harmonics so the
-        // voice stays in the low end instead of muddying the mids. First-order
-        // low-pass: state += (in - state) * a; out = state.
-        sub2_lpf_state_ += (s2_sat - sub2_lpf_state_) * sub2_a;
-
-        // pitch gate: fully open when the base (saw) frequency is above the
-        // threshold (f/4 >= 30 Hz), closed below it (f/4 infrasonic). Smoothed
-        // first-order so switching notes never clicks. w0 = f/sr, so the base
-        // frequency in Hz is w0 * sr; compare against sub2_gate_hz (4*30).
-        const float open_target = (w0 * kSampleRate > sub2_gate_hz) ? 1.f : 0.f;
-        sub2_gate_ += (open_target - sub2_gate_) * sub2_k;
-
-        sub2 = sub2_lpf_state_ * sub2_gate_;
-      }
-      // else: voice off; leave the LPF/gate state as-is (it will re-engage
-      // smoothly next time the level is raised).
-
-      // mix both voices equally
-      float mix = kMixOsc * (wav_a + wav_b);
-
-      // pre-drive wavefolder (FOLD knob): scale mix by (1 + fold_depth) and
-      // reflect into [-1, 1] (one reflection handles |x| up to 2). Blends
-      // linearly from the raw mix (FOLD=0) to the fully folded signal (FOLD=1).
-      // Adds even harmonics and a "metallic" edge before the tanh saturator.
-      if (p.fold_depth > 0.f)
-      {
-        const float x_fold = mix * (1.f + p.fold_depth);
-        const float ax = x_fold < 0.f ? -x_fold : x_fold;
-        const float folded = (ax > 1.f)
-            ? ((x_fold > 0.f) ? (2.f - x_fold) : (-2.f - x_fold))
-            : x_fold;
-        mix += p.fold_depth * (folded - mix);
-      }
-
-      // soft-clip saturator: y = (1 - d^2) * tanh(d / (1 - d^2)), d in (-1, 1)
-      // clip the drive-scaled signal into the stable range first
-      float d = mix * drive;
-      if (d > kSatDriveLimit)
-        d = kSatDriveLimit;
-      else if (d < -kSatDriveLimit)
-        d = -kSatDriveLimit;
-
-      // asymmetric gain: scale d differently for positive / negative halves
-      // to generate even harmonics ("warm", "brassy" tone). asym=0 -> unity
-      // gain on both halves (regression-safe: original symmetric tanh).
-      // asym>0 -> positive half driven harder, negative half softer.
-      // asym<0 -> vice versa.
-      const float asym_gain = (d >= 0.f) ? (1.f + p.asym) : (1.f - p.asym);
-      float d_a = d * asym_gain;
-      // re-clamp after asymmetric scaling: |d_a| can exceed 0.9 when
-      // |asym| > 0 and |d| is near the 0.9 limit (e.g. d=0.9, asym=+0.5
-      // -> d_a=1.35). This keeps the tanh argument in the stable range.
-      if (d_a > kSatDriveLimit)
-        d_a = kSatDriveLimit;
-      else if (d_a < -kSatDriveLimit)
-        d_a = -kSatDriveLimit;
-      const float one_minus_d2 = 1.f - d_a * d_a;
-      // fastertanh2f (Padé [3/3], ~6 VFP ops) replaces the former Padé [5/5]
-      // soft_tanhf (~14 VFP ops). Max |error| over the full operating range
-      // x in [-4.68, 4.68] is ~2e-3 (-54 dBFS) — inaudible for a saturator
-      // (the error appears only as a very slight rounding of the highest
-      // harmonics at full drive). The output of fastertanh2f is bounded in
-      // (-1, 1), and (1-d^2) < 1, so y stays in (-1, 1): the 0.9f output
-      // gain below still has headroom (max |y*0.9| < 0.9).
-      const float y = one_minus_d2 * fastertanh2f(d_a / one_minus_d2);
+      // mix both voices equally, then run through the pre-drive wavefolder
+      // (FOLD knob) and the asymmetric soft-clip saturator (SATU/ASYM knobs).
+      // See osc_saturator.h for the DSP details.
+      const float mix = kMixOsc * (wav_a + wav_b);
+      const float folded = Saturator::fold(mix, p.fold_depth);
+      const float y = Saturator::saturate(folded, p.drive, p.asym);
 
       // ---- advance the A-H-R envelope by one sample ----
       // (per-sample so the 2 s phases are sample-accurate at any block size)
@@ -841,37 +699,13 @@ private:
   float w0_b_ = 0.f;
   float w0_a_ = 0.f;
   float w0_sub_ = 0.f;
-  // second-sub (f/4) phase increment and fixed filter/gate coefficients, all
-  // precomputed in update_w0_sub2() (called from setPitch, never audio path)
+  // second-sub (f/4) phase increment, precomputed in update_w0_sub2()
   float w0_sub2_ = 0.f;
-  float sub2_lpf_a_ = 0.f;   // one-pole LPF coefficient (200 Hz)
-  float sub2_gate_k_ = 0.f;  // pitch-gate smoothing coefficient
-  float sub2_gate_hz_ = 0.f; // base (saw) Hz at which f/4 == kSub2GateHz
+  // Second sub voice (f/4, saturated, LPF'd, gated). See osc_sub2.h.
+  Sub2Voice sub2_;
 
-  // random-walk state: current detune deviation in cents (around the knob value),
-  // one per voice (A and B). Both channels share the same hard ceiling
-  // (rw_max_dev_) and the same tracking coefficient (rw_k_), but wander with
-  // independent random targets so the inter-voice beat frequency shifts over
-  // time (asymmetric chorus).
-  float rw_dev_a_cents_ = 0.f;
-  float rw_dev_b_cents_ = 0.f;
-  // random-walk tracking coefficient (per sample), recomputed once per block
-  // in process() from RATE SPD. Controls how quickly the deviations track the
-  // targets. Shared by both channels so the two voices drift in lockstep in
-  // speed; only the targets differ.
-  float rw_k_ = 0.f;
-  // random-walk target deviations in cents, regenerated periodically.
-  // Each target is chosen randomly in [-rw_max_dev_, +rw_max_dev_],
-  // independently per voice.
-  float rw_target_a_cents_ = 0.f;
-  float rw_target_b_cents_ = 0.f;
-  // random-walk hard ceiling for the deviations (cents), set by RATE AMT.
-  // Applies to both voices.
-  float rw_max_dev_ = 0.f;
-  // target update counter: counts samples since the last target update.
-  uint32_t rw_target_update_counter_ = 0;
-  // target update interval in samples (recomputed from RATE SPD each block).
-  uint32_t rw_target_update_interval_ = 0;
+  // Random-walk detune wandering (dual channel). See osc_random_walk.h.
+  RandomWalk rw_;
 
   // Note "active" flag: true while a note is held (noteOn not yet followed by
   // noteOff / allNoteOff / reset). Today this is set by the MIDI handlers;
@@ -940,22 +774,16 @@ private:
   // stable "anchor" in the low end, so w0_sub2_ = w0_ * 0.25 exactly (two
   // octaves below the base). Also precomputed here (called once per pitch
   // change, never in the audio path):
-  //   sub2_lpf_a_  — one-pole LPF coefficient for kSub2LpfCutoffHz (cuts the
+  //   sub2_.lpf_a  — one-pole LPF coefficient for Sub2Voice::kLpfCutoffHz (cuts the
   //                  saturator's harmonics so the voice stays in the low end)
-  //   sub2_gate_k_ — first-order smoothing coefficient for the pitch gate
-  //                  (open/close transition, kSub2GateTauSec time constant)
-  //   sub2_gate_hz_— base (saw) frequency in Hz at which f/4 == kSub2GateHz;
-  //                  below this the gate closes. Cached as 4 * kSub2GateHz.
+  //   sub2_.gate_k — first-order smoothing coefficient for the pitch gate
+  //                  (open/close transition, Sub2Voice::kGateTauSec time constant)
+  //   sub2_.gate_hz_— base (saw) frequency in Hz at which f/4 == Sub2Voice::kGateHz;
+  //                  below this the gate closes. Cached as 4 * Sub2Voice::kGateHz.
   void update_w0_sub2()
   {
     w0_sub2_ = w0_ * 0.25f; // f/4, no detune
-    // one-pole LPF: a = 1 - exp(-2*pi*fc/sr)
-    sub2_lpf_a_ =
-        1.f - expf(-kTwoPi * kSub2LpfCutoffHz / kSampleRate);
-    // first-order gate: k = 1 - exp(-1/tau)
-    sub2_gate_k_ = 1.f - expf(-1.f / (kSub2GateTauSec * getSampleRate()));
-    // base frequency (Hz) at which the f/4 fundamental equals kSub2GateHz
-    sub2_gate_hz_ = 4.f * kSub2GateHz;
+    sub2_.update(w0_); // recompute LPF/gate coefficients (see osc_sub2.h)
   }
 
   Params params_;
@@ -980,15 +808,10 @@ private:
   // second sub voice (f/4, two octaves below the saws): a clean sine run
   // through a very soft saturator (adds "body"/thickening) then a one-pole
   // LPF (cuts the saturator's harmonics so it stays in the low end) and a
-  // pitch gate (silences it when f/4 drops below kSub2GateHz = infrasonic).
+  // pitch gate (silences it when f/4 drops below Sub2Voice::kGateHz = infrasonic).
   // Unlike sub-1 it carries no fixed detune: it is a stable "anchor" in the
   // low end, not a beating voice.
   float phasor_sub2_; // second sub phasor (advances at w0/4, no detune)
-  // one-pole LPF state (integrator) for the saturator-harmonic cutoff on sub-2
-  float sub2_lpf_state_ = 0.f;
-  // smoothed pitch-gate amplitude for sub-2 (0 = silenced, 1 = open)
-  float sub2_gate_ = 0.f;
-
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
   // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
   // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its
