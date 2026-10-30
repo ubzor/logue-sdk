@@ -71,6 +71,7 @@
 #include "unit_osc.h"
 #include "utils/float_math.h" // fastertanh2f()
 #include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
+#include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
 
 class Osc : public Processor
 {
@@ -224,28 +225,7 @@ public:
   // sub-octave fixed detune so it cannot drift if kSubDetuneCents changes.
   static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
 
-  // NOTE on envelopes: the NTS-1 mkII platform already applies its own
-  // amplitude EG (AdSr / oPEn, etc.) to the oscillator's output. On the
-  // device the EG mode is set to oPEn (no platform amplitude shaping), so
-  // this unit runs its own single-voice A-H-R envelope to shape the
-  // attack/release of each note:
-  //   Attack  2 s, exponential fade 0 -> 1
-  //   Hold    full level while the note is active
-  //   Release 2 s, exponential fade 1 -> 0, then silent
-  // The note "active" state (note_on_) is set by noteOn/noteOff/allNoteOff
-  // today; later it may be driven algorithmically (self-starting notes) via
-  // the same flag without touching the audio path.
-  static constexpr uint32_t kEgAttackSamples  = 2U * 48000U; // 2 s @48 kHz
-  static constexpr uint32_t kEgReleaseSamples = 2U * 48000U; // 2 s @48 kHz
-
-  // A-H-R envelope phase (single voice)
-  enum EgPhase : uint8_t
-  {
-    kEgPhaseIdle = 0,    // silent
-    kEgPhaseAttack,      // 0 -> 1 exponential
-    kEgPhaseHold,        // full level while active
-    kEgPhaseRelease      // 1 -> 0 exponential
-  };
+  // (The A-H-R envelope lives in AhEnvelope, see osc_envelope.h.)
 
   // Note: Make sure that default param values correspond to declarations in header.c
   struct Params
@@ -476,16 +456,14 @@ public:
     rw_target_update_interval_ = (uint32_t)kSampleRate; // random-walk interval starts at 1s (default)
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
-    eg_phase_ = kEgPhaseIdle;
-    eg_elapsed_ = 0;
-    env_ = 0.f;
+    eg_.reset();
     // First-order relaxation coefficients (per sample) for the exponential
     // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in
     // samples; five time-constants over the phase means the level covers
     // ~99.3% of the transition by the phase boundary. Precomputed here, never
     // in the audio path.
-    eg_alpha_a_ = 1.f - expf(-5.f / static_cast<float>(kEgAttackSamples));
-    eg_alpha_r_ = 1.f - expf(-5.f / static_cast<float>(kEgReleaseSamples));
+    eg_alpha_a_ = 1.f - expf(-5.f / static_cast<float>(AhEnvelope::kAttackSamples));
+    eg_alpha_r_ = 1.f - expf(-5.f / static_cast<float>(AhEnvelope::kReleaseSamples));
   }
 
   void reset() override final
@@ -503,9 +481,7 @@ public:
     rw_target_update_counter_ = 0; // reset target update counter
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
-    eg_phase_ = kEgPhaseIdle;
-    eg_elapsed_ = 0;
-    env_ = 0.f;
+    eg_.reset();
   }
 
   // ---- note handling ---------------------------------------------------------
@@ -518,9 +494,7 @@ public:
     (void)note;
     (void)velo;
     note_on_ = true;
-    eg_phase_ = kEgPhaseAttack;
-    eg_elapsed_ = 0;
-    env_ = 0.f;
+    eg_.noteOn();
   }
 
   // Key release: note inactive. If the envelope is in Attack or Hold, begin
@@ -530,11 +504,7 @@ public:
   {
     (void)note;
     note_on_ = false;
-    if (eg_phase_ == kEgPhaseAttack || eg_phase_ == kEgPhaseHold)
-    {
-      eg_phase_ = kEgPhaseRelease;
-      eg_elapsed_ = 0;
-    }
+    eg_.noteOff();
   }
 
   // All-notes-off: note inactive, kill any in-flight envelope immediately
@@ -542,9 +512,7 @@ public:
   void allNoteOff() override final
   {
     note_on_ = false;
-    eg_phase_ = kEgPhaseIdle;
-    eg_elapsed_ = 0;
-    env_ = 0.f;
+    eg_.allOff();
   }
 
   // audio processing callbacks
@@ -842,37 +810,7 @@ public:
 
       // ---- advance the A-H-R envelope by one sample ----
       // (per-sample so the 2 s phases are sample-accurate at any block size)
-      switch (eg_phase_)
-      {
-      case kEgPhaseAttack:
-        // exponential fade 0 -> 1: env += (1 - env) * alpha_a
-        env_ += (1.f - env_) * alpha_a;
-        if (++eg_elapsed_ >= kEgAttackSamples)
-        {
-          eg_elapsed_ = 0;
-          eg_phase_ = kEgPhaseHold;
-          env_ = 1.f; // snap to full at the attack boundary
-        }
-        break;
-      case kEgPhaseHold:
-        // Full level while the note is active. If the note was released
-        // (noteOn not re-firing), noteOff() will have switched us to Release;
-        // if we are here, the note is still held.
-        env_ = 1.f;
-        break;
-      case kEgPhaseRelease:
-        // exponential fade 1 -> 0: env -= env * alpha_r
-        env_ -= env_ * alpha_r;
-        if (++eg_elapsed_ >= kEgReleaseSamples)
-        {
-          eg_phase_ = kEgPhaseIdle;
-          env_ = 0.f;
-        }
-        break;
-      default: // kEgPhaseIdle
-        env_ = 0.f;
-        break;
-      }
+      eg_.advance(alpha_a, alpha_r);
 
       // scale output to a musical level (saturator max output is ~0.76)
       // and apply the A-H-R envelope level.
@@ -888,7 +826,7 @@ public:
       // At the default SUB1 = 50%, the sub branch is at 0.2 amplitude; SUB2
       // defaults to 0 (off) so the stock sound is unchanged. A hard clip
       // prevents digital overflow when all branches peak simultaneously.
-      float raw = (y * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * env_;
+      float raw = (y * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * eg_.env;
       if (raw > 1.f)
         raw = 1.f;
       else if (raw < -1.f)
@@ -942,10 +880,9 @@ private:
   // that shapes the attack/release of the active note.
   bool note_on_ = false;
 
-  // A-H-R envelope state (single voice). See the class-top comment for timing.
-  EgPhase eg_phase_ = kEgPhaseIdle;
-  uint32_t eg_elapsed_ = 0;   // samples elapsed in the current phase
-  float env_ = 0.f;           // current envelope level, 0..1
+  // A-H-R envelope (single voice). See osc_envelope.h for the state machine.
+  AhEnvelope eg_;
+
   // First-order relaxation coefficients for attack/release, precomputed in
   // init() (never in the audio path).
   float eg_alpha_a_ = 0.f;
