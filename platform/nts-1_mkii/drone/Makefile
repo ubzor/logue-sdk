@@ -208,10 +208,11 @@ $(COBJS) : $(OBJDIR)/%.o : %.c Makefile config.mk
 	@echo Compiling $(<F)
 	@$(CC) -c $(CFLAGS) -I. $(INCDIR) $< -o $@
 
-# ARM C++ objects depend on osc.h: unit.cc (the only .cc in CXXSRC) includes
-# it, so any change to the DSP header must force a recompile. (The WASM build
-# already tracks osc.h separately — see the WASMOBJDIR rule below.)
-$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk osc.h
+# ARM C++ objects depend on osc.h and osc_waves.h: unit.cc (the only .cc in
+# CXXSRC) includes them, so any change to the DSP headers must force a
+# recompile. (The WASM build already tracks them separately — see the
+# WASMOBJDIR rule below.)
+$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk osc.h osc_waves.h
 	@echo Compiling $(<F)
 	@$(CXXC) -c $(CXXFLAGS) -I. $(INCDIR) $< -o $@
 
@@ -290,7 +291,7 @@ $(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
 	@$(EMCC_BIN_PATH)/emcc -c $(INCDIR) -O2 -g -fdebug-compilation-dir='..' $< -o $@
 
 # C++ sources are compiled with C++17 as required by the wasm audio worklet engine
-$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h | $(WASMOBJDIR)
+$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h osc_waves.h | $(WASMOBJDIR)
 	@echo Compiling wasm C++ object $(<F)
 	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) -fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -O2 -g -fdebug-compilation-dir='..' $< -o $@
 

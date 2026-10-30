@@ -70,9 +70,15 @@
 #include "processor.h"
 #include "unit_osc.h"
 #include "utils/float_math.h" // fastertanh2f()
+#include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
 
 class Osc : public Processor
 {
+  // The wavetable scanner (osc_waves.h) is a flat helper struct; let it read
+  // the Osc's private w0_ if needed (it isn't today — update() takes w0 as an
+  // argument — but keep the door open without exposing w0_ publicly).
+  friend struct WaveTable;
+
 public:
   uint32_t getBufferSize() const override final { return 0; } // NTS-1 osc do not support sdram allocation
 
@@ -135,16 +141,6 @@ public:
   // The detune never strays further from the DETUNE knob value than this.
   static constexpr float kRwMaxCents = 10.f;
 
-  // Total wavetable count across all six Korg banks (A-F), in order of
-  // increasing harmonic density. The WAV1 / WAV2 knobs select an index
-  // in [0, kWavesTotal) which resolve_wave() maps onto the bank arrays.
-  static constexpr uint32_t kWavesA = k_waves_a_cnt;
-  static constexpr uint32_t kWavesB = kWavesA + k_waves_b_cnt;
-  static constexpr uint32_t kWavesC = kWavesB + k_waves_c_cnt;
-  static constexpr uint32_t kWavesD = kWavesC + k_waves_d_cnt;
-  static constexpr uint32_t kWavesE = kWavesD + k_waves_e_cnt;
-  static constexpr uint32_t kWavesTotal = kWavesE + k_waves_f_cnt;
-
   // Fixed sub-octave detune: the sub sine runs slightly flat (−4 cents) so
   // it "breathes" against the saws instead of locking to them. A few cents
   // at one octave below gives a slow, organic beat without sounding sloppy.
@@ -156,14 +152,8 @@ public:
   // can't reach (it only sees the whole unit, not the internal sub voice).
   static constexpr float kSubLfoFmCents = 5.f;
 
-  // LFO → wavetable morph depth (±N tables). The platform shape-LFO (the "S"
-  // branch of the OSC B-knob on hardware) arrives in lfo_ in (-1, 1); we scale
-  // it so full depth sweeps ±10 of the 91 tables (~11% of the range) — a
-  // moderate "breathing" of the timbre across the wavetable. The morph is
-  // applied continuously inside the sample loop (see process()), blended with
-  // the pitch-shifted morph position, and resolved through the interpolating
-  // resolve_wave() so the timbre glides between adjacent tables.
-  static constexpr float kLfoMorphDepth = 10.f;
+  // (The LFO -> wavetable morph depth lives in WaveTable::kLfoMorphDepth,
+  // see osc_waves.h.)
 
   // ---- Second sub voice (SUB2): f/4, very-soft-saturated, LPF'd, gated ----
   // Drive level into the soft saturator for the second sub. Kept deliberately
@@ -269,8 +259,8 @@ public:
     float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
     float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
     float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
-    float wave_a;       // 0.f .. kWavesTotal-1, edit: osc A wavetable index
-    float wave_b;       // 0.f .. kWavesTotal-1, edit: osc B wavetable index
+    float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
+    float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
 
     void reset()
     {
@@ -349,13 +339,13 @@ public:
       break;
 
     case WAV1:
-      params_.wave_a = param_10bit_to_f32(value) * (kWavesTotal - 1);
-      update_waves();
+      params_.wave_a = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
+      waves_.update(w0_);
       break;
 
     case WAV2:
-      params_.wave_b = param_10bit_to_f32(value) * (kWavesTotal - 1);
-      update_waves();
+      params_.wave_b = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
+      waves_.update(w0_);
       break;
 
     default:
@@ -424,7 +414,7 @@ public:
     static char buf[8];
     int v;
     if (k == WAV1 || k == WAV2)
-      v = (int)(param_10bit_to_f32(raw) * (kWavesTotal - 1));
+      v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
     else if (k == ASYM)
       v = (int)((raw * 200) / kRawMax) - 100;
     else if (k == DETUNE || k == DETUNE_A)
@@ -476,7 +466,7 @@ public:
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
-    update_waves(); // resolve default wavetable pointers from params_
+    waves_.update(w0_); // resolve default wavetable pointers from params_
     rw_dev_a_cents_ = 0.f; // random-walk state (osc A) starts centered
     rw_dev_b_cents_ = 0.f; // random-walk state (osc B) starts centered
     rw_target_a_cents_ = 0.f; // random-walk target (osc A) starts centered
@@ -567,7 +557,7 @@ public:
     update_w0_a();
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
     update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
-    update_waves(); // re-resolve wavetables: morph position shifts with pitch
+    waves_.update(w0_); // re-resolve wavetables: morph position shifts with pitch
   }
 
   // lfo in (-1.0f, 1.0f)
@@ -646,10 +636,10 @@ public:
     float w0_b = w0_b_; // default: cached static detune (osc B)
 
     // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
-    // offset is added per-sample below. wave_shift_ is recomputed on
+    // offset is added per-sample below. waves_.wave_shift_ is recomputed on
     // setParameter(WAV1/WAV2) / setPitch(); wave_a / wave_b are the knobs.
-    const float wave_base_a = p.wave_a + wave_shift_;
-    const float wave_base_b = p.wave_b + wave_shift_;
+    const float wave_base_a = p.wave_a + waves_.wave_shift_;
+    const float wave_base_b = p.wave_b + waves_.wave_shift_;
     if (rw_active)
     {
       // Compute the tracking coefficient once per block (rw_rate may change)
@@ -760,11 +750,11 @@ public:
 
       // generate wavetable samples in -1..1. Each voice's table index is the
       // base position (knob + pitch-shift) plus the LFO morph offset, so the
-      // timbre "breathes" across the wavetable. resolve_wave() crossfades the
+      // timbre "breathes" across the wavetable. WaveTable::resolve_wave() crossfades the
       // fractional part between adjacent tables, so the morph glides smoothly.
-      const float lfo_morph = lfo_ * kLfoMorphDepth;
-      const float wav_a = resolve_wave(wave_base_a + lfo_morph, phasor_a_);
-      const float wav_b = resolve_wave(wave_base_b + lfo_morph, phasor_b_);
+      const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
+      const float wav_a = WaveTable::resolve_wave(wave_base_a + lfo_morph, phasor_a_);
+      const float wav_b = WaveTable::resolve_wave(wave_base_b + lfo_morph, phasor_b_);
 
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
       const float sub = osc_sinf(phasor_sub_);
@@ -1062,59 +1052,11 @@ private:
   // smoothed pitch-gate amplitude for sub-2 (0 = silenced, 1 = open)
   float sub2_gate_ = 0.f;
 
-  // Map a fractional wavetable index in [0, kWavesTotal) to a blended table
-  // sample at phase ph. The six Korg banks (A-F) live in separate arrays; this
-  // walks the bank thresholds to find the table and the fractional part
-  // linearly crossfades between that table and the next one (or the previous
-  // one, to avoid a wrap-around blend across the F→A boundary). Blending two
-  // adjacent tables is what makes the LFO morph glide smoothly instead of
-  // stepping table-to-table. Falls back to a single-table scan when the index
-  // is effectively integral or at the top edge (no next table to blend).
-  static float resolve_wave(float idx, float ph)
-  {
-    float lo = idx < 0.f ? 0.f : idx;
-    if (lo >= static_cast<float>(kWavesTotal - 1))
-      lo = static_cast<float>(kWavesTotal - 1);
-    const uint32_t i = static_cast<uint32_t>(lo);
-    const float frac = lo - static_cast<float>(i);
-
-    const float *ta =
-        (i < kWavesA) ? wavesA[i] :
-        (i < kWavesB) ? wavesB[i - kWavesA] :
-        (i < kWavesC) ? wavesC[i - kWavesB] :
-        (i < kWavesD) ? wavesD[i - kWavesC] :
-        (i < kWavesE) ? wavesE[i - kWavesD] :
-                       wavesF[i - kWavesE];
-
-    if (frac < 0.001f)
-      return osc_wave_scanf(ta, ph);
-
-    // next table index in the global 0..kWavesTotal-1 space
-    const uint32_t j = i + 1U;
-    const float *tb =
-        (j < kWavesA) ? wavesA[j] :
-        (j < kWavesB) ? wavesB[j - kWavesA] :
-        (j < kWavesC) ? wavesC[j - kWavesB] :
-        (j < kWavesD) ? wavesD[j - kWavesC] :
-        (j < kWavesE) ? wavesE[j - kWavesD] :
-                       wavesF[j - kWavesE];
-
-    return osc_wave_scanf(ta, ph) * (1.f - frac) + osc_wave_scanf(tb, ph) * frac;
-  }
-
-  // Pitch-shifted morph position (in table-index units). Higher notes morph
-  // toward the denser F bank so the perceived tone stays consistent across the
-  // keyboard, mirroring how the SDK's band-limited waves roll off their high
-  // harmonics. kWaveMorphShift is the max shift (in tables) at the top of the
-  // range. Recomputed on setParameter(WAV1/WAV2) and setPitch() (K-rate) and
-  // cached so the audio path only adds the LFO offset (see process()).
-  static constexpr float kWaveMorphShift = 10.f; // ~1/9 of the bank range
-  float wave_shift_ = 0.f;
-
-  void update_waves()
-  {
-    const float pitch_n = (w0_ * kSampleRate) / kRefHz; // 1.0 at A4
-    const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? kWaveMorphShift : (kWaveMorphShift * pitch_n);
-    wave_shift_ = shift;
-  }
+  // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
+  // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
+  // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its
+  // cached morph position (waves_.wave_shift_) in the audio path; resolve_wave
+  // is called as WaveTable::resolve_wave(...). The LFO->morph depth constant is
+  // WaveTable::kLfoMorphDepth.
+  WaveTable waves_;
 };
