@@ -195,6 +195,45 @@ public:
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
   // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
 
+  // ---- Parameter ranges & display scaling ----
+  // Single source of truth for the ranges each editable parameter maps onto,
+  // used by BOTH apply_edit_param() (raw -> DSP float) and
+  // getParameterStrValue() (raw -> display string). Keep in sync with the
+  // web simulator (websim/osc.html formatParamValue) and the default raw
+  // values in the header's "init" fields (header.c).
+  //
+  // DET1/DET2 span +/-kDetuneMaxCents around 0 cents, centered on the raw
+  // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
+  // RATE SPD spans kRwPeriodMinSec..kRwPeriodMaxSec (log, 100^x) — 0.1 s to 10 s.
+  static constexpr float    kDetuneMaxCents    = 100.f;
+  static constexpr float    kSatuMax           = 3.f;   // 0..3.0 drive level
+  static constexpr float    kRwPeriodMinSec    = 0.1f;  // fastest random-walk period
+  static constexpr float    kRwPeriodMaxSec    = 10.f;  // slowest  (ratio = 100)
+  static constexpr int32_t  kRawMid            = 511;   // raw 10-bit value == 0%
+  static constexpr int32_t  kRawMax            = 1023;  // raw 10-bit value == 100%
+
+  // ---- Audio-path mix & saturator constants ----
+  // Final-mix gains. Worst-case peaks: |y*kMixOsc|<0.5,
+  // |sub*kMixSub|<0.4, |sub2*kMixSub2|<0.3 (branches rarely peak together,
+  // and the final hard-clip guards the sum).
+  static constexpr float kMixOsc  = 0.5f;
+  static constexpr float kMixSub  = 0.4f;
+  static constexpr float kMixSub2 = 0.3f;
+  // Stable drive limit for the asymmetric saturator: keeps the tanh argument
+  // in (-1, 1) even when |asym| scales a half up (see process()).
+  static constexpr float kSatDriveLimit = 0.9f;
+
+  // ---- Sample-rate / reference-frequency helpers ----
+  // getSampleRate() (Processor base) returns 48000.f for all logue products;
+  // reuse it in constexpr audio-path sites to avoid a stray 48000 literal.
+  static constexpr float    kSampleRate   = getSampleRate(); // 48000
+  static constexpr float    kRefHz        = 880.f;           // A4
+  static constexpr float    kTwoPi        = 6.283185307179586f;
+  static constexpr float    kCentsToX     = 5.7762265046261084e-04f; // cents * ln(2)/1200
+  // 0.5 * 2^(kSubDetuneCents/1200) == 0.5 * 2^(-4/1200); derived from the
+  // sub-octave fixed detune so it cannot drift if kSubDetuneCents changes.
+  static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
+
   // NOTE on envelopes: the NTS-1 mkII platform already applies its own
   // amplitude EG (AdSr / oPEn, etc.) to the oscillator's output. On the
   // device the EG mode is set to oPEn (no platform amplitude shaping), so
@@ -206,8 +245,8 @@ public:
   // The note "active" state (note_on_) is set by noteOn/noteOff/allNoteOff
   // today; later it may be driven algorithmically (self-starting notes) via
   // the same flag without touching the audio path.
-  static constexpr uint32_t kEgAttackSamples  = 2U * 48000U; // 2 s
-  static constexpr uint32_t kEgReleaseSamples = 2U * 48000U; // 2 s
+  static constexpr uint32_t kEgAttackSamples  = 2U * 48000U; // 2 s @48 kHz
+  static constexpr uint32_t kEgReleaseSamples = 2U * 48000U; // 2 s @48 kHz
 
   // A-H-R envelope phase (single voice)
   enum EgPhase : uint8_t
@@ -260,14 +299,14 @@ public:
     switch (idx)
     {
     case DETUNE:
-      // 0..1023 -> -100..+100 cents (50% = 511 = 0 cents)
-      params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * 100.f;
+      // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (50% = 511 = 0 cents)
+      params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
       update_w0_b();
       break;
 
     case DETUNE_A:
-      // 0..1023 -> -100..+100 cents (50% = 511 = 0 cents)
-      params_.detune_a_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * 100.f;
+      // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (50% = 511 = 0 cents)
+      params_.detune_a_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
       update_w0_a();
       break;
 
@@ -282,8 +321,8 @@ public:
     case RATE_SPD:
       params_.rw_rate = param_10bit_to_f32(value);
       {
-        const float period = 0.1f * fasterpowf(100.f, params_.rw_rate);
-        rw_target_update_interval_ = (uint32_t)(period * 48000.f);
+        const float period = kRwPeriodMinSec * fasterpowf(100.f, params_.rw_rate);
+        rw_target_update_interval_ = (uint32_t)(period * kSampleRate);
       }
       break;
 
@@ -296,11 +335,12 @@ public:
       break;
 
     case SATU:
-      // 0..1023 -> 0..3.0 drive level
-      params_.drive = param_10bit_to_f32(value) * 3.f;
+      // 0..1023 -> 0..kSatuMax drive level
+      params_.drive = param_10bit_to_f32(value) * kSatuMax;
       break;
 
     case ASYM:
+      // 0..1023 -> -1..+1 (0% = 0)
       params_.asym = param_10bit_to_f32(value) * 2.f - 1.f;
       break;
 
@@ -386,13 +426,13 @@ public:
     if (k == WAV1 || k == WAV2)
       v = (int)(param_10bit_to_f32(raw) * (kWavesTotal - 1));
     else if (k == ASYM)
-      v = (int)((raw * 200) / 1023) - 100;
+      v = (int)((raw * 200) / kRawMax) - 100;
     else if (k == DETUNE || k == DETUNE_A)
-      v = (int)((raw - 511) * 100 / 511); // -100..+100 cents (multiply before divide)
+      v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
     else if (k == SATU)
-      v = (int)(param_10bit_to_f32(raw) * 300.f); // 0..300
+      v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300
     else
-      v = (int)((raw * 100) / 1023);
+      v = (int)((raw * 100) / kRawMax);
 
     const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE && k != DETUNE_A);
     int n = 0;
@@ -443,7 +483,7 @@ public:
     rw_target_b_cents_ = 0.f; // random-walk target (osc B) starts centered
     rw_target_update_counter_ = 0; // reset target update counter
     rw_max_dev_ = 0.f; // random-walk hard ceiling starts at 0 (AMT=0)
-    rw_target_update_interval_ = 48000; // random-walk interval starts at 1s (default)
+    rw_target_update_interval_ = (uint32_t)kSampleRate; // random-walk interval starts at 1s (default)
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_phase_ = kEgPhaseIdle;
@@ -614,13 +654,13 @@ public:
     {
       // Compute the tracking coefficient once per block (rw_rate may change)
       // period = 0.1 * 100^rw_rate seconds
-      const float period = 0.1f * fasterpowf(100.f, p.rw_rate);
+      const float period = kRwPeriodMinSec * fasterpowf(100.f, p.rw_rate);
       // Tracking coefficient: how quickly the deviations move toward the targets.
       // Higher k = faster tracking. k = 1 / (1 + tau * 48000) where tau is the
       // relaxation time (we use period as tau for simplicity). Shared by both
       // channels so the two voices drift in lockstep in speed, only the targets
       // differ.
-      rw_k_ = 1.f / (1.f + period * 48000.f);
+      rw_k_ = 1.f / (1.f + period * kSampleRate);
       // Initialize the targets to the current deviations on first activation
       if (rw_target_a_cents_ == 0.f && rw_dev_a_cents_ != 0.f)
         rw_target_a_cents_ = rw_dev_a_cents_;
@@ -656,13 +696,13 @@ public:
           rw_dev_b_cents_ = -rw_max_dev_;
         // recompute w0_a from effective detune (base + walk), 4th-order Taylor
         const float eff_detune_a = p.detune_a_cents + rw_dev_a_cents_;
-        const float x_a = eff_detune_a * 5.7762265046261084e-04f; // cents * ln(2)/1200
+        const float x_a = eff_detune_a * kCentsToX; // cents * ln(2)/1200
         const float detune_factor_a =
             1.f + x_a * (1.f + x_a * (0.5f + x_a * (1.f / 6.f + x_a * (1.f / 24.f))));
         w0_a = w0 * detune_factor_a;
         // recompute w0_b from effective detune (base + walk), 4th-order Taylor
         const float eff_detune_b = p.detune_cents + rw_dev_b_cents_;
-        const float x_b = eff_detune_b * 5.7762265046261084e-04f;
+        const float x_b = eff_detune_b * kCentsToX;
         const float detune_factor_b =
             1.f + x_b * (1.f + x_b * (0.5f + x_b * (1.f / 6.f + x_b * (1.f / 24.f))));
         w0_b = w0 * detune_factor_b;
@@ -680,7 +720,7 @@ public:
       // is more than accurate enough).
       {
         const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-        const float x = lfo_fm_cents * 5.7762265046261084e-04f; // cents * ln(2)/1200
+        const float x = lfo_fm_cents * kCentsToX; // cents * ln(2)/1200
         const float lfo_factor = 1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
         phasor_sub_ += w0_sub_ * lfo_factor;
       }
@@ -707,7 +747,7 @@ public:
 #ifdef EMSCRIPTEN
       if (lfo_depth_ > 0.f)
       {
-        lfo_phase_ += 6.283185307179586f * lfo_freq_ * (1.f / 48000.f);
+        lfo_phase_ += kTwoPi * lfo_freq_ * (1.f / kSampleRate);
         if (lfo_phase_ >= 1.f)
           lfo_phase_ -= 1.f;
         lfo_ = osc_sinf(lfo_phase_) * lfo_depth_;
@@ -753,7 +793,7 @@ public:
         // threshold (f/4 >= 30 Hz), closed below it (f/4 infrasonic). Smoothed
         // first-order so switching notes never clicks. w0 = f/sr, so the base
         // frequency in Hz is w0 * sr; compare against sub2_gate_hz (4*30).
-        const float open_target = (w0 * 48000.f > sub2_gate_hz) ? 1.f : 0.f;
+        const float open_target = (w0 * kSampleRate > sub2_gate_hz) ? 1.f : 0.f;
         sub2_gate_ += (open_target - sub2_gate_) * sub2_k;
 
         sub2 = sub2_lpf_state_ * sub2_gate_;
@@ -762,7 +802,7 @@ public:
       // smoothly next time the level is raised).
 
       // mix both voices equally
-      float mix = 0.5f * (wav_a + wav_b);
+      float mix = kMixOsc * (wav_a + wav_b);
 
       // pre-drive wavefolder (FOLD knob): scale mix by (1 + fold_depth) and
       // reflect into [-1, 1] (one reflection handles |x| up to 2). Blends
@@ -781,10 +821,10 @@ public:
       // soft-clip saturator: y = (1 - d^2) * tanh(d / (1 - d^2)), d in (-1, 1)
       // clip the drive-scaled signal into the stable range first
       float d = mix * drive;
-      if (d > 0.9f)
-        d = 0.9f;
-      else if (d < -0.9f)
-        d = -0.9f;
+      if (d > kSatDriveLimit)
+        d = kSatDriveLimit;
+      else if (d < -kSatDriveLimit)
+        d = -kSatDriveLimit;
 
       // asymmetric gain: scale d differently for positive / negative halves
       // to generate even harmonics ("warm", "brassy" tone). asym=0 -> unity
@@ -796,10 +836,10 @@ public:
       // re-clamp after asymmetric scaling: |d_a| can exceed 0.9 when
       // |asym| > 0 and |d| is near the 0.9 limit (e.g. d=0.9, asym=+0.5
       // -> d_a=1.35). This keeps the tanh argument in the stable range.
-      if (d_a > 0.9f)
-        d_a = 0.9f;
-      else if (d_a < -0.9f)
-        d_a = -0.9f;
+      if (d_a > kSatDriveLimit)
+        d_a = kSatDriveLimit;
+      else if (d_a < -kSatDriveLimit)
+        d_a = -kSatDriveLimit;
       const float one_minus_d2 = 1.f - d_a * d_a;
       // fastertanh2f (Padé [3/3], ~6 VFP ops) replaces the former Padé [5/5]
       // soft_tanhf (~14 VFP ops). Max |error| over the full operating range
@@ -858,7 +898,7 @@ public:
       // At the default SUB1 = 50%, the sub branch is at 0.2 amplitude; SUB2
       // defaults to 0 (off) so the stock sound is unchanged. A hard clip
       // prevents digital overflow when all branches peak simultaneously.
-      float raw = (y * 0.5f + sub * p.sub_level * 0.4f + sub2 * sub2_level * 0.3f) * env_;
+      float raw = (y * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * env_;
       if (raw > 1.f)
         raw = 1.f;
       else if (raw < -1.f)
@@ -939,7 +979,7 @@ private:
   // w0_b_ above is only used while the walk is disabled.
   void update_w0_b()
   {
-    const float x = params_.detune_cents * 5.7762265046261084e-04f; // cents * ln(2) / 1200
+    const float x = params_.detune_cents * kCentsToX; // cents * ln(2) / 1200
     const float detune_factor =
         1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
     w0_b_ = w0_ * detune_factor;
@@ -950,7 +990,7 @@ private:
   // update_w0_b() (see its comment); detune_a_cents is limited to +/-100.
   void update_w0_a()
   {
-    const float x = params_.detune_a_cents * 5.7762265046261084e-04f; // cents * ln(2) / 1200
+    const float x = params_.detune_a_cents * kCentsToX; // cents * ln(2) / 1200
     const float detune_factor =
         1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
     w0_a_ = w0_ * detune_factor;
@@ -965,7 +1005,7 @@ private:
   // path is one multiply, no Taylor series needed per sample).
   void update_w0_sub()
   {
-    w0_sub_ = w0_ * 0.4988460883f; // 0.5 * 2^(-4/1200)
+    w0_sub_ = w0_ * kSubW0Scale; // 0.5 * 2^(kSubDetuneCents/1200) == 0.5 * 2^(-4/1200)
   }
 
   // recompute the second-sub (f/4) phase increment and its fixed filter/gate
@@ -984,7 +1024,7 @@ private:
     w0_sub2_ = w0_ * 0.25f; // f/4, no detune
     // one-pole LPF: a = 1 - exp(-2*pi*fc/sr)
     sub2_lpf_a_ =
-        1.f - expf(-6.28318530718f * kSub2LpfCutoffHz / getSampleRate());
+        1.f - expf(-kTwoPi * kSub2LpfCutoffHz / kSampleRate);
     // first-order gate: k = 1 - exp(-1/tau)
     sub2_gate_k_ = 1.f - expf(-1.f / (kSub2GateTauSec * getSampleRate()));
     // base frequency (Hz) at which the f/4 fundamental equals kSub2GateHz
@@ -1073,7 +1113,7 @@ private:
 
   void update_waves()
   {
-    const float pitch_n = (w0_ * 48000.f) / 880.f; // 1.0 at A4
+    const float pitch_n = (w0_ * kSampleRate) / kRefHz; // 1.0 at A4
     const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? kWaveMorphShift : (kWaveMorphShift * pitch_n);
     wave_shift_ = shift;
   }

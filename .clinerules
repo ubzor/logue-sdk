@@ -79,7 +79,8 @@ int32_t unit_get_param_value(uint8_t id) {
 
 - `ProcessAudio` (wasm.cc): **пропускает** индексы 2 и 3, чтобы не применять дубликаты дважды.
 - `getParameterValueString` (wasm.cc): для всех 4 индексов делегирует в `processor.getParameterStrValue`.
-- `createSlider` (websim/osc.html): `isParamSel = (index===0||index===2)` → `<select>` с 11 опциями; `isParamVal = (index===1||index===3)` → `<input type="range">`. Кросс-синхронизация: `onchange` селектора зеркалит в другой селектор + оба value-слайдера; `oninput` value-слайдера зеркалит в другой.
+- **UI симулятора = по 1 слайдеру на каждый edit-параметр** (не 4 header-слота). `createEditableParam(wasmProcessor, index)` (websim/osc.html): строка `label + <input type="range" min=0 max=1023 step=1 id="editparam_<i>"> + span`; цикл `for i in 0..EDIT_PARAM_COUNT` (=`kEditParamCount`, сейчас 11) — **не** по `getValidParameters()` (там 4 header-слота). Инициализация значения — из `Module.getEditParamValue(i)` (wasm.cc, main-thread).
+- **Ключевая механика записи** (`apply()` в `createEditableParam`): каждый слайдер пишет **оба** WebAudioParam'а мультиплексора в одном JS-тике — `parameters.get("0").value = index` (PARAM_SEL) **и** `parameters.get("1").value = raw` (PARAM_VAL). Тогда worklet всегда видит согласованную пару `(select_, edit_value_[select_])` — hiccup'ов нет. Слоты 2/3 не пишем (worklet их пропускает).
 - `formatParamValue` (websim/osc.html): принимает **edit-индекс** (0..10), **не** header-индекс: 0=DET1, 1=DET2, 2=RATE, 3=SPEE, 4=SUB1, 5=SUB2, 6=SATU, 7=ASYM, 8=FOLD, 9=WAV1, 10=WAV2.
 
 ### Частые ошибки (не повторять)
@@ -94,7 +95,7 @@ int32_t unit_get_param_value(uint8_t id) {
 ### Как добавить новый edit-параметр
 1. `osc.h`: `enum` (после `WAV2`), `Params` struct, `Params::reset()`, `edit_value_[kEditParamCount]` (увеличить `kEditParamCount`), `apply_edit_param` (новый `case`), `names[]` в `getParameterStrValue`, `formatParamValue`-логика.
 2. `header.c`: **не менять** — мультиплексор подхватит автоматически.
-3. `websim/osc.html`: новый `if (idx === N)` в `formatParamValue`.
+3. `websim/osc.html`: новый `if (idx === N)` в `formatParamValue` + имя в `EDIT_PARAM_NAMES[N]`. **Слайдер создаётся автоматически** — `EDIT_PARAM_COUNT` равен `kEditParamCount`, цикл `for i in 0..EDIT_PARAM_COUNT` добавит строку сам; отдельный контрол писать не нужно.
 4. `make install` + `make wasm`.
 ## Git-дисциплина (строго)
 
