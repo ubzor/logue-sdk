@@ -208,7 +208,10 @@ $(COBJS) : $(OBJDIR)/%.o : %.c Makefile config.mk
 	@echo Compiling $(<F)
 	@$(CC) -c $(CFLAGS) -I. $(INCDIR) $< -o $@
 
-$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk
+# ARM C++ objects depend on osc.h: unit.cc (the only .cc in CXXSRC) includes
+# it, so any change to the DSP header must force a recompile. (The WASM build
+# already tracks osc.h separately — see the WASMOBJDIR rule below.)
+$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk osc.h
 	@echo Compiling $(<F)
 	@$(CXXC) -c $(CXXFLAGS) -I. $(INCDIR) $< -o $@
 

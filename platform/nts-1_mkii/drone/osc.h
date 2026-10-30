@@ -388,7 +388,7 @@ public:
     else if (k == ASYM)
       v = (int)((raw * 200) / 1023) - 100;
     else if (k == DETUNE || k == DETUNE_A)
-      v = (int)((raw - 511) / 511 * 100); // -100..+100 cents
+      v = (int)((raw - 511) * 100 / 511); // -100..+100 cents (multiply before divide)
     else if (k == SATU)
       v = (int)(param_10bit_to_f32(raw) * 300.f); // 0..300
     else
@@ -412,11 +412,6 @@ public:
       buf[n++] = d[i];
     if (percent)
       buf[n++] = '%';
-    else if (k == DETUNE || k == DETUNE_A)
-    {
-      buf[n++] = ' ';
-      buf[n++] = 'c';
-    }
     buf[n] = '\0';
     return buf;
   }
