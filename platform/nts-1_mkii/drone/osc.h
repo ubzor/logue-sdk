@@ -1,37 +1,8 @@
 #pragma once
-/*
-    BSD 3-Clause License
-
-    Copyright (c) 2023, KORG INC.
-    All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice, this
-      list of conditions and the following disclaimer.
-
-    * Redistributions in binary form must reproduce the above copyright notice,
-      this list of conditions and the following disclaimer in the documentation
-      and/or other materials provided with the distribution.
-
-    * Neither the name of the copyright holder nor the names of its
-      contributors may be used to endorse or promote products derived from
-      this software without specific prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-    OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-//*/
-
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2023, KORG INC. All rights reserved.
+ * Full license text: LICENSE in the repository root.
+ */
 /*
  *  File: osc.h
  *
@@ -70,11 +41,16 @@
 #include "processor.h"
 #include "unit_osc.h"
 #include "utils/float_math.h" // fastertanh2f()
+#include "osc_params.h"       // OscParams enum + constants + OscParamsData struct
 #include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
 #include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
 #include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
 #include "osc_random_walk.h"  // RandomWalk: dual-channel detune wandering
 #include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
+#include "osc_detune.h"       // Detune: cent-based pitch scaling (Taylor series)
+#ifdef EMSCRIPTEN
+#include "osc_lfo_sim.h"      // ShapeLfoSim: simulator-only shape-LFO synthesizer
+#endif
 
 class Osc : public Processor
 {
@@ -86,7 +62,10 @@ class Osc : public Processor
 public:
   uint32_t getBufferSize() const override final { return 0; } // NTS-1 osc do not support sdram allocation
 
-  // audio parameters
+  // ---- Audio parameters ----------------------------------------------------
+  // PARAM_SEL / PARAM_VAL are the user-facing header slots (header.c slots 0/1
+  // and 2/3). DETUNE..WAV2 are the 11 internal DSP parameters that the
+  // multiplexer edits.
   enum
   {
     PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..10, shows name
@@ -105,19 +84,39 @@ public:
     NUM_PARAMS
   };
 
-  // ---- Parameter selector / value multiplexer ----
+  // ---- Multiplexer constants -----------------------------------------------
+  // Number of editable DSP parameters (DETUNE..WAV2).
+  static constexpr uint8_t kEditParamCount = 11; // DETUNE..WAV2
+  // The first editable enum value. The UI (header.c PARAM slot, 0..10) expects
+  // this order: 0 DET1 (DETUNE), 1 DET2 (DETUNE_A), 2 RATE (RATE_AMT),
+  // 3 SPEE (RATE_SPD), 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM, 8 FOLD, 9 WAV1,
+  // 10 WAV2. So kEditParamFirst + select_ (select_ 0..10) maps to
+  // DETUNE..WAV2 correctly.
+  static constexpr uint8_t kEditParamFirst = DETUNE;
+
+  // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
+  using Params = ::OscParamsData;
+
+  // ---- Display scaling constants (raw 10-bit <-> DSP float) ----------------
+  // Single source of truth for the ranges each editable parameter maps onto,
+  // used by BOTH apply_edit_param() (raw -> DSP float) and
+  // getParameterStrValue() (raw -> display string). Keep in sync with the
+  // web simulator (websim/osc.html formatParamValue) and the default raw
+  // values in the header's "init" fields (header.c).
+  //
+  // DET1/DET2 span +/-kDetuneMaxCents around 0 cents, centered on the raw
+  // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
+  static constexpr float    kDetuneMaxCents = 100.f;
+  static constexpr float    kSatuMax        = 3.f;   // 0..3.0 drive level
+  static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
+  static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
+
+  // ---- Parameter selector / value multiplexer (state) ----
   // Knob A (PARAM_SEL, slot 0) picks one of the 11 DSP parameters
   // (DETUNE..WAV2), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
   // The 11 raw 10-bit values (0..1023) are cached in edit_value_ so that
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
-  static constexpr uint8_t kEditParamCount = 11; // DETUNE..WAV2
-  // The UI (header.c PARAM slot, 0..10) expects this order:
-  //   0 DET1 (DETUNE), 1 DET2 (DETUNE_A), 2 RATE (RATE_AMT), 3 SPEE (RATE_SPD),
-  //   4 SUB1, 5 SUB2, 6 SATU, 7 ASYM, 8 FOLD, 9 WAV1, 10 WAV2.
-  // So the first editable enum value is DETUNE (=2), NOT RATE_AMT (=4).
-  // kEditParamFirst + select_ must equal the right enum for every select_ 0..10.
-  static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // Raw 10-bit values (0..1023) of the 11 editable parameters, cached so the
   // selector can recall them. Defaults match the header's "init" values:
@@ -163,20 +162,8 @@ public:
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
   // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
 
-  // ---- Parameter ranges & display scaling ----
-  // Single source of truth for the ranges each editable parameter maps onto,
-  // used by BOTH apply_edit_param() (raw -> DSP float) and
-  // getParameterStrValue() (raw -> display string). Keep in sync with the
-  // web simulator (websim/osc.html formatParamValue) and the default raw
-  // values in the header's "init" fields (header.c).
-  //
-  // DET1/DET2 span +/-kDetuneMaxCents around 0 cents, centered on the raw
-  // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
-  // RATE SPD spans RandomWalk::kPeriodMinSec..RandomWalk::kPeriodMaxSec (log, 100^x) — 0.1 s to 10 s.
-  static constexpr float    kDetuneMaxCents    = 100.f;
-  static constexpr float    kSatuMax           = 3.f;   // 0..3.0 drive level
-  static constexpr int32_t  kRawMid            = 511;   // raw 10-bit value == 0%
-  static constexpr int32_t  kRawMax            = 1023;  // raw 10-bit value == 100%
+  // (Display scaling constants kDetuneMaxCents / kSatuMax / kRawMid / kRawMax
+  //  live in OscParams, see osc_params.h.)
 
   // ---- Audio-path mix constants ----
   // Final-mix gains. Worst-case peaks: |y*kMixOsc|<0.5,
@@ -190,48 +177,17 @@ public:
   // ---- Sample-rate / reference-frequency helpers ----
   // getSampleRate() (Processor base) returns 48000.f for all logue products;
   // reuse it in constexpr audio-path sites to avoid a stray 48000 literal.
+  // (kCentsToX lives in Detune, see osc_detune.h.)
   static constexpr float    kSampleRate   = getSampleRate(); // 48000
   static constexpr float    kRefHz        = 880.f;           // A4
   static constexpr float    kTwoPi        = 6.283185307179586f;
-  static constexpr float    kCentsToX     = 5.7762265046261084e-04f; // cents * ln(2)/1200
   // 0.5 * 2^(kSubDetuneCents/1200) == 0.5 * 2^(-4/1200); derived from the
   // sub-octave fixed detune so it cannot drift if kSubDetuneCents changes.
   static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
 
   // (The A-H-R envelope lives in AhEnvelope, see osc_envelope.h.)
-
-  // Note: Make sure that default param values correspond to declarations in header.c
-  struct Params
-  {
-    float detune_cents;   // -100.f .. +100.f, knob A (osc B)
-    float detune_a_cents; // -100.f .. +100.f, knob A (osc A)
-    float drive;          // 0.f .. 3.f, knob B
-    float rw_amount;    // 0.f .. 1.f, edit: random-walk depth
-    float rw_rate;      // 0.f .. 1.f, edit: random-walk speed
-    float sub_level;    // 0.f .. 1.f, edit: sub-octave (f/2) sine level
-    float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
-    float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
-    float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
-    float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
-    float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
-
-    void reset()
-    {
-      detune_cents = 0.f;     // default: in tune
-      detune_a_cents = 0.f;   // default: in tune
-      drive = 2.f;            // default: moderate drive (50% of 0..3 range)
-      rw_amount = 0.f;    // default: random walk off
-      rw_rate = 0.5f;     // default: mid speed
-      sub_level = 0.5f;   // default: half-level sub
-      sub2_level = 0.f;   // default: second sub off (regression-safe)
-      fold_depth = 0.f;   // default: wavefolder off (regression-safe)
-      asym = 0.f;         // default: symmetric saturator (regression-safe)
-      wave_a = 0.f;       // default: first wave of bank A
-      wave_b = 0.f;       // default: first wave of bank A
-    }
-
-    Params() { reset(); }
-  };
+  // (The runtime DSP parameter struct Params is defined in osc_params.h as
+  //  OscParamsData; see the `using Params = ::OscParamsData;` alias above.)
 
   // Map a raw 10-bit value (0..1023) for one of the 10 editable parameters
   // (DETUNE..WAV2) onto the DSP state. This is the single source of truth
@@ -500,15 +456,16 @@ public:
 #ifdef EMSCRIPTEN
   // Simulator-only LFO settings (set from the JS UI, K-rate). On hardware
   // these are the physical OSC-button knobs and are delivered via the
-  // platform's shape_lfo; here they drive the internal sine generator.
+  // platform's shape_lfo; here they drive the internal sine generator
+  // (ShapeLfoSim, see osc_lfo_sim.h).
   void setLfoFreq(float freq)
   {
-    lfo_freq_ = (freq < 0.f) ? 0.f : (freq > 30.f) ? 30.f : freq;
+    lfo_sim_.freq = (freq < 0.f) ? 0.f : (freq > 30.f) ? 30.f : freq;
   }
 
   void setLfoDepth(float depth)
   {
-    lfo_depth_ = (depth < 0.f) ? 0.f : (depth > 1.f) ? 1.f : depth;
+    lfo_sim_.depth = (depth < 0.f) ? 0.f : (depth > 1.f) ? 1.f : depth;
   }
 #endif
 
@@ -578,18 +535,10 @@ public:
       if (rw_active)
       {
         rw_.advance(p.rw_amount, osc_white);
-        // recompute w0_a from effective detune (base + walk), 4th-order Taylor
-        const float eff_detune_a = p.detune_a_cents + rw_.dev_a;
-        const float x_a = eff_detune_a * kCentsToX; // cents * ln(2)/1200
-        const float detune_factor_a =
-            1.f + x_a * (1.f + x_a * (0.5f + x_a * (1.f / 6.f + x_a * (1.f / 24.f))));
-        w0_a = w0 * detune_factor_a;
-        // recompute w0_b from effective detune (base + walk), 4th-order Taylor
-        const float eff_detune_b = p.detune_cents + rw_.dev_b;
-        const float x_b = eff_detune_b * kCentsToX;
-        const float detune_factor_b =
-            1.f + x_b * (1.f + x_b * (0.5f + x_b * (1.f / 6.f + x_b * (1.f / 24.f))));
-        w0_b = w0 * detune_factor_b;
+        // recompute w0_a / w0_b from effective detune (base + walk).
+        // 4th-order Taylor via Detune::w0_detuned (see osc_detune.h).
+        w0_a = Detune::w0_detuned(w0, p.detune_a_cents + rw_.dev_a);
+        w0_b = Detune::w0_detuned(w0, p.detune_cents + rw_.dev_b);
       }
 
       // phasor update
@@ -598,15 +547,12 @@ public:
 
       // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
       // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
-      // The LFO is applied as a per-sample detune via a cached Taylor factor,
-      // so it costs one extra multiply per sample (no powf, no Taylor per
-      // sample — the LFO value is small, ±5 cents, so the 4th-order series
-      // is more than accurate enough).
+      // The LFO is applied as a per-sample detune via Detune::factor (4th-order
+      // Taylor, see osc_detune.h) — the LFO value is small (±5 cents), so the
+      // series is more than accurate enough.
       {
         const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-        const float x = lfo_fm_cents * kCentsToX; // cents * ln(2)/1200
-        const float lfo_factor = 1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
-        phasor_sub_ += w0_sub_ * lfo_factor;
+        phasor_sub_ += w0_sub_ * Detune::factor(lfo_fm_cents);
       }
 
       // second sub phasor: pure f/4, no LFO-FM and no fixed detune (it is a
@@ -626,20 +572,10 @@ public:
 
       // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
       // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
-      // and this block is compiled out, so the two paths share the same
-      // morph code below.
+      // and this line is compiled out, so the two paths share the same
+      // morph code below. See osc_lfo_sim.h for the synthesizer.
 #ifdef EMSCRIPTEN
-      if (lfo_depth_ > 0.f)
-      {
-        lfo_phase_ += kTwoPi * lfo_freq_ * (1.f / kSampleRate);
-        if (lfo_phase_ >= 1.f)
-          lfo_phase_ -= 1.f;
-        lfo_ = osc_sinf(lfo_phase_) * lfo_depth_;
-      }
-      else
-      {
-        lfo_ = 0.f;
-      }
+      lfo_ = lfo_sim_.process();
 #endif
 
       // generate wavetable samples in -1..1. Each voice's table index is the
@@ -740,10 +676,7 @@ private:
   // w0_b_ above is only used while the walk is disabled.
   void update_w0_b()
   {
-    const float x = params_.detune_cents * kCentsToX; // cents * ln(2) / 1200
-    const float detune_factor =
-        1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
-    w0_b_ = w0_ * detune_factor;
+    w0_b_ = Detune::w0_detuned(w0_, params_.detune_cents);
   }
 
   // recompute w0_a_ = w0_ * 2^(detune_a_cents/1200) — only when the base
@@ -751,10 +684,7 @@ private:
   // update_w0_b() (see its comment); detune_a_cents is limited to +/-100.
   void update_w0_a()
   {
-    const float x = params_.detune_a_cents * kCentsToX; // cents * ln(2) / 1200
-    const float detune_factor =
-        1.f + x * (1.f + x * (0.5f + x * (1.f / 6.f + x * (1.f / 24.f))));
-    w0_a_ = w0_ * detune_factor;
+    w0_a_ = Detune::w0_detuned(w0_, params_.detune_a_cents);
   }
 
   // recompute w0_sub_ = w0_ * 2^((kSubDetuneCents)/1200) — the sub-octave
@@ -791,14 +721,13 @@ private:
   float lfo_;
 
 #ifdef EMSCRIPTEN
-  // Host-side (web simulator) shape-LFO. On hardware the platform generates
-  // the LFO from the OSC-button A/B knobs and delivers it through
+  // Host-side (web simulator) shape-LFO synthesizer. On hardware the platform
+  // generates the LFO from the OSC-button A/B knobs and delivers it through
   // setShapeLfo(); in the simulator there is no platform, so we synthesize a
-  // phase-coherent sine at audio rate here. The UI sets frequency (F knob,
-  // 0..30 Hz) and depth (S knob, 0..1) via setLfoFreq()/setLfoDepth().
-  float lfo_freq_ = 1.f;
-  float lfo_depth_ = 0.f; // default 0 = LFO off (regression-safe startup)
-  float lfo_phase_ = 0.f;
+  // phase-coherent sine at audio rate here (see osc_lfo_sim.h). The UI sets
+  // frequency (F knob, 0..30 Hz) and depth (S knob, 0..1) via
+  // setLfoFreq()/setLfoDepth().
+  ShapeLfoSim lfo_sim_;
 #endif
 
   // local variables related to audio processing
