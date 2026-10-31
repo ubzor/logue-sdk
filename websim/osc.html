@@ -100,16 +100,16 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      const EDIT_PARAM_COUNT = 20;
+      const EDIT_PARAM_COUNT = 21;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DETU, 1 RATE, 2 SPEE, 3 SMTH, 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
       // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD, 12 CINT, 13 RWAV, 14 RDRV, 15 RFLD,
-      // 16 XFM, 17 XFM2, 18 FCUT, 19 RES.
+      // 16 XFM, 17 XFM2, 18 FCUT, 19 RES, 20 RWFC.
       const EDIT_PARAM_NAMES = [
         "DETU", "RATE", "SPEE", "SMTH", "SUB1",
         "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
-        "XFM", "XFM2", "FCUT", "RES",
+        "XFM", "XFM2", "FCUT", "RES", "RWFC",
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 16 editable
@@ -176,6 +176,8 @@
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
+        // idx === 20 (RWFC): random-walk depth on SVF cutoff, 0..100%
+        // (falls through to the default % branch below)
         return Math.round((raw * 100) / 1023) + "%";
       }
 

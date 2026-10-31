@@ -104,22 +104,24 @@ public:
     XFM_B,          // cross-FM depth on osc B (A modulates B's phase, 0..30 c, default 0 = off)
     FCUT,           // internal SVF cutoff + dry/wet (log 80 Hz..12 kHz, 0% = raw, 100% = LPF)
     RES,            // internal SVF resonance Q (0..100% -> 0.5..2.5, default 0% = 0.5)
+    RW_FC,          // random-walk depth on SVF cutoff (0..100%, default 0% = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..RES).
-  static constexpr uint8_t kEditParamCount = 20; // DETUNE..RES
-  // The first editable enum value. The UI (header.c PARAM slot, 0..19) expects
-  // this order (select_ index -> parameter), 20 parameters total:
+  // Number of editable DSP parameters (DETUNE..RW_FC).
+  static constexpr uint8_t kEditParamCount = 21; // DETUNE..RW_FC
+  // The first editable enum value. The UI (header.c PARAM slot, 0..20) expects
+  // this order (select_ index -> parameter), 21 parameters total:
   //   0 DET (DETUNE)    1 RATE (RATE_AMT)  2 SPEE (RATE_SPD)  3 SMTH (RATE_SMTH)
   //   4 SUB1            5 SUB2             6 SATU             7 ASYM
   //   8 FOLD            9 WAV1             10 WAV2            11 CHRD (CHORD)
   //   12 CINT (CHRD_INT) 13 RW_WAV         14 RW_DRV          15 RW_FLD
   //   16 XFM_A (cross-FM on A)  17 XFM_B (cross-FM on B)
   //   18 FCUT (SVF cutoff + dry/wet)  19 RES (SVF resonance Q)
+  //   20 RWFC (RW_FC: random-walk depth on SVF cutoff)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 20 = (RES - DETUNE + 1); select_ 0..19 -> DETUNE..RES.
+  // kEditParamCount = 21 = (RW_FC - DETUNE + 1); select_ 0..20 -> DETUNE..RW_FC.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -455,12 +457,22 @@ public:
       break;
 
     case RES:
-      // 0..1023 -> 0..1 SVF resonance (linear 0.5 .. 2.5 Q). Recompute the
+      // 0..1023 -> 0..1 SVF resonance (linear 0..1 -> 0.5 .. 2.5 Q). Recompute the
       // damping coefficient at K-rate (the cutoff coefficient is unchanged).
       {
         params_.svf_res = param_10bit_to_f32(value);
         svf_.updateResonance(Svf::quality(params_.svf_res));
       }
+      break;
+
+    case RW_FC:
+      // 0..1023 -> 0..1 random-walk depth on the SVF cutoff (RWFC knob). The
+      // per-sample cutoff modulation (cc_w = cc * 2^(+/-half-oct * dev_a))
+      // is applied in the audio path, gated by rw_active && svf_active. At
+      // RWFC = 0 the cutoff is static (regression-safe). The depth is scaled
+      // by the global walk depth (rw_amount) at the point of use, so RATE = 0
+      // still disables the cutoff walk even if RWFC is turned up.
+      params_.rw_fc = param_10bit_to_f32(value);
       break;
 
     default:
@@ -514,7 +526,7 @@ public:
         "DETU", "RATE", "SPEE", "SMTH",
         "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
-        "XFM", "XFM2", "FCUT", "RES"};
+        "XFM", "XFM2", "FCUT", "RES", "RWFC"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
     const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
     if (is_param_sel)

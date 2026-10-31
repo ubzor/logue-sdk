@@ -54,7 +54,8 @@ const __unit_header unit_header_t unit_header = {
         //   17: XFM2 - cross-FM depth on osc B (A modulates B, 0..15 c), default 0 (off)
         //   18: FCUT - internal SVF cutoff + dry/wet (80 Hz..12 kHz, 0% = raw), default 921
         //   19: RES  - internal SVF resonance Q (0.5..2.5), default 0 (0.5)
-        {0, 19, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        //   20: RWFC - random-walk depth on SVF cutoff (0..100%), default 0 (off)
+        {0, 20, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -73,8 +74,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..19. Identical to slot 0.
-        {0, 19, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..20. Identical to slot 0.
+        {0, 20, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.
