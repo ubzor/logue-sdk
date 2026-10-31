@@ -85,9 +85,16 @@ public:
     PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..15, shows name
     PARAM_VAL,      // knob B (header slot 1): raw value 0..1023 of PARAM_SEL, shows value
     DETUNE,         // static symmetric detune of A/B (−10..+10 cents, A=+c/2, B=−c/2, default 0)
-    RATE_AMT,       // random-walk depth (0..100%, default 0% = off)
-    RATE_SPD,       // random-walk period (0..100% -> 0.1 s..10 s, log, default 50%)
-    RATE_SMTH,      // random-walk time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
+    RATE_AMT,       // SHARED random-walk depth ceiling for all three streams (0..100%, default 0% = off)
+    // Three independent wandering streams (Tone / Timbre / Density). Each has
+    // its own period (SPDx) and time constant (SMTx), so they are not
+    // phase-locked. See osc_params.h for the per-stream targets each drives.
+    SPD1,           // Tone stream period   (0..100% -> 0.1 s..10 s, log, default 50%)
+    SMT1,           // Tone stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
+    SPD2,           // Timbre stream period  (0..100% -> 0.1 s..10 s, log, default 50%)
+    SMT2,           // Timbre stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
+    SPD3,           // Density stream period (0..100% -> 0.1 s..10 s, log, default 50%)
+    SMT3,           // Density stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
     SUB1,           // sub-octave sine level (0..100%, default 50%)
     SUB2,           // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
     SATU,           // saturator drive (0..3.0, default 2.0 = moderate)
@@ -110,18 +117,21 @@ public:
 
   // ---- Multiplexer constants -----------------------------------------------
   // Number of editable DSP parameters (DETUNE..RW_FC).
-  static constexpr uint8_t kEditParamCount = 21; // DETUNE..RW_FC
-  // The first editable enum value. The UI (header.c PARAM slot, 0..20) expects
-  // this order (select_ index -> parameter), 21 parameters total:
-  //   0 DET (DETUNE)    1 RATE (RATE_AMT)  2 SPEE (RATE_SPD)  3 SMTH (RATE_SMTH)
-  //   4 SUB1            5 SUB2             6 SATU             7 ASYM
-  //   8 FOLD            9 WAV1             10 WAV2            11 CHRD (CHORD)
-  //   12 CINT (CHRD_INT) 13 RW_WAV         14 RW_DRV          15 RW_FLD
-  //   16 XFM_A (cross-FM on A)  17 XFM_B (cross-FM on B)
-  //   18 FCUT (SVF cutoff + dry/wet)  19 RES (SVF resonance Q)
-  //   20 RWFC (RW_FC: random-walk depth on SVF cutoff)
+  static constexpr uint8_t kEditParamCount = 25; // DETUNE..RW_FC
+  // The first editable enum value. The UI (header.c PARAM slot, 0..24) expects
+  // this order (select_ index -> parameter), 25 parameters total:
+  //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
+  //   2 SPD1            3 SMT1            (Tone stream period / smooth)
+  //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
+  //   6 SPD3            7 SMT3            (Density stream period / smooth)
+  //   8 SUB1            9 SUB2            10 SATU           11 ASYM
+  //   12 FOLD           13 WAV1           14 WAV2           15 CHRD (CHORD)
+  //   16 CINT (CHRD_INT) 17 RW_WAV        18 RW_DRV         19 RW_FLD
+  //   20 XFM_A (cross-FM on A)  21 XFM_B (cross-FM on B)
+  //   22 FCUT (SVF cutoff + dry/wet)  23 RES (SVF resonance Q)
+  //   24 RWFC (RW_FC: random-walk depth on SVF cutoff)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 21 = (RW_FC - DETUNE + 1); select_ 0..20 -> DETUNE..RW_FC.
+  // kEditParamCount = 25 = (RW_FC - DETUNE + 1); select_ 0..24 -> DETUNE..RW_FC.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -183,13 +193,14 @@ public:
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 20 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 25 editable parameters, cached so the
   // selector can recall them. Defaults match the DSP defaults in
   // OscParamsData::reset() (osc_params.h):
-  // DETUNE 511, RATE 0, SPEE 511, SMTH 511, SUB1 511, SUB2 205, SATU 341,
-  // ASYM 511, FOLD 0, WAV1 0, WAV2 128, CHORD 205, CINT 377, RW_WAV 0,
-  // RW_DRV 0, RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0};
+  // DETUNE 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511, SPD3 511,
+  // SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0, WAV1 0, WAV2 128,
+  // CHORD 205, CINT 377, RW_WAV 0, RW_DRV 0, RW_FLD 0, XFM_A 0, XFM_B 0,
+  // FCUT 921 (~90%), RES 0, RWFC 0.
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -340,25 +351,43 @@ public:
       break;
 
     case RATE_AMT:
+      // Shared depth ceiling for all three streams (0..100% -> quadratic
+      // 0..1). Changing it does NOT recompute the per-stream periods/smoothing
+      // (those depend only on SPDx/SMTx), so no setup() call is needed here.
       {
         const float x = param_10bit_to_f32(value);
         params_.rw_amount = x * x; // quadratic: knob^2 -> 0..1 normalized depth
       }
       break;
 
-    case RATE_SPD:
-      // Target-update period only (the tracking time constant is RATE_SMTH).
-      // The full setup (ceiling + interval + tracking) is recomputed from all
-      // three RATE parameters so a change to any of them stays consistent.
-      params_.rw_rate = param_10bit_to_f32(value);
-      rw_.setup(params_.rw_rate, params_.rw_amount, params_.rw_smooth);
+    // Three independent wandering streams. SPDx sets the stream's target-update
+    // period (0.1 s .. 10 s, log); SMTx its tracking time constant (10 ms ..
+    // 1.5 s, log). Each stream has its own RandomWalk instance (rw_[i]), so the
+    // streams are not phase-locked. setup() is called on the single affected
+    // stream so its interval / tracking pick up the new value.
+    case SPD1:
+      params_.rw_rate[0] = param_10bit_to_f32(value);
+      rw_[0].setup(params_.rw_rate[0], params_.rw_amount, params_.rw_smooth[0]);
       break;
-
-    case RATE_SMTH:
-      // Tracking time constant only (10 ms .. 1.5 s, log). Recompute the full
-      // setup so the tracking coefficient k picks up the new value.
-      params_.rw_smooth = param_10bit_to_f32(value);
-      rw_.setup(params_.rw_rate, params_.rw_amount, params_.rw_smooth);
+    case SMT1:
+      params_.rw_smooth[0] = param_10bit_to_f32(value);
+      rw_[0].setup(params_.rw_rate[0], params_.rw_amount, params_.rw_smooth[0]);
+      break;
+    case SPD2:
+      params_.rw_rate[1] = param_10bit_to_f32(value);
+      rw_[1].setup(params_.rw_rate[1], params_.rw_amount, params_.rw_smooth[1]);
+      break;
+    case SMT2:
+      params_.rw_smooth[1] = param_10bit_to_f32(value);
+      rw_[1].setup(params_.rw_rate[1], params_.rw_amount, params_.rw_smooth[1]);
+      break;
+    case SPD3:
+      params_.rw_rate[2] = param_10bit_to_f32(value);
+      rw_[2].setup(params_.rw_rate[2], params_.rw_amount, params_.rw_smooth[2]);
+      break;
+    case SMT3:
+      params_.rw_smooth[2] = param_10bit_to_f32(value);
+      rw_[2].setup(params_.rw_rate[2], params_.rw_amount, params_.rw_smooth[2]);
       break;
 
     case SUB1:
@@ -523,7 +552,8 @@ public:
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final
   {
     static const char *const names[kEditParamCount] = {
-        "DETU", "RATE", "SPEE", "SMTH",
+        "DETU", "RATE",
+        "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
         "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
         "XFM", "XFM2", "FCUT", "RES", "RWFC"};
@@ -543,9 +573,9 @@ public:
 
     static char buf[8];
 
-    // SMTH (random-walk time constant): display as 0..100% (same format as
-    // RATE / SPEE). The actual ms value (10..1500) is a log mapping of the
-    // raw 0..1023 value; showing % keeps the display consistent and avoids
+    // SPDx / SMTx (stream period / time constant): display as 0..100% (the
+    // default branch). The actual s / ms value is a log mapping of the raw
+    // 0..1023 value; showing % keeps the display consistent and avoids
     // pulling a fasterpowf into the K-rate display path.
 
     // CINT (chord interval): display cents (0..1900), not a name.
@@ -682,7 +712,8 @@ public:
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
     waves_.update(w0_); // resolve default wavetable pointers from params_
-    rw_.reset(); // random-walk state starts centered, AMT=0
+    for (uint8_t i = 0; i < kRwStreamCount; i++)
+      rw_[i].reset(); // each stream starts centered, AMT=0 (off)
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
     prev_wav_a_ = 0.f; // cross-FM lookback cache: start at 0 (first sample is a no-op)
     prev_wav_b_ = 0.f;
@@ -712,7 +743,8 @@ public:
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
     sub2_.gate = 0.f;
-    rw_.reset(); // re-center the random walk on stop
+    for (uint8_t i = 0; i < kRwStreamCount; i++)
+      rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
     prev_wav_a_ = 0.f; // cross-FM lookback cache
     prev_wav_b_ = 0.f;
@@ -883,22 +915,31 @@ public:
     const float wave_base_b = p.wave_b + waves_.wave_shift_;
     if (rw_active)
     {
-      // Recompute the ceiling / interval / tracking from the rate parameters
-      // (any of rw_rate / rw_amount / rw_smooth may have changed).
-      rw_.setup(p.rw_rate, p.rw_amount, p.rw_smooth);
-      // Initialize the targets to the current deviations on first activation
-      if (rw_.target_a == 0.f && rw_.dev_a != 0.f)
-        rw_.target_a = rw_.dev_a;
-      if (rw_.target_b == 0.f && rw_.dev_b != 0.f)
-        rw_.target_b = rw_.dev_b;
+      // Recompute each stream's interval / tracking from its own SPDx/SMTx
+      // (setup() is cheap and caches; the shared rw_amount ceiling is passed
+      // but only used for max_dev, which does not affect the period/tracking).
+      for (uint8_t i = 0; i < kRwStreamCount; i++)
+        rw_[i].setup(p.rw_rate[i], p.rw_amount, p.rw_smooth[i]);
+      // Initialize each stream's targets to its current deviations on first
+      // activation (avoids a visible jump when the RATE knob crosses 0).
+      for (uint8_t i = 0; i < kRwStreamCount; i++)
+      {
+        if (rw_[i].target_a == 0.f && rw_[i].dev_a != 0.f)
+          rw_[i].target_a = rw_[i].dev_a;
+        if (rw_[i].target_b == 0.f && rw_[i].dev_b != 0.f)
+          rw_[i].target_b = rw_[i].dev_b;
+      }
     }
 
     // Random-walk scaled values (computed per-sample inside the loop below).
-    // rw_.dev_a/b are normalized to [-1, +1] and advance per-sample via
-    // rw_.advance(). Each walk target scales them to its own units at the
-    // point of use: detune (cents), morph (tables), drive, fold. The scaled
-    // values must be recomputed every sample (not cached per-block) because
-    // rw_.advance() moves dev_a/b on every sample.
+    // Each stream's dev_a/b (rw_[i].dev_a/b) are normalized to [-1, +1] and
+    // advance per-sample via rw_[i].advance(). Each stream scales its own
+    // deviations to its targets' units at the point of use:
+    //   Tone (rw_[0])    -> detune (cents) + cross-FM
+    //   Timbre (rw_[1])  -> wavetable morph (tables) + SVF cutoff
+    //   Density (rw_[2]) -> drive + wavefolder depth
+    // The scaled values must be recomputed every sample (not cached per-block)
+    // because rw_[i].advance() moves dev_a/b on every sample.
     const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
     const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
     const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
@@ -933,10 +974,16 @@ public:
       float rw_dev_b_cents = 0.f;
       if (rw_active)
       {
-        rw_.advance(p.rw_amount, osc_white);
-        // Per-sample scaled walk values (dev_a/b change every sample).
-        rw_dev_a_cents = rw_.dev_a * rw_amt * kRwDetuneScaleCents;
-        rw_dev_b_cents = rw_.dev_b * rw_amt * kRwDetuneScaleCents;
+        // Advance all three streams (each draws its own random targets on its
+        // own period, so they are not phase-locked). The Tone stream (rw_[0])
+        // drives detune + cross-FM; Timbre (rw_[1]) drives wavetable morph +
+        // SVF cutoff; Density (rw_[2]) drives drive + wavefolder.
+        rw_[0].advance(p.rw_amount, osc_white);
+        rw_[1].advance(p.rw_amount, osc_white);
+        rw_[2].advance(p.rw_amount, osc_white);
+        // Per-sample scaled Tone-stream walk values (dev_a/b change every sample).
+        rw_dev_a_cents = rw_[0].dev_a * rw_amt * kRwDetuneScaleCents;
+        rw_dev_b_cents = rw_[0].dev_b * rw_amt * kRwDetuneScaleCents;
         // recompute w0_a / w0_b from the combined (static + walk) per-voice
         // detune: A gets +c/2 (static) + rw_dev_a (walk), B gets -c/2 (static)
         // + rw_dev_b (walk). 4th-order Taylor via Detune::w0_detuned
@@ -945,16 +992,18 @@ public:
         w0_a = Detune::w0_detuned(w0, +half_det + rw_dev_a_cents);
         w0_b = Detune::w0_detuned(w0, -half_det + rw_dev_b_cents);
       }
-      const float rw_dev_a_tables = rw_wav_active ? rw_.dev_a * rw_amt * kRwMorphScaleTables : 0.f;
-      const float rw_dev_b_tables = rw_wav_active ? rw_.dev_b * rw_amt * kRwMorphScaleTables : 0.f;
-      const float rw_dev_drive    = rw_drv_active ? rw_.dev_a * rw_amt * kRwDriveScale : 0.f;
+      // Timbre stream (rw_[1]): wavetable morph A/B.
+      const float rw_dev_a_tables = rw_wav_active ? rw_[1].dev_a * rw_amt * kRwMorphScaleTables : 0.f;
+      const float rw_dev_b_tables = rw_wav_active ? rw_[1].dev_b * rw_amt * kRwMorphScaleTables : 0.f;
+      // Density stream (rw_[2]): saturator drive + wavefolder depth.
+      const float rw_dev_drive    = rw_drv_active ? rw_[2].dev_a * rw_amt * kRwDriveScale : 0.f;
       // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld * rw_amt).
       // p.rw_fld is 0..1 (RFLD knob). At RFLD=0 -> eff_fold = p.fold_depth (no mod).
       // At RFLD=100% & RATE=100% -> eff_fold wanders from 0 to 2*p.fold_depth
       // (clamped to 1). The rw_amt factor keeps the folder walk gated by the
       // global RATE AMT depth, consistent with the detune/morph/drive walks.
       // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
-      const float rw_fold_mod = rw_fld_active ? rw_.dev_b * p.rw_fld * rw_amt : 0.f;
+      const float rw_fold_mod = rw_fld_active ? rw_[2].dev_b * p.rw_fld * rw_amt : 0.f;
 
       // phasor update (plus optional cross-FM phase modulation)
       // Cross-FM: each osc's phase is nudged by the OTHER osc's wavetable
@@ -976,11 +1025,11 @@ public:
       {
         const float xfm_a_idx = xfm_a_active
             ? (prev_wav_b_ * (0.5f / 3.141592653589793f) *
-               (rw_.dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
+               (rw_[0].dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
             : 0.f;
         const float xfm_b_idx = xfm_b_active
             ? (prev_wav_a_ * (0.5f / 3.141592653589793f) *
-               (rw_.dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
+               (rw_[0].dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
             : 0.f;
         phasor_a_ += w0_a + xfm_a_idx;
         phasor_b_ += w0_b + xfm_b_idx;
@@ -1117,7 +1166,7 @@ public:
         // (p.rw_fc, 0..1) and the global walk depth (rw_amt) so the cutoff
         // wanders by at most kRwCutoffHalfOctaves octaves at full depth.
         const float rw_fc_dev = (rw_active && p.rw_fc > 0.f)
-            ? rw_.dev_a * rw_amt * p.rw_fc
+            ? rw_[1].dev_a * rw_amt * p.rw_fc  // Timbre stream (rw_[1])
             : 0.f;
         const float oct_dev = Svf::kRwCutoffHalfOctaves * rw_fc_dev;
         // 2^oct_dev via exp2: 2^x = exp2(x). oct_dev is small (|x| <= 1), so
@@ -1174,8 +1223,13 @@ private:
   // Chord voice (third oscillator at selectable interval). See osc_chord.h.
   ChordVoice chord_;
 
-  // Random-walk detune wandering (dual channel). See osc_random_walk.h.
-  RandomWalk rw_;
+  // Three independent random-walk streams (dual channel each). See
+  // osc_random_walk.h. Index 0 = Tone (detune + cross-FM), 1 = Timbre
+  // (wavetable morph + SVF cutoff), 2 = Density (drive + wavefolder). Each
+  // stream wanders with independent random targets on its own (randomly-drawn)
+  // period, so the streams are not phase-locked to each other.
+  static constexpr uint8_t kRwStreamCount = 3;
+  RandomWalk rw_[kRwStreamCount];
 
   // Internal 12 dB/oct state-variable filter (post-saturator, pre-sub-mix).
   // See osc_svf.h. The cutoff (FCUT knob) and resonance (RES knob) are set at

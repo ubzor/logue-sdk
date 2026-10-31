@@ -33,9 +33,18 @@ struct OscParamsData
   // at the base note (they are stable "anchors").
   float detune_cents;   // -10.f .. +10.f, DETU knob (A/B symmetric)
   float drive;          // 0.f .. 3.f, SATU knob
-  float rw_amount;    // 0.f .. 1.f, edit: random-walk depth (quadratic-mapped)
-  float rw_rate;      // 0.f .. 1.f, edit: random-walk period (0.1 s .. 10 s, log)
-  float rw_smooth;    // 0.f .. 1.f, edit: random-walk time constant (10 ms .. 1.5 s, log)
+  float rw_amount;    // 0.f .. 1.f, edit: SHARED random-walk depth ceiling (quadratic-mapped)
+                     //            for all three wandering streams (RATE knob).
+  // Three independent wandering streams (Tone / Timbre / Density), each with
+  // its own period (SPDx) and time constant (SMTx). They wander with
+  // independent random targets on independent (randomly-drawn) periods, so the
+  // streams are NOT phase-locked to each other — each "lives its own life".
+  // See osc.h for which DSP target each stream drives:
+  //   [0] Tone    -> detune A/B + cross-FM (XFM_A / XFM_B)
+  //   [1] Timbre  -> wavetable morph (RW_WAV) + SVF cutoff (RWFC)
+  //   [2] Density -> saturator drive (RW_DRV) + wavefolder depth (RW_FLD)
+  float rw_rate[3];   // 0.f .. 1.f, edit SPD1..3: stream period (0.1 s .. 10 s, log)
+  float rw_smooth[3]; // 0.f .. 1.f, edit SMT1..3: stream time constant (10 ms .. 1.5 s, log)
   float sub_level;    // 0.f .. 1.f, edit: sub-octave (f/2) sine level
   float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
   float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
@@ -60,9 +69,15 @@ struct OscParamsData
   {
     detune_cents = 0.f;     // default: in tune (sum voice)
     drive = 1.0f;           // default: gentle drive (transparent, ~33% of 0..3)
-    rw_amount = 0.f;    // default: random walk off
-    rw_rate = 0.5f;     // default: mid period (~3.2 s)
-    rw_smooth = 0.5f;   // default: mid time constant (~0.12 s)
+    rw_amount = 0.f;    // default: random walk off (all three streams)
+    // All three streams default to mid period (~3.2 s) / mid time constant
+    // (~0.12 s) — same defaults the old single SPEE/SMTH knobs had.
+    rw_rate[0] = 0.5f;   // SPD1 (Tone)
+    rw_rate[1] = 0.5f;   // SPD2 (Timbre)
+    rw_rate[2] = 0.5f;   // SPD3 (Density)
+    rw_smooth[0] = 0.5f; // SMT1 (Tone)
+    rw_smooth[1] = 0.5f; // SMT2 (Timbre)
+    rw_smooth[2] = 0.5f; // SMT3 (Density)
     sub_level = 0.5f;   // default: half-level sub
     sub2_level = 0.2f;  // default: light f/4 sub for low-end body
     fold_depth = 0.f;   // default: wavefolder off

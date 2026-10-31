@@ -48,6 +48,24 @@
       align-items: center;
       gap: 10px;
     }
+    /* Preset bank: a grid of buttons that apply a full 25-parameter preset.
+       Each button carries a tooltip (title) describing its character. */
+    .preset-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 4px 0 12px 0;
+    }
+    .preset-grid button {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .preset-grid button.active {
+      font-weight: 700;
+      outline: 2px solid #333;
+    }
   </style>
 </head>
 
@@ -112,6 +130,10 @@
       <span id="LfoDepthLabel">0%</span>
     </div>
 
+    <h2>Presets</h2>
+    <p>One-click parameter banks (simulator-only). Hover for a description.</p>
+    <div class="preset-grid" id="Presets"></div>
+
     <h2>Parameters</h2>
     <div id="Parameters"></div>
     </div>
@@ -141,36 +163,45 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      const EDIT_PARAM_COUNT = 21;
+      const EDIT_PARAM_COUNT = 25;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
-      // 0 DETU, 1 RATE, 2 SPEE, 3 SMTH, 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
-      // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD, 12 CINT, 13 RWAV, 14 RDRV, 15 RFLD,
-      // 16 XFM, 17 XFM2, 18 FCUT, 19 RES, 20 RWFC.
+      // 0 DETU, 1 RATE (shared depth ceiling),
+      // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
+      // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
+      // 6 SPD3, 7 SMT3 (Density stream period / smooth),
+      // 8 SUB1, 9 SUB2, 10 SATU, 11 ASYM, 12 FOLD, 13 WAV1, 14 WAV2,
+      // 15 CHRD, 16 CINT, 17 RWAV, 18 RDRV, 19 RFLD,
+      // 20 XFM, 21 XFM2, 22 FCUT, 23 RES, 24 RWFC.
       const EDIT_PARAM_NAMES = [
-        "DETU", "RATE", "SPEE", "SMTH", "SUB1",
-        "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
+        "DETU", "RATE",
+        "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
+        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
         "XFM", "XFM2", "FCUT", "RES", "RWFC",
       ];
 
-      // Format the raw 10-bit value (0..1023) of one of the 16 editable
-      // parameters for display (idx = select_ index 0..15):
-      //   0: DETU  - static detune of the A+B+C sum (-5..+5 cents)
-      //   1: RATE  - random-walk depth (0..100%)
-      //   2: SPEE  - random-walk period (0.1 s .. 10 s, log) -> %
-      //   3: SMTH  - random-walk time constant (10 ms .. 1.5 s, log) -> ms
-      //   4: SUB1  - sub-octave sine level (0..100%)
-      //   5: SUB2  - second sub level (0..100%)
-      //   6: SATU  - saturator drive (0..300)
-      //   7: ASYM  - asymmetric saturator (-100%..+100%)
-      //   8: FOLD  - pre-drive wavefolder depth (0..100%)
-      //   9: WAV1  - osc A wavetable (0..90)
-      //  10: WAV2  - osc B wavetable (0..90)
-      //  11: CHRD  - chord-voice level (0..100%)
-      //  12: CINT  - chord interval (0..1900 cents, continuous)
-      //  13: RWAV  - random-walk depth on wavetable morph (0..100%)
-      //  14: RDRV  - random-walk depth on saturator drive (0..100%)
-      //  15: RFLD  - random-walk depth on wavefolder depth (0..100%)
+      // Format the raw 10-bit value (0..1023) of one of the 25 editable
+      // parameters for display (idx = select_ index 0..24):
+      //   0: DETU  - static detune of the A+B+C sum (+/-10 cents)
+      //   1: RATE  - shared random-walk depth ceiling for all 3 streams (0..100%)
+      //   2..7: SPD1..SMT3 - per-stream period / time constant (0..100%, log)
+      //   8: SUB1  - sub-octave sine level (0..100%)
+      //   9: SUB2  - second sub level (0..100%)
+      //  10: SATU  - saturator drive (0..300)
+      //  11: ASYM  - asymmetric saturator (-100%..+100%)
+      //  12: FOLD  - pre-drive wavefolder depth (0..100%)
+      //  13: WAV1  - osc A wavetable (0..90)
+      //  14: WAV2  - osc B wavetable (0..90)
+      //  15: CHRD  - chord-voice level (0..100%)
+      //  16: CINT  - chord interval (0..1900 cents, continuous)
+      //  17: RWAV  - random-walk depth on wavetable morph (0..100%)
+      //  18: RDRV  - random-walk depth on saturator drive (0..100%)
+      //  19: RFLD  - random-walk depth on wavefolder depth (0..100%)
+      //  20: XFM   - cross-FM depth on osc A (0..15 c)
+      //  21: XFM2  - cross-FM depth on osc B (0..15 c)
+      //  22: FCUT  - SVF cutoff + dry/wet (80 Hz .. 12 kHz, log)
+      //  23: RES   - SVF resonance Q (0.5 .. 2.5)
+      //  24: RWFC  - random-walk depth on SVF cutoff (0..100%)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
         //   WAV1/WAV2 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
@@ -178,12 +209,15 @@
         //   DETU      -> +/-10 cents, centered on the raw MIDPOINT (511),
         //                 NOT 1023: (raw-511)*10/511. Full knob (1023) reads +10.
         //   SATU      -> 0..300 (drive 0..3.0)
-        //   SMTH      -> 10..1500 ms (tau_ms = 10 * 100^(raw/1023), log)
+        //   SPDx/SMTx -> 0..100% (log-mapped period / time constant)
         //   CINT      -> interval cents (0..1900)
+        //   XFM/XFM2  -> 0..15 cents (cross-FM depth)
+        //   FCUT      -> Hz / kHz (log-mapped 80 Hz .. 12 kHz)
+        //   RES       -> Q (0.5 .. 2.5)
         //   others    -> 0..100%
-        if (idx === 9 || idx === 10)
+        if (idx === 13 || idx === 14)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
-        if (idx === 7) {
+        if (idx === 11) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
@@ -191,20 +225,17 @@
           const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 6)
+        if (idx === 10)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100
-        // SMTH: display as 0..100% (same as RATE / SPEE); the actual ms value
-        // (10..1500) is a log mapping, but % keeps the display consistent.
-        // (idx === 3 falls through to the default % branch below)
-        if (idx === 12) {
+        if (idx === 16) {
           // CINT: 0..1900 cents (continuous interval)
           return Math.round((raw / 1023) * 1900) + "c";
         }
-        if (idx === 16 || idx === 17) {
+        if (idx === 20 || idx === 21) {
           // XFM / XFM2: cross-FM depth, 0..15 cents (mirrors kXfmMaxCents in osc.h)
           return Math.round((raw / 1023) * 15) + "c";
         }
-        if (idx === 18) {
+        if (idx === 22) {
           // FCUT: SVF cutoff (log-mapped 80 Hz .. 12 kHz). Display Hz or kHz.
           // Mirrors Svf::cutoffHz: fc = 80 * (12000/80)^(raw/1023).
           const knob = raw / 1023;
@@ -212,13 +243,13 @@
           if (fc >= 1000) return (fc / 1000).toFixed(1) + "k";
           return Math.round(fc) + "H";
         }
-        if (idx === 19) {
+        if (idx === 23) {
           // RES: SVF resonance Q (0.5 .. 2.5)
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
-        // idx === 20 (RWFC): random-walk depth on SVF cutoff, 0..100%
-        // (falls through to the default % branch below)
+        // idx 1..7 (RATE, SPD1..SMT3), 8..9 (SUB1/SUB2), 12 (FOLD),
+        // 15 (CHRD), 17..19 (RWAV/RDRV/RFLD), 24 (RWFC): 0..100%
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -494,6 +525,153 @@
       // behind the hardware's PARAM/VALUE multiplexer), in select_ order
       for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
         createEditableParam(wasmProcessor, i);
+      }
+
+      // ---- Preset bank -------------------------------------------------------
+      // One-click parameter banks (simulator-only, like the BPM slider). A
+      // preset is a full 25-parameter raw array in EDIT_PARAM_NAMES order.
+      // Applying one MUST be paced: the DSP's direct edit channel
+      // (simEditRequest) has a SINGLE pending slot, and the audio worklet
+      // consumes at most one request per block (~128 samples @ 44.1 kHz ≈ 2.9
+      // ms). A synchronous burst of 25 setEditParam calls would let each write
+      // overwrite the previous one before the worklet reads it, dropping ~24
+      // parameters. So we spread the writes ~8 ms apart (3 audio blocks of
+      // headroom each) and let each one be consumed. Total apply time ≈ 200 ms
+      // (a short, smooth morph from the previous sound).
+      // Two banks only: Random (randomize the wandering streams) and Reset
+      // (always restore the factory defaults, osc.h edit_value_ initializers).
+      const PRESET_RANDOM = "Random";
+      const PRESET_RESET = "Reset";
+      // Factory defaults = the edit_value_ initializers in osc.h (kEditParamFirst
+      // order): DETU 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
+      // SPD3 511, SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0,
+      // WAV1 0, WAV2 128, CHRD 205, CINT 377, RWAV 0, RDRV 0, RFLD 0, XFM 0,
+      // XFM2 0, FCUT 921, RES 0, RWFC 0.
+      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0, 0];
+
+      // Full randomization of all 25 parameters. "Safe" (walk) parameters get
+      // the full 0..1023 range; "critical" parameters are constrained to
+      // audition-friendly windows so Random always yields a playable sound
+      // (no clipping, no mud, no dissonance, no resonance spikes). The raw
+      // windows below are the exact inverse of formatParamValue (websim) /
+      // Osc::getParameterStrValue (osc.h), so they line up with the slider
+      // display. See the per-parameter comments for the DSP rationale.
+      function randomRaw() {
+        const raws = new Array(EDIT_PARAM_COUNT).fill(0);
+        const I = (name) => EDIT_PARAM_NAMES.indexOf(name);
+        const r1023 = () => Math.floor(Math.random() * 1024); // 0..1023
+        const rRange = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1)); // inclusive
+
+        // --- Full-range (walk / timbre) parameters ---------------------------
+        // SPD1..3 / SMT1..3: stream period / time constant (0.1 s..10 s log,
+        // 10 ms..1.5 s log). Any value is musically safe.
+        for (const n of ["SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3"])
+          raws[I(n)] = r1023();
+        // RWAV / RDRV / RFLD / RWFC: per-stream random-walk depths (0..100%).
+        // Full range — they only scale the wander, never the base sound.
+        for (const n of ["RWAV", "RDRV", "RFLD", "RWFC"])
+          raws[I(n)] = r1023();
+        // WAV1 / WAV2: wavetable index (0..kWavesTotal-1 = 0..90). Any table is
+        // a valid (if different) timbre; the full 91-table span is safe.
+        // The DSP (osc.h:416) does  param_10bit_to_f32(raw) * (kWavesTotal-1)
+        // i.e. raw/1023 * 90, so the raw value must be in 0..1023, NOT 0..90.
+        // Generate the target table index (0..90) then map to raw 0..1023 so
+        // the slider (range 0..1023) actually moves across its full span and
+        // formatParamValue(13/14, raw) recovers the original index.
+        {
+          const wav1Index = Math.floor(Math.random() * 91);
+          const wav2Index = Math.floor(Math.random() * 91);
+          raws[I("WAV1")] = Math.round(wav1Index * (1023 / 90));
+          raws[I("WAV2")] = Math.round(wav2Index * (1023 / 90));
+        }
+
+        // --- Constrained (critical) parameters -------------------------------
+        // DETU: static A/B detune, +/-kDetuneMaxCents (10 c) centered on 511.
+        // Window +/-5 c (raw 256..767) — a clear beat without going out of tune.
+        raws[I("DETU")] = rRange(256, 767);
+        // RATE: shared walk depth ceiling (0..100%, quadratic). 20..100% keeps
+        // the wander audible; below ~20% the streams are too subtle to hear.
+        raws[I("RATE")] = rRange(204, 1023);
+        // SUB1: sub-octave (f/2) sine, mixed at 0.4. 15..80% — body without mud.
+        raws[I("SUB1")] = rRange(153, 818);
+        // SUB2: second sub (f/4), LPF'd + gated, mixed at 0.3. 0..45% — light
+        // low-end, never the f/4 "mud" zone.
+        raws[I("SUB2")] = rRange(0, 460);
+        // SATU: saturator drive, 0..kSatuMax (3.0) => display 0..300. Window
+        // 40..240 (drive 0.4..2.4) — audible drive, no near-clip.
+        raws[I("SATU")] = rRange(136, 819);
+        // ASYM: asymmetric saturator, -100..+100% centered on 511. Window
+        // +/-50% (raw 256..767) — moderate asymmetry.
+        raws[I("ASYM")] = rRange(256, 767);
+        // FOLD: pre-drive wavefolder depth (0..1, multiplicative). 0..60%
+        // (raw 0..613) — metallic character possible, no "metal mush".
+        raws[I("FOLD")] = rRange(0, 613);
+        // CHRD: chord-voice level (0..100%). 0..60% — presence without masking.
+        raws[I("CHRD")] = rRange(0, 613);
+        // CINT: chord interval in cents (0..1900). Randomized over a DISCRETE
+        // set of consonant / musically-usable intervals so the chord voice is
+        // always "in key" (never a random dissonant gap).
+        const CINT_SET = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
+        raws[I("CINT")] = Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900);
+        // XFM / XFM2: cross-FM depth, 0..kXfmMaxCents (15 c). Window 0..8 c
+        // (raw 0..548) — shimmer without a wobble.
+        raws[I("XFM")] = rRange(0, 548);
+        raws[I("XFM2")] = rRange(0, 548);
+        // FCUT: SVF cutoff, log 80 Hz..12 kHz. Window 1 kHz..11 kHz
+        // (raw 740..1023) — keeps the filter in its working band, never
+        // "in a box" (low) or fully open (high, where the walk does nothing).
+        raws[I("FCUT")] = rRange(740, 1023);
+        // RES: SVF resonance Q, 0.5..2.5. Window 0.5..1.8 (raw 0..669) —
+        // gentle peak, no ringy spike.
+        raws[I("RES")] = rRange(0, 669);
+        return raws;
+      }
+
+      let presetApplyTimer = null;
+      function applyPresetRaw(raws, presetLabel) {
+        if (context.state !== "running") context.resume();
+        if (presetApplyTimer) clearTimeout(presetApplyTimer);
+        // Deactivate all preset buttons.
+        document.querySelectorAll(".preset-grid button").forEach((b) => b.classList.remove("active"));
+        const me = document.querySelector('.preset-grid button[data-name="' + presetLabel + '"]');
+        if (me) me.classList.add("active");
+        // Paced application: one setEditParam every 8 ms (see the block above).
+        let i = 0;
+        (function step() {
+          if (i < raws.length) {
+            const id = "editparam_" + i;
+            const el = document.getElementById(id);
+            if (el) {
+              el.value = raws[i];
+              const span = el.parentElement.querySelector("span");
+              if (span) span.textContent = formatParamValue(i, raws[i]);
+            }
+            if (Module.setEditParam) Module.setEditParam(i, raws[i]);
+            ++i;
+            presetApplyTimer = setTimeout(step, 8);
+          } else {
+            presetApplyTimer = null;
+          }
+        })();
+      }
+
+      // Build the preset buttons (after the sliders exist, so apply can touch them).
+      const presetGrid = document.getElementById("Presets");
+      {
+        const b = document.createElement("button");
+        b.textContent = PRESET_RANDOM;
+        b.title = "Random: RATE 20-100%, all walk periods/smooths + RWAV/RDRV/RFLD/RWFC + WAV1/WAV2 randomized.";
+        b.dataset.name = PRESET_RANDOM;
+        b.onclick = () => applyPresetRaw(randomRaw(), PRESET_RANDOM);
+        presetGrid.appendChild(b);
+      }
+      {
+        const b = document.createElement("button");
+        b.textContent = PRESET_RESET;
+        b.title = "Always restore the factory default parameters.";
+        b.dataset.name = PRESET_RESET;
+        b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
+        presetGrid.appendChild(b);
       }
 
       // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
