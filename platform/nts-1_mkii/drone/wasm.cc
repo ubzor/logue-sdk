@@ -401,7 +401,7 @@ extern "C" int getEditParamValue(int idx)
   return static_cast<int>(processor.getEditValue(static_cast<uint8_t>(idx)));
 }
 
-// Write one edit-parameter (index 0..16, raw 0..1023) to the DSP through
+// Write one edit-parameter (index 0..15, raw 0..1023) to the DSP through
 // the direct channel (Osc::simEditRequest). The audio worklet thread picks
 // the request up on its next process() call and applies the (select_,
 // PARAM_VAL) pair atomically -- the same semantics the hardware's

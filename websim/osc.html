@@ -100,61 +100,60 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      const EDIT_PARAM_COUNT = 17;
+      const EDIT_PARAM_COUNT = 16;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
-      // 0 DET1, 1 DET2, 2 RATE, 3 SPEE, 4 SMTH, 5 SUB1, 6 SUB2, 7 SATU, 8 ASYM,
-      // 9 FOLD, 10 WAV1, 11 WAV2, 12 CHRD, 13 CINT, 14 RWAV, 15 RDRV, 16 RFLD.
+      // 0 DETU, 1 RATE, 2 SPEE, 3 SMTH, 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
+      // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD, 12 CINT, 13 RWAV, 14 RDRV, 15 RFLD.
       const EDIT_PARAM_NAMES = [
-        "DET1", "DET2", "RATE", "SPEE", "SMTH", "SUB1",
+        "DETU", "RATE", "SPEE", "SMTH", "SUB1",
         "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
       ];
 
-      // Format the raw 10-bit value (0..1023) of one of the 17 editable
-      // parameters for display (idx = select_ index 0..16):
-      //   0: DET1  - detune osc B (-100..+100 cents)
-      //   1: DET2  - detune osc A (-100..+100 cents)
-      //   2: RATE  - random-walk depth (0..100%)
-      //   3: SPEE  - random-walk period (0.1 s .. 10 s, log) -> %
-      //   4: SMTH  - random-walk time constant (10 ms .. 1.5 s, log) -> ms
-      //   5: SUB1  - sub-octave sine level (0..100%)
-      //   6: SUB2  - second sub level (0..100%)
-      //   7: SATU  - saturator drive (0..300)
-      //   8: ASYM  - asymmetric saturator (-100%..+100%)
-      //   9: FOLD  - pre-drive wavefolder depth (0..100%)
-      //  10: WAV1  - osc A wavetable (0..90)
-      //  11: WAV2  - osc B wavetable (0..90)
-      //  12: CHRD  - chord-voice level (0..100%)
-      //  13: CINT  - chord interval (0..1900 cents, continuous)
-      //  14: RWAV  - random-walk depth on wavetable morph (0..100%)
-      //  15: RDRV  - random-walk depth on saturator drive (0..100%)
-      //  16: RFLD  - random-walk depth on wavefolder depth (0..100%)
+      // Format the raw 10-bit value (0..1023) of one of the 16 editable
+      // parameters for display (idx = select_ index 0..15):
+      //   0: DETU  - static detune of the A+B+C sum (-5..+5 cents)
+      //   1: RATE  - random-walk depth (0..100%)
+      //   2: SPEE  - random-walk period (0.1 s .. 10 s, log) -> %
+      //   3: SMTH  - random-walk time constant (10 ms .. 1.5 s, log) -> ms
+      //   4: SUB1  - sub-octave sine level (0..100%)
+      //   5: SUB2  - second sub level (0..100%)
+      //   6: SATU  - saturator drive (0..300)
+      //   7: ASYM  - asymmetric saturator (-100%..+100%)
+      //   8: FOLD  - pre-drive wavefolder depth (0..100%)
+      //   9: WAV1  - osc A wavetable (0..90)
+      //  10: WAV2  - osc B wavetable (0..90)
+      //  11: CHRD  - chord-voice level (0..100%)
+      //  12: CINT  - chord interval (0..1900 cents, continuous)
+      //  13: RWAV  - random-walk depth on wavetable morph (0..100%)
+      //  14: RDRV  - random-walk depth on saturator drive (0..100%)
+      //  15: RFLD  - random-walk depth on wavefolder depth (0..100%)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
         //   WAV1/WAV2 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
         //   ASYM      -> -100..+100% (raw*200/1023 - 100)
-        //   DET1/DET2 -> +/-100 cents, centered on the raw MIDPOINT (511),
-        //                NOT 1023: (raw-511)*100/511. Full knob (1023) reads +100.
+        //   DETU      -> +/-10 cents, centered on the raw MIDPOINT (511),
+        //                 NOT 1023: (raw-511)*10/511. Full knob (1023) reads +10.
         //   SATU      -> 0..300 (drive 0..3.0)
         //   SMTH      -> 10..1500 ms (tau_ms = 10 * 100^(raw/1023), log)
         //   CINT      -> interval cents (0..1900)
         //   others    -> 0..100%
-        if (idx === 10 || idx === 11)
+        if (idx === 9 || idx === 10)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
-        if (idx === 8) {
+        if (idx === 7) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
-        if (idx === 0 || idx === 1) {
-          const cents = Math.round(((raw - 511) * 100) / 511); // /511, not /1023
+        if (idx === 0) {
+          const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 7)
+        if (idx === 6)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100
         // SMTH: display as 0..100% (same as RATE / SPEE); the actual ms value
         // (10..1500) is a log mapping, but % keeps the display consistent.
-        // (idx === 4 falls through to the default % branch below)
-        if (idx === 13) {
+        // (idx === 3 falls through to the default % branch below)
+        if (idx === 12) {
           // CINT: 0..1900 cents (continuous interval)
           return Math.round((raw / 1023) * 1900) + "c";
         }

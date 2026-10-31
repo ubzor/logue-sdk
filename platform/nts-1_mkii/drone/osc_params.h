@@ -26,9 +26,13 @@
 // of the currently selected parameter. Reset to defaults on init().
 struct OscParamsData
 {
-  float detune_cents;   // -100.f .. +100.f, knob A (osc B)
-  float detune_a_cents; // -100.f .. +100.f, knob A (osc A)
-  float drive;          // 0.f .. 3.f, knob B
+  // Static symmetric detune of A and B (DETU knob, ±10 cents): A gets +c/2,
+  // B gets -c/2. Applied per-voice (not post-mix) so the inter-voice beat
+  // frequency is c * f / 600 — ~4x stronger than an equivalent post-mix sum
+  // detune at the same knob value. The chord voice and the sub voices stay
+  // at the base note (they are stable "anchors").
+  float detune_cents;   // -10.f .. +10.f, DETU knob (A/B symmetric)
+  float drive;          // 0.f .. 3.f, SATU knob
   float rw_amount;    // 0.f .. 1.f, edit: random-walk depth (quadratic-mapped)
   float rw_rate;      // 0.f .. 1.f, edit: random-walk period (0.1 s .. 10 s, log)
   float rw_smooth;    // 0.f .. 1.f, edit: random-walk time constant (10 ms .. 1.5 s, log)
@@ -46,8 +50,7 @@ struct OscParamsData
 
   void reset()
   {
-    detune_cents = 0.f;     // default: in tune
-    detune_a_cents = 0.f;   // default: in tune
+    detune_cents = 0.f;     // default: in tune (sum voice)
     drive = 1.0f;           // default: gentle drive (transparent, ~33% of 0..3)
     rw_amount = 0.f;    // default: random walk off
     rw_rate = 0.5f;     // default: mid period (~3.2 s)

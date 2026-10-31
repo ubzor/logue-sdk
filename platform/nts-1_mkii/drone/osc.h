@@ -13,10 +13,13 @@
  *  airy -> dense) selected by the WAVE A / WAVE B edit knobs; a continuous
  *  morph position is mapped onto the bank arrays (see resolve_wave), and the
  *  morph point drifts slightly toward the denser banks as the pitch rises so
- *  the tone stays consistent across the keyboard. Two edit knobs (DET1 /
- *  DET2) detune the second / first oscillator by up to +/-100 cents each,
- *  producing phase beating and an asymmetric chorus when both are moved. The
- *  SATU knob scales the drive level before a soft-clip tanh saturator.
+ *  the tone stays consistent across the keyboard. The DETU edit knob
+ *  (±10 cents, centered on 0) detunes A and B in OPPOSITE directions around
+ *  the base note (A = +c/2, B = -c/2), producing a per-voice phase drift
+ *  (inter-voice beat = c * f / 600) — ~4x stronger than an equivalent
+ *  post-mix sum detune at the same knob value. The chord and sub voices
+ *  stay at the base note (stable anchors). The SATU knob scales the drive
+ *  level before a soft-clip tanh saturator.
  *
  *  A sub-octave sine (one octave below, fixed -4 cents and FM'd by the
  *  platform shape-LFO) is mixed in parallel with the saturator for low-end
@@ -24,7 +27,11 @@
  *  harmonics, and the saturator itself can be made asymmetric (ASYM).
  *
  *  An optional random-walk "wandering" mechanism modulates the detunes of
- *  BOTH oscillators around their knob values:
+ *  BOTH A and B oscillators (independent random targets on the same period,
+ *  so the inter-voice beat frequency shifts over time — an asymmetric
+ *  chorus). The walk works together with the static DET knob: DET sets the
+ *  base chorus depth of the whole drone, the walk moves the A/B voices
+ *  around the base note so the inter-voice beat drifts in time.
  *    RATE AMT  — maximum deviation (quadratic mapping: knob^2 -> 0..1
  *                normalized, scaled to +/-10 cents at the audio path, so
  *                neither voice strays further from its DETUNE knob value than
@@ -74,10 +81,9 @@ public:
   // multiplexer edits.
   enum
   {
-    PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..11, shows name
+    PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..15, shows name
     PARAM_VAL,      // knob B (header slot 1): raw value 0..1023 of PARAM_SEL, shows value
-    DETUNE,         // detune of osc B (−100..+100 cents, default 0 = in tune)
-    DETUNE_A,       // detune of osc A (−100..+100 cents, default 0 = in tune)
+    DETUNE,         // static symmetric detune of A/B (−10..+10 cents, A=+c/2, B=−c/2, default 0)
     RATE_AMT,       // random-walk depth (0..100%, default 0% = off)
     RATE_SPD,       // random-walk period (0..100% -> 0.1 s..10 s, log, default 50%)
     RATE_SMTH,      // random-walk time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
@@ -98,13 +104,13 @@ public:
 
   // ---- Multiplexer constants -----------------------------------------------
   // Number of editable DSP parameters (DETUNE..RW_FLD).
-  static constexpr uint8_t kEditParamCount = 17; // DETUNE..RW_FLD
-  // The first editable enum value. The UI (header.c PARAM slot, 0..16) expects
-  // this order: 0 DET1 (DETUNE), 1 DET2 (DETUNE_A), 2 RATE (RATE_AMT),
-  // 3 SPEE (RATE_SPD), 4 SMTH (RATE_SMTH), 5 SUB1, 6 SUB2, 7 SATU, 8 ASYM,
-  // 9 FOLD, 10 WAV1, 11 WAV2, 12 CHRD (CHORD), 13 CINT (CHRD_INT),
-  // 14 RW_WAV, 15 RW_DRV, 16 RW_FLD. So kEditParamFirst + select_
-  // (select_ 0..16) maps to DETUNE..RW_FLD.
+  static constexpr uint8_t kEditParamCount = 16; // DETUNE..RW_FLD
+  // The first editable enum value. The UI (header.c PARAM slot, 0..15) expects
+  // this order: 0 DET (DETUNE), 1 RATE (RATE_AMT), 2 SPEE (RATE_SPD),
+  // 3 SMTH (RATE_SMTH), 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
+  // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD (CHORD), 12 CINT (CHRD_INT),
+  // 13 RW_WAV, 14 RW_DRV, 15 RW_FLD. So kEditParamFirst + select_
+  // (select_ 0..15) maps to DETUNE..RW_FLD.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -117,9 +123,9 @@ public:
   // web simulator (websim/osc.html formatParamValue) and the default raw
   // values in the header's "init" fields (header.c).
   //
-  // DET1/DET2 span +/-kDetuneMaxCents around 0 cents, centered on the raw
+  // DET spans +/-kDetuneMaxCents around 0 cents, centered on the raw
   // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
-  static constexpr float    kDetuneMaxCents = 100.f;
+  static constexpr float    kDetuneMaxCents = 10.f;  // sum-voice detune: +/-10 c
   static constexpr float    kSatuMax        = 3.f;   // 0..3.0 drive level
   static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
   static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
@@ -154,15 +160,15 @@ public:
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 17 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 16 editable parameters, cached so the
   // selector can recall them. Defaults match the DSP defaults in
   // OscParamsData::reset() (osc_params.h):
-  // DETUNE 511, DETUNE_A 511, RATE 0, SPEE 511, SMTH 511, SUB1 511,
-  // SUB2 205, SATU 341, ASYM 511, FOLD 0, WAV1 0, WAV2 128, CHORD 205,
-  // CINT 377, RW_WAV 0, RW_DRV 0, RW_FLD 0.
-  int32_t edit_value_[kEditParamCount] = {511, 511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0};
+  // DETUNE 511, RATE 0, SPEE 511, SMTH 511, SUB1 511, SUB2 205, SATU 341,
+  // ASYM 511, FOLD 0, WAV1 0, WAV2 128, CHORD 205, CINT 377, RW_WAV 0,
+  // RW_DRV 0, RW_FLD 0.
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0};
 
-  // Currently selected parameter (0..12), i.e. edit_value_[select_] is what
+  // Currently selected parameter (0..15), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
   uint8_t select_ = 0;
 
@@ -233,6 +239,21 @@ public:
   // (The LFO -> wavetable morph depth lives in WaveTable::kLfoMorphDepth,
   // see osc_waves.h.)
 
+  // ---- Static symmetric detune (DETU knob, ±kDetuneMaxCents = ±10 c) ----
+  // The DETU knob detunes A and B in OPPOSITE directions around the base
+  // note: w0_A = w0 * 2^(+c/2 / 1200), w0_B = w0 * 2^(-c/2 / 1200). This
+  // produces a per-voice phase drift (the inter-voice beat frequency is
+  // c * f / 600, twice the sum-detune rate) — the audible chorus depth is
+  // ~4x stronger than the post-mix sum detune at the same knob value,
+  // matching the old two-knob DET1/DET2 feel at moderate settings. The
+  // Taylor factors are cached in K-rate (update_w0_det) when the random
+  // walk is off; when the walk is active, process() recomputes them per
+  // sample for the combined (static + walk) per-voice detune. The chord
+  // voice and the sub voices stay at the base note (they are stable
+  // "anchors", not beating voices).
+  float w0_a_det_ = 0.f; // w0 * 2^(+detune_cents/2 / 1200)
+  float w0_b_det_ = 0.f; // w0 * 2^(-detune_cents/2 / 1200)
+
 
   // Pre-drive wavefolder: before the tanh saturator, mix is folded into
   // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
@@ -287,14 +308,12 @@ public:
     {
     case DETUNE:
       // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (50% = 511 = 0 cents)
+      // The DETU knob detunes A and B in OPPOSITE directions (±c/2 each),
+      // producing a per-voice phase drift (inter-voice beat = c*f/600).
+      // The Taylor factors are cached in w0_a_det_/w0_b_det_ (K-rate) and
+      // used directly in process() when the walk is off. See update_w0_det.
       params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
-      update_w0_b();
-      break;
-
-    case DETUNE_A:
-      // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (50% = 511 = 0 cents)
-      params_.detune_a_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
-      update_w0_a();
+      update_w0_det();
       break;
 
     case RATE_AMT:
@@ -398,12 +417,12 @@ public:
     switch (index)
     {
     case PARAM_SEL:
-      // Knob A: parameter selector. 0..12 -> DETUNE, DETUNE_A, RATE_AMT,
-      // RATE_SPD, SUB1, SUB2, SATU, ASYM, FOLD, WAV1, WAV2, CHORD, CHRD_INT.
-      // Mask the low nibble (& 0xF) so any in-range index (0..12) maps to
-      // itself. On selection change, re-apply the cached raw value of the
-      // newly selected parameter so the DSP immediately reflects it
-      // (PARAM_VAL then edits that value).
+      // Knob A: parameter selector. 0..15 -> DETUNE, RATE_AMT, RATE_SPD,
+      // RATE_SMTH, SUB1, SUB2, SATU, ASYM, FOLD, WAV1, WAV2, CHORD, CHRD_INT,
+      // RW_WAV, RW_DRV, RW_FLD. Mask the low nibble (& 0xF) so any in-range
+      // index (0..15) maps to itself. On selection change, re-apply the
+      // cached raw value of the newly selected parameter so the DSP
+      // immediately reflects it (PARAM_VAL then edits that value).
       select_ = (uint8_t)(value & 0xF);
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
       break;
@@ -427,7 +446,7 @@ public:
   // accepts any of the four slot indices and routes them to the same
   // underlying state (select_ / edit_value_):
   //   PARAM (slot 0 or 2): the name of the selected parameter
-  //                        ("DET1", "SUB1", .., "RWAV", "RDRV", "RFLD").
+  //                        ("DETU", "SUB1", .., "RWAV", "RDRV", "RFLD").
   //   VALUE (slot 1 or 3): a short representation of the selected parameter's
   //                        raw 10-bit value ("50%", "+25%", wavetable index).
   // The RW_WAV / RW_DRV / RW_FLD depths format as 0..100% (the default branch).
@@ -436,7 +455,7 @@ public:
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final
   {
     static const char *const names[kEditParamCount] = {
-        "DET1", "DET2", "RATE", "SPEE", "SMTH",
+        "DETU", "RATE", "SPEE", "SMTH",
         "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
@@ -486,14 +505,14 @@ public:
       v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
     else if (k == ASYM)
       v = (int)((raw * 200) / kRawMax) - 100;
-    else if (k == DETUNE || k == DETUNE_A)
+    else if (k == DETUNE)
       v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
     else if (k == SATU)
       v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300
     else
       v = (int)((raw * 100) / kRawMax);
 
-    const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE && k != DETUNE_A);
+    const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE && k != CHRD_INT);
     int n = 0;
     if (v < 0)
       buf[n++] = '-';
@@ -606,9 +625,8 @@ public:
   // set frequency in digital w (w = f/samplerate, 0.5 is Nyquist)
   void setPitch(float w0)
   {
-    w0_ = w0; // base phase increment, osc A uses this directly
-    update_w0_b();
-    update_w0_a();
+    w0_ = w0; // base phase increment
+    update_w0_det(); // recompute A/B detuned w0 (symmetric ±c/2, K-rate)
     chord_.update(w0_, params_.chord_cents); // chord phasor: f * 2^(cents/1200)
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
     update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
@@ -706,8 +724,12 @@ public:
         : 0.f;
 
     const bool rw_active = p.rw_amount > 0.f;
-    float w0_a = w0_a_; // default: cached static detune (osc A)
-    float w0_b = w0_b_; // default: cached static detune (osc B)
+    // A and B run at the base note ± the static DETU knob (symmetric ±c/2,
+    // cached in w0_a_det_/w0_b_det_ at K-rate), plus the random-walk detune
+    // (asymmetric, per-sample) when rw_active. When the walk is off, the
+    // cached values are used directly (0 Taylor cost per sample).
+    float w0_a = w0_a_det_; // static symmetric detune (osc A, +c/2)
+    float w0_b = w0_b_det_; // static symmetric detune (osc B, -c/2)
 
     // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
     // offset is added per-sample below. waves_.wave_shift_ is recomputed on
@@ -756,10 +778,13 @@ public:
         // Per-sample scaled walk values (dev_a/b change every sample).
         rw_dev_a_cents = rw_.dev_a * rw_amt * kRwDetuneScaleCents;
         rw_dev_b_cents = rw_.dev_b * rw_amt * kRwDetuneScaleCents;
-        // recompute w0_a / w0_b from effective detune (base + scaled walk).
-        // 4th-order Taylor via Detune::w0_detuned (see osc_detune.h).
-        w0_a = Detune::w0_detuned(w0, p.detune_a_cents + rw_dev_a_cents);
-        w0_b = Detune::w0_detuned(w0, p.detune_cents + rw_dev_b_cents);
+        // recompute w0_a / w0_b from the combined (static + walk) per-voice
+        // detune: A gets +c/2 (static) + rw_dev_a (walk), B gets -c/2 (static)
+        // + rw_dev_b (walk). 4th-order Taylor via Detune::w0_detuned
+        // (see osc_detune.h).
+        const float half_det = 0.5f * p.detune_cents;
+        w0_a = Detune::w0_detuned(w0, +half_det + rw_dev_a_cents);
+        w0_b = Detune::w0_detuned(w0, -half_det + rw_dev_b_cents);
       }
       const float rw_dev_a_tables = rw_wav_active ? rw_.dev_a * rw_amt * kRwMorphScaleTables : 0.f;
       const float rw_dev_b_tables = rw_wav_active ? rw_.dev_b * rw_amt * kRwMorphScaleTables : 0.f;
@@ -857,6 +882,10 @@ public:
       // / (1 + lvl)) keeps the saturator's peak budget unchanged from the
       // 2-osc case.
       const float mix = kMixOsc * (wav_a + wav_b + wav_c * chord_gain);
+      // (The static DETU knob is applied per-voice above, via w0_a / w0_b —
+      //  not post-mix: A and B are detuned in opposite directions around the
+      //  base note, producing a per-voice phase drift that sounds ~4x
+      //  stronger than an equivalent post-mix sum detune.)
       // Wavefolder depth: FOLD knob modulated by random-walk fold (RW_FLD knob).
       // Multiplicative: eff_fold = p.fold_depth * (1 + rw_fold_mod), where
       // rw_fold_mod = dev_b * p.rw_fld (normalized -1..1 * 0..1 = -1..1).
@@ -904,9 +933,11 @@ public:
 
 private:
   // cached derived coefficients, recomputed only when inputs change
-  // (setPitch / setParameter(SHAPE)) to keep the audio path lightweight
-  float w0_b_ = 0.f;
-  float w0_a_ = 0.f;
+  // (setPitch / setParameter(DETUNE)) to keep the audio path lightweight.
+  // (The static symmetric-detune factors w0_a_det_ / w0_b_det_ are declared
+  //  earlier in the class, next to their documentation block. When the
+  //  random walk is active, process() recomputes the per-voice factors per
+  //  sample for the combined (static + walk) detune.)
   float w0_sub_ = 0.f;
   // second-sub (f/4) phase increment, precomputed in update_w0_sub2()
   float w0_sub2_ = 0.f;
@@ -933,33 +964,23 @@ private:
   float eg_alpha_a_ = 0.f;
   float eg_alpha_r_ = 0.f;
 
-  // recompute w0_b_ = w0_ * 2^(detune_cents/1200) — only when the base pitch
-  // or detune actually changes.
-  //
-  // detune_cents is limited to +/-100 (see setParameter), so
-  // x = cents * ln(2)/1200 stays within |x| <= 0.0833. In that range
-  // 2^(cents/1200) = e^x is well approximated by a 4th-order Taylor series
-  // (1 + x + x^2/2 + x^3/6 + x^4/24), which keeps the relative error below
-  // ~1e-6 (less than 0.03 cents at the extremes) — far under the threshold
-  // of audibility. This replaces the libm powf() call, whose support chain
-  // (__ieee754_powf, expm1f, scalbnf, ...) adds several hundred bytes of
-  // code and data to the final unit image.
+  // recompute the static symmetric-detune factors (w0_a_det_ / w0_b_det_)
+  // — only when the DETU knob or the base pitch changes. The DETU knob
+  // detunes A and B in OPPOSITE directions: A gets +c/2 cents, B gets -c/2
+  // cents (c = params_.detune_cents, ±10 cents). The Taylor expansion
+  // (see Detune::factor, osc_detune.h) at |x| <= 5 * ln(2)/1200 ≈ 0.0042
+  // (per voice, since each is detuned by c/2) keeps the relative error
+  // far below audibility.
   //
   // Note: when the random walk is active (RATE AMT > 0), process() recomputes
-  // the same Taylor expansion per sample for the effective (base + walk)
-  // detune, so the audio path does run the 4th-order series there. The cached
-  // w0_b_ above is only used while the walk is disabled.
-  void update_w0_b()
+  // the per-voice factors per sample for the combined (static + walk) detune,
+  // so the cached w0_a_det_ / w0_b_det_ are only used while the walk is
+  // disabled (0 Taylor cost in the audio path in that case — just a read).
+  void update_w0_det()
   {
-    w0_b_ = Detune::w0_detuned(w0_, params_.detune_cents);
-  }
-
-  // recompute w0_a_ = w0_ * 2^(detune_a_cents/1200) — only when the base
-  // pitch or detune actually changes. Same 4th-order Taylor approximation as
-  // update_w0_b() (see its comment); detune_a_cents is limited to +/-100.
-  void update_w0_a()
-  {
-    w0_a_ = Detune::w0_detuned(w0_, params_.detune_a_cents);
+    const float half = 0.5f * params_.detune_cents;
+    w0_a_det_ = w0_ * Detune::factor(+half);
+    w0_b_det_ = w0_ * Detune::factor(-half);
   }
 
   // recompute w0_sub_ = w0_ * 2^((kSubDetuneCents)/1200) — the sub-octave
