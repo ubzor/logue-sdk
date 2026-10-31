@@ -47,6 +47,14 @@ struct OscParamsData
   float rw_wav;       // 0.f .. 1.f, edit: random-walk depth on wavetable morph (RW_WAV)
   float rw_drv;       // 0.f .. 1.f, edit: random-walk depth on saturator drive (RW_DRV)
   float rw_fld;       // 0.f .. 1.f, edit: random-walk depth on wavefolder depth (RW_FLD)
+  // ---- Cross-FM (XFM): phase modulation of A by B and vice versa --------
+  float xfm_a;        // 0.f .. 1.f, edit: XFM depth on osc A (A is modulated by B)
+  float xfm_b;        // 0.f .. 1.f, edit: XFM depth on osc B (B is modulated by A)
+  // ---- Internal SVF (FCUT / RES): 12 dB/oct low-pass after the saturator --
+  float svf_cut;      // 0.f .. 1.f, edit: FCUT knob (log-mapped 80 Hz .. 12 kHz)
+  float svf_res;      // 0.f .. 1.f, edit: RES knob (linear 0.5 .. 2.5 Q)
+  float svf_wet;      // 0.f .. 1.f, edit: FCUT dry/wet (0 = raw, 1 = full LPF)
+  float rw_fc;        // 0.f .. 1.f, edit: random-walk depth on SVF cutoff (RWFC)
 
   void reset()
   {
@@ -68,6 +76,13 @@ struct OscParamsData
     rw_fld = 0.f;       // default: walk off for fold depth (was 0.5: dead knob at stock RATE=0,
                         // and the multiplexer bug made it sound like a phantom LFO before the
                         // direct-channel fix. 0 keeps the stock sound bit-identical.)
+     xfm_a = 0.f;        // default: cross-FM off (A not modulated by B)
+     xfm_b = 0.f;        // default: cross-FM off (B not modulated by A)
+     svf_cut = 0.9f;     // default: SVF near full-open (~9 kHz); with svf_wet = 0 the
+                        // LPF is transparent, so the stock sound is preserved.
+     svf_res = 0.f;      // default: Q = 0.5 (over-damped, no resonance peak)
+     svf_wet = 0.f;      // default: 0% wet = the SVF is transparent (raw signal).
+     rw_fc = 0.f;        // default: walk off for the SVF cutoff
   }
 
   OscParamsData() { reset(); }

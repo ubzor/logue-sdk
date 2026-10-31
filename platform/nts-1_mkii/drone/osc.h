@@ -57,6 +57,7 @@
 #include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
 #include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
 #include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
+#include "osc_svf.h"          // Svf: 12 dB/oct state-variable filter (post-saturator)
 #include "osc_random_walk.h"  // RandomWalk: dual-channel detune wandering
 #include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
 #include "osc_chord.h"        // ChordVoice: third oscillator at selectable interval
@@ -99,18 +100,26 @@ public:
     RW_WAV,         // random-walk depth on wavetable morph (0..100%, default 0% = off)
     RW_DRV,         // random-walk depth on saturator drive (0..100%, default 0% = off)
     RW_FLD,         // random-walk depth on wavefolder depth (0..100%, default 0% = off)
+    XFM_A,          // cross-FM depth on osc A (B modulates A's phase, 0..30 c, default 0 = off)
+    XFM_B,          // cross-FM depth on osc B (A modulates B's phase, 0..30 c, default 0 = off)
+    FCUT,           // internal SVF cutoff + dry/wet (log 80 Hz..12 kHz, 0% = raw, 100% = LPF)
+    RES,            // internal SVF resonance Q (0..100% -> 0.5..2.5, default 0% = 0.5)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..RW_FLD).
-  static constexpr uint8_t kEditParamCount = 16; // DETUNE..RW_FLD
-  // The first editable enum value. The UI (header.c PARAM slot, 0..15) expects
-  // this order: 0 DET (DETUNE), 1 RATE (RATE_AMT), 2 SPEE (RATE_SPD),
-  // 3 SMTH (RATE_SMTH), 4 SUB1, 5 SUB2, 6 SATU, 7 ASYM,
-  // 8 FOLD, 9 WAV1, 10 WAV2, 11 CHRD (CHORD), 12 CINT (CHRD_INT),
-  // 13 RW_WAV, 14 RW_DRV, 15 RW_FLD. So kEditParamFirst + select_
-  // (select_ 0..15) maps to DETUNE..RW_FLD.
+  // Number of editable DSP parameters (DETUNE..RES).
+  static constexpr uint8_t kEditParamCount = 20; // DETUNE..RES
+  // The first editable enum value. The UI (header.c PARAM slot, 0..19) expects
+  // this order (select_ index -> parameter), 20 parameters total:
+  //   0 DET (DETUNE)    1 RATE (RATE_AMT)  2 SPEE (RATE_SPD)  3 SMTH (RATE_SMTH)
+  //   4 SUB1            5 SUB2             6 SATU             7 ASYM
+  //   8 FOLD            9 WAV1             10 WAV2            11 CHRD (CHORD)
+  //   12 CINT (CHRD_INT) 13 RW_WAV         14 RW_DRV          15 RW_FLD
+  //   16 XFM_A (cross-FM on A)  17 XFM_B (cross-FM on B)
+  //   18 FCUT (SVF cutoff + dry/wet)  19 RES (SVF resonance Q)
+  // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
+  // kEditParamCount = 20 = (RES - DETUNE + 1); select_ 0..19 -> DETUNE..RES.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -153,6 +162,18 @@ public:
   // +/-kRwFoldScale around the FOLD knob. Fold depth is 0..1; +/-0.3 is a
   // moderate metallic shimmer. Negative results are clamped to 0 in the path.
 
+  // Cross-FM scale: XFM_A / XFM_B knobs (0..100%) scale the cross-modulation
+  // index to +/-kXfmMaxCents (phase modulation of one osc by the other's
+  // wavetable output, in cents). At 100% the index is +/-15 cents; lower
+  // settings give a subtler sideband shimmer. The modulation is applied as a
+  // per-sample phase offset (wavetable_out * depth * kXfmMaxCents) in the
+  // audio path, gated by the shared random-walk depth (rw_amount) so the
+  // sidebands "ring" and "fade" with the walk. See the XFM branch in process().
+  static constexpr float    kXfmMaxCents = 15.f;        // full cross-FM index (c)
+
+  // (The SVF cutoff / resonance scales live in the Svf namespace, see osc_svf.h:
+  //  kCutoffMinHz / kCutoffMaxHz / kQMin / kQMax / kRwCutoffHalfOctaves.)
+
   // ---- Parameter selector / value multiplexer (state) ----
   // Knob A (PARAM_SEL, slot 0) picks one of the 12 DSP parameters
   // (DETUNE..CHORD), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
@@ -160,15 +181,15 @@ public:
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 16 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 20 editable parameters, cached so the
   // selector can recall them. Defaults match the DSP defaults in
   // OscParamsData::reset() (osc_params.h):
   // DETUNE 511, RATE 0, SPEE 511, SMTH 511, SUB1 511, SUB2 205, SATU 341,
   // ASYM 511, FOLD 0, WAV1 0, WAV2 128, CHORD 205, CINT 377, RW_WAV 0,
-  // RW_DRV 0, RW_FLD 0.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0};
+  // RW_DRV 0, RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0.
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0};
 
-  // Currently selected parameter (0..15), i.e. edit_value_[select_] is what
+  // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
   uint8_t select_ = 0;
 
@@ -407,6 +428,41 @@ public:
       params_.rw_fld = param_10bit_to_f32(value);
       break;
 
+    case XFM_A:
+      // 0..1023 -> 0..1 cross-FM depth on osc A (B modulates A's phase). The
+      // cent scale (kXfmMaxCents) is applied in the audio path, gated by the
+      // shared random-walk depth (rw_amount) so the sidebands breathe.
+      params_.xfm_a = param_10bit_to_f32(value);
+      break;
+
+    case XFM_B:
+      // 0..1023 -> 0..1 cross-FM depth on osc B (A modulates B's phase).
+      params_.xfm_b = param_10bit_to_f32(value);
+      break;
+
+    case FCUT:
+      // 0..1023 -> 0..1 SVF cutoff knob (log-mapped 80 Hz .. 12 kHz) AND the
+      // dry/wet balance (same knob: 0 = raw signal, 100% = full LPF). This
+      // keeps the knob count low while giving a single "open the filter"
+      // control. Both the K-rate coefficient (svf_.updateCutoff) and the
+      // per-sample dry/wet (svf_wet) are recomputed here.
+      {
+        const float knob = param_10bit_to_f32(value);
+        params_.svf_cut = knob;
+        params_.svf_wet = knob;
+        svf_.updateCutoff(Svf::cutoffHz(knob), Svf::quality(params_.svf_res), getSampleRate());
+      }
+      break;
+
+    case RES:
+      // 0..1023 -> 0..1 SVF resonance (linear 0.5 .. 2.5 Q). Recompute the
+      // damping coefficient at K-rate (the cutoff coefficient is unchanged).
+      {
+        params_.svf_res = param_10bit_to_f32(value);
+        svf_.updateResonance(Svf::quality(params_.svf_res));
+      }
+      break;
+
     default:
       break;
     }
@@ -457,7 +513,8 @@ public:
     static const char *const names[kEditParamCount] = {
         "DETU", "RATE", "SPEE", "SMTH",
         "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
-        "RWAV", "RDRV", "RFLD"};
+        "RWAV", "RDRV", "RFLD",
+        "XFM", "XFM2", "FCUT", "RES"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
     const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
     if (is_param_sel)
@@ -497,6 +554,63 @@ public:
         buf[n2++] = d2[i];
       buf[n2++] = 'c';
       buf[n2] = '\0';
+      return buf;
+    }
+
+    // XFM_A / XFM_B (cross-FM depth): "Nc" (0..kXfmMaxCents = 0..15, <= 2 digits).
+    // No printf in the image (the codebase hand-rolls formatting), so write the
+    // at-most-2-digit value directly.
+    if (k == XFM_A || k == XFM_B)
+    {
+      int xc = (int)(param_10bit_to_f32(raw) * kXfmMaxCents + 0.5f);
+      int n = 0;
+      if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
+      buf[n++] = (char)('0' + xc % 10);
+      buf[n++] = 'c';
+      buf[n] = '\0';
+      return buf;
+    }
+
+    // RES (SVF resonance Q): "X.Y" (0.5..2.5, fixed 3 chars, no loop needed).
+    if (k == RES)
+    {
+      int q10 = (int)(Svf::quality(param_10bit_to_f32(raw)) * 10.f + 0.5f); // 5..25
+      buf[0] = (char)('0' + q10 / 10);
+      buf[1] = '.';
+      buf[2] = (char)('0' + q10 % 10);
+      buf[3] = '\0';
+      return buf;
+    }
+
+    // FCUT (SVF cutoff + dry/wet): the cutoff frequency, "NNN H" (< 1 kHz) or
+    // "NN.Nk" (>= 1 kHz, at most 2 whole + 1 frac digit since max is 12.0k).
+    if (k == FCUT)
+    {
+      int hz = (int)(Svf::cutoffHz(param_10bit_to_f32(raw)) + 0.5f); // 80..12000
+      int n = 0;
+      if (hz >= 1000)
+      {
+        // "NN.Nk"
+        int k10 = hz / 100; // e.g. 9600 -> 96 (N.N * 10), 12000 -> 120
+        int whole = k10 / 10; // 9 / 12
+        int frac = k10 % 10;  // 6 / 0
+        if (whole >= 10) buf[n++] = (char)('0' + whole / 10);
+        buf[n++] = (char)('0' + whole % 10);
+        buf[n++] = '.';
+        buf[n++] = (char)('0' + frac);
+        buf[n++] = 'k';
+      }
+      else
+      {
+        // "NNN H" (80..999)
+        int t = hz;
+        if (t >= 100) buf[n++] = (char)('0' + t / 100);
+        t %= 100;
+        if (t >= 10 || hz >= 100) buf[n++] = (char)('0' + t / 10);
+        buf[n++] = (char)('0' + t % 10);
+        buf[n++] = 'H';
+      }
+      buf[n] = '\0';
       return buf;
     }
 
@@ -557,6 +671,9 @@ public:
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
     waves_.update(w0_); // resolve default wavetable pointers from params_
     rw_.reset(); // random-walk state starts centered, AMT=0
+    svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
+    prev_wav_a_ = 0.f; // cross-FM lookback cache: start at 0 (first sample is a no-op)
+    prev_wav_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_.reset();
@@ -584,6 +701,9 @@ public:
     sub2_.lpf_state = 0.f;
     sub2_.gate = 0.f;
     rw_.reset(); // re-center the random walk on stop
+    svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
+    prev_wav_a_ = 0.f; // cross-FM lookback cache
+    prev_wav_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
     eg_.reset();
@@ -757,6 +877,20 @@ public:
     const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
     const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
     const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
+    // Cross-FM: osc A is phase-modulated by B's wavetable output (XFM_A knob)
+    // and osc B by A's (XFM_B knob). The modulation is gated by the shared
+    // random-walk depth (rw_amount) so the sidebands "ring" and "fade" with
+    // the walk. When rw_amount == 0 (walk off) or the XFM knob is 0, the
+    // per-sample modulation below is a no-op (regression-safe: identical to
+    // the stock 2-osc sound). See the XFM branch in the phasor update.
+    const bool xfm_a_active = rw_active && p.xfm_a > 0.f;
+    const bool xfm_b_active = rw_active && p.xfm_b > 0.f;
+    // SVF: the internal 12 dB/oct low-pass is engaged when the dry/wet (svf_wet)
+    // is non-zero. When svf_wet == 0 (the default) the filter is transparent
+    // and its state update is skipped (regression-safe). The walk-modified
+    // cutoff coefficient (svf_.cc_w) is set per-sample below when active.
+    const float svf_wet = p.svf_wet;
+    const bool svf_active = svf_wet > 0.f;
 
     for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
     {
@@ -797,9 +931,35 @@ public:
       // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
       const float rw_fold_mod = rw_fld_active ? rw_.dev_b * p.rw_fld * rw_amt : 0.f;
 
-      // phasor update
-      phasor_a_ += w0_a;
-      phasor_b_ += w0_b;
+      // phasor update (plus optional cross-FM phase modulation)
+      // Cross-FM: each osc's phase is nudged by the OTHER osc's wavetable
+      // output. The modulation index (in cycles) is
+      //   (other_wavetable_out / 2pi) * depth * kXfmMaxCents
+      // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1). The wavetable
+      // output is in [-1, +1]; dividing by 2pi normalizes it so the index is
+      // in cycles (1 cycle = 1 full phase wrap). Gated by rw_amt so the
+      // sidebands breathe with the walk. At XFM=0 or rw_amt=0 this adds 0.
+      // (The wavetable values are read AFTER the phasor wrap below, so the
+      //  modulated phasor and the wavetable sample are from the same instant.)
+      //
+      // NOTE: we read the *previous* sample's wavetable output for the
+      // modulation (a one-sample lookback) to avoid a data-dependency on the
+      // current phasor (which we are about to advance). For a drone this is
+      // inaudibly different and keeps the audio path branch-light.
+      // We use the cached previous wavetable values (prev_wav_a_ / prev_wav_b_)
+      // updated at the end of each iteration.
+      {
+        const float xfm_a_idx = xfm_a_active
+            ? (prev_wav_b_ * (0.5f / 3.141592653589793f) *
+               (rw_.dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
+            : 0.f;
+        const float xfm_b_idx = xfm_b_active
+            ? (prev_wav_a_ * (0.5f / 3.141592653589793f) *
+               (rw_.dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
+            : 0.f;
+        phasor_a_ += w0_a + xfm_a_idx;
+        phasor_b_ += w0_b + xfm_b_idx;
+      }
       // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
       // No random-walk modulation — the chord voice is a stable "anchor"
       // like SUB2, not a beating voice. advance() returns false if the
@@ -853,6 +1013,11 @@ public:
       const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables;
       const float wav_a = WaveTable::resolve_wave(wav_a_pos, phasor_a_);
       const float wav_b = WaveTable::resolve_wave(wav_b_pos, phasor_b_);
+      // Cache this sample's wavetable outputs for the NEXT sample's cross-FM
+      // modulation (one-sample lookback, see the XFM branch in the phasor
+      // update above). When cross-FM is off these writes are the only cost.
+      prev_wav_a_ = wav_a;
+      prev_wav_b_ = wav_b;
 
       // Chord voice: third oscillator at a selectable interval above the base
       // (CINT knob: OFF/5TH/OCT/O+5/M3). Uses the WAV1 (osc A) wavetable so
@@ -904,6 +1069,44 @@ public:
       const float folded = Saturator::fold(mix, eff_fold);
       const float y = Saturator::saturate(folded, eff_drive_clamped, p.asym);
 
+      // ---- internal SVF (12 dB/oct low-pass, post-saturator) ----
+      // When the FCUT dry/wet (svf_wet) is non-zero, the saturator output is
+      // low-passed by the SVF before the sub mix. The cutoff is modulated
+      // per-sample by the shared random walk (RWFC depth is folded into the
+      // FCUT knob's dry/wet — see apply_edit_param): the effective cutoff
+      // coefficient svf_.cc_w wanders by +/-kRwCutoffHalfOctaves octaves
+      // around the FCUT knob value, so the drone's top end "breathes" on the
+      // same 0.1 s .. 10 s timescale as the detune / morph / drive walks.
+      // When svf_wet == 0 (the default) the filter is transparent and this
+      // whole block is skipped (regression-safe).
+      //
+      // The walk modulation is applied to the per-sample cutoff coefficient
+      // (cc_w = cc * 2^(+/-half-oct * dev)), clamped to the stable range. The
+      // deviation used is dev_a (the same channel as the detune walk, so the
+      // top-end "breathes" in sync with the chorus).
+      float y_filt = y;
+      if (svf_active)
+      {
+        // Walk-modified cutoff coefficient: cc * 2^(+/-half-oct * dev_a).
+        // The deviation (dev_a, [-1,+1]) is scaled by the RWFC depth
+        // (p.rw_fc, 0..1) and the global walk depth (rw_amt) so the cutoff
+        // wanders by at most kRwCutoffHalfOctaves octaves at full depth.
+        const float rw_fc_dev = (rw_active && p.rw_fc > 0.f)
+            ? rw_.dev_a * rw_amt * p.rw_fc
+            : 0.f;
+        const float oct_dev = Svf::kRwCutoffHalfOctaves * rw_fc_dev;
+        // 2^oct_dev via exp2: 2^x = exp2(x). oct_dev is small (|x| <= 1), so
+        // a 3rd-order Taylor in y = oct_dev * ln(2) is more than enough.
+        const float ln2 = 0.6931471805599453f;
+        const float e = oct_dev * ln2;
+        const float scale = 1.f + e + (e * e * 0.5f);
+        float cc_w = svf_.cc * scale;
+        if (cc_w < Svf::kCcMin) cc_w = Svf::kCcMin;
+        else if (cc_w > Svf::kCcMax) cc_w = Svf::kCcMax;
+        svf_.cc_w = cc_w;
+        y_filt = svf_.process(y, svf_wet);
+      }
+
       // ---- advance the A-H-R envelope by one sample ----
       // (per-sample so the 2 s phases are sample-accurate at any block size)
       eg_.advance(alpha_a, alpha_r);
@@ -922,7 +1125,7 @@ public:
       // At the default SUB1 = 50%, the sub branch is at 0.2 amplitude; SUB2
       // defaults to 0 (off) so the stock sound is unchanged. A hard clip
       // prevents digital overflow when all branches peak simultaneously.
-      float raw = (y * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * eg_.env;
+      float raw = (y_filt * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * eg_.env;
       if (raw > 1.f)
         raw = 1.f;
       else if (raw < -1.f)
@@ -948,6 +1151,13 @@ private:
 
   // Random-walk detune wandering (dual channel). See osc_random_walk.h.
   RandomWalk rw_;
+
+  // Internal 12 dB/oct state-variable filter (post-saturator, pre-sub-mix).
+  // See osc_svf.h. The cutoff (FCUT knob) and resonance (RES knob) are set at
+  // K-rate; the cutoff is modulated per-sample by the random walk (RWFC is
+  // folded into the FCUT knob's dry/wet — see apply_edit_param). The dry/wet
+  // crossfade (svf_wet) blends the raw saturator output with the LPF output.
+  Svf::State svf_;
 
   // Note "active" flag: true while a note is held (noteOn not yet followed by
   // noteOff / allNoteOff / reset). Today this is set by the MIDI handlers;
@@ -1037,6 +1247,11 @@ private:
   // Unlike sub-1 it carries no fixed detune: it is a stable "anchor" in the
   // low end, not a beating voice.
   float phasor_sub2_; // second sub phasor (advances at w0/4, no detune)
+  // Previous-sample wavetable outputs, cached for the next sample's cross-FM
+  // modulation (one-sample lookback, see the XFM branch in the phasor update).
+  // Zeroed on init / reset so the first sample's cross-FM is a no-op.
+  float prev_wav_a_ = 0.f;
+  float prev_wav_b_ = 0.f;
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
   // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
   // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its
