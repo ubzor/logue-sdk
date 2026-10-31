@@ -124,9 +124,9 @@ public:
   static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
   static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
   // Random-walk detune scale: the normalized walk deviations (rw_.dev_a/b,
-  // in [-1, +1]) are multiplied by this (cents) in the audio path, so RATE AMT
-  // at 100% (rw_amount = 1) wanders each voice by +/-kRwDetuneScaleCents around
-  // its DETUNE knob value. Kept here (not in RandomWalk) because the scale is
+  // in [-1, +1]) are multiplied by p.rw_amount (RATE AMT, 0..1) and then by
+  // this (cents) in the audio path, so RATE AMT at 100% (rw_amount = 1)
+  // wanders each voice by +/-kRwDetuneScaleCents around its DETUNE knob value. Kept here (not in RandomWalk) because the scale is
   // a per-target choice: each walk target gets its own scale at its point of
   // use (detune below; wavetable morph / drive / fold in the process() audio
   // path, gated by the RW_WAV / RW_DRV / RW_FLD depth knobs).
@@ -739,27 +739,38 @@ public:
     for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
     {
       // update random-walk deviations (advance once per sample when active).
+      // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
+      // every random-walk modulation (detune below; wavetable morph / drive /
+      // fold further down). The normalized deviations (rw_.dev_a/b, in [-1,+1])
+      // are multiplied by p.rw_amount (0..1, quadratic-mapped from the knob)
+      // at each point of use, so RATE = 0 means no wandering at all and
+      // RATE = 100% gives full scale. Without this factor the knobs would be
+      // binary (any non-zero RATE gave full-depth walk) — see the bug this
+      // fixes (rw_amount was only used as an on/off gate, never as a scale).
+      const float rw_amt = p.rw_amount;
       float rw_dev_a_cents = 0.f;
       float rw_dev_b_cents = 0.f;
       if (rw_active)
       {
         rw_.advance(p.rw_amount, osc_white);
         // Per-sample scaled walk values (dev_a/b change every sample).
-        rw_dev_a_cents = rw_.dev_a * kRwDetuneScaleCents;
-        rw_dev_b_cents = rw_.dev_b * kRwDetuneScaleCents;
+        rw_dev_a_cents = rw_.dev_a * rw_amt * kRwDetuneScaleCents;
+        rw_dev_b_cents = rw_.dev_b * rw_amt * kRwDetuneScaleCents;
         // recompute w0_a / w0_b from effective detune (base + scaled walk).
         // 4th-order Taylor via Detune::w0_detuned (see osc_detune.h).
         w0_a = Detune::w0_detuned(w0, p.detune_a_cents + rw_dev_a_cents);
         w0_b = Detune::w0_detuned(w0, p.detune_cents + rw_dev_b_cents);
       }
-      const float rw_dev_a_tables = rw_wav_active ? rw_.dev_a * kRwMorphScaleTables : 0.f;
-      const float rw_dev_b_tables = rw_wav_active ? rw_.dev_b * kRwMorphScaleTables : 0.f;
-      const float rw_dev_drive    = rw_drv_active ? rw_.dev_a * kRwDriveScale : 0.f;
-      // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld).
+      const float rw_dev_a_tables = rw_wav_active ? rw_.dev_a * rw_amt * kRwMorphScaleTables : 0.f;
+      const float rw_dev_b_tables = rw_wav_active ? rw_.dev_b * rw_amt * kRwMorphScaleTables : 0.f;
+      const float rw_dev_drive    = rw_drv_active ? rw_.dev_a * rw_amt * kRwDriveScale : 0.f;
+      // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld * rw_amt).
       // p.rw_fld is 0..1 (RFLD knob). At RFLD=0 -> eff_fold = p.fold_depth (no mod).
-      // At RFLD=100% -> eff_fold wanders from 0 to 2*p.fold_depth (clamped to 1).
-      // When p.fold_depth = 0, eff_fold = 0 regardless of rw_dev_fold (no fold).
-      const float rw_fold_mod = rw_fld_active ? rw_.dev_b * p.rw_fld : 0.f;
+      // At RFLD=100% & RATE=100% -> eff_fold wanders from 0 to 2*p.fold_depth
+      // (clamped to 1). The rw_amt factor keeps the folder walk gated by the
+      // global RATE AMT depth, consistent with the detune/morph/drive walks.
+      // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
+      const float rw_fold_mod = rw_fld_active ? rw_.dev_b * p.rw_fld * rw_amt : 0.f;
 
       // phasor update
       phasor_a_ += w0_a;

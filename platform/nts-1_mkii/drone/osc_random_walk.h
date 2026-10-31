@@ -98,7 +98,11 @@ struct RandomWalk
   // setup() on every knob turn, so the cache is effective in both contexts.
   void setup(float rw_rate, float rw_amount, float rw_smooth)
   {
-    max_dev = rw_amount; // normalized 0..1 (always update — cheap)
+    // Normalized depth ceiling (0..1). NOTE: this struct does NOT apply it —
+    // the Osc multiplies rw_.dev_a/b by p.rw_amount at each point of use (see
+    // Osc::process). It is cached here only so external code can inspect the
+    // configured depth; the actual gating happens in the audio path.
+    max_dev = rw_amount;
 
     // Recompute k / interval only when the period or smoothing changed.
     if (rw_rate != cached_rate || rw_smooth != cached_smooth)
