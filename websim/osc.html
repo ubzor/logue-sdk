@@ -24,6 +24,30 @@
     .col-side {
       flex: 0 0 auto;
     }
+    /* Top-level controls (Master Volume, BPM) laid out as columns side by side.
+       Each control is a vertical stack (label on top, slider, value). */
+    .top-controls {
+      display: flex;
+      gap: 48px;
+      align-items: flex-start;
+      margin: 8px 0 16px 0;
+    }
+    .top-control {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: flex-start;
+    }
+    .top-control h2 {
+      margin: 0 0 4px 0;
+    }
+    /* Slider + value on one line (value to the right of the slider), the same
+       visual pattern as the "Parameters" rows (label | slider | value). */
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
   </style>
 </head>
 
@@ -32,13 +56,30 @@
     <div class="col-main">
     <!-- add buttons and sliders here -->
     <button id="TogglePlaybackButton">Toggle playback</button>
-    <h2>Master Volume</h2>
-    <input type="range" min=0 max=1 value=0.5 step=0.01 id="VolumeSlider">
-    <span id="VolumeLabel"></span>
 
-    <!-- <h2>BPM</h2>
-    <input type="range" min=30 max=240 value=120 step=0.1 id="BpmSlider">
-    <span id="BpmLabel"></span> -->
+    <!-- Top-level controls: Master Volume and BPM, laid out as columns
+         side by side (each control is a vertical stack). -->
+    <div class="top-controls">
+      <div class="top-control">
+        <h2>Master Volume</h2>
+        <div class="control-row">
+          <input type="range" min=0 max=1 value=0.5 step=0.01 id="VolumeSlider">
+          <span id="VolumeLabel"></span>
+        </div>
+      </div>
+
+      <!-- BPM: simulator-only tempo control. Delivered to the DSP through
+           Module.fx_set_bpm (wasm.cc -> Osc::setTempo -> tempo_bpm_). On
+           hardware the platform delivers BPM itself via unit_set_tempo(); the
+           slider here only matters in the web simulator. -->
+      <div class="top-control">
+        <h2>BPM</h2>
+        <div class="control-row">
+          <input type="range" min=56 max=240 value=120 step=1 id="BpmSlider">
+          <span id="BpmLabel"></span>
+        </div>
+      </div>
+    </div>
 
     <h2>Oscillator</h2>
     <p>Tips: play with a QWERTY keyboard, Z and X to switch octave </p>
@@ -286,15 +327,22 @@
         volumeLabel.innerText = this.value;
       };
 
-      // BPM
-      // let bpmSlider = document.getElementById("BpmSlider");
-      // let bpmLabel = document.getElementById("BpmLabel");
-      // bpmLabel.innerText = bpmSlider.value;
-
-      // bpmSlider.oninput = function () {
-      //   bpmLabel.innerText = this.value;
-      //   Module.fx_set_bpm(this.value);
-      // };
+      // BPM (simulator-only tempo control). Delivered to the DSP via
+      // Module.fx_set_bpm (wasm.cc -> Osc::setTempo -> tempo_bpm_). On
+      // hardware the platform delivers BPM itself via unit_set_tempo(); this
+      // slider only drives the web simulator. Default 120, range 56..240,
+      // integer BPM (step 1).
+      let bpmSlider = document.getElementById("BpmSlider");
+      let bpmLabel = document.getElementById("BpmLabel");
+      function applyBpm() {
+        const v = parseInt(bpmSlider.value, 10);
+        bpmLabel.innerText = v;
+        if (Module.fx_set_bpm) Module.fx_set_bpm(v);
+      }
+      applyBpm();
+      bpmSlider.oninput = function () {
+        applyBpm();
+      };
 
       // keyboard osc
       let currentOctave = 3;

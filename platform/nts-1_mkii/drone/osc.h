@@ -771,6 +771,19 @@ public:
     lfo_ = lfo;
   }
 
+  // Tempo callback (K-rate). The platform (unit.cc) and the web simulator
+  // (Module.fx_set_bpm -> setTempo) deliver the current BPM here. The value
+  // is stored in tempo_bpm_ so it can be read from the audio path later
+  // (e.g. for BPM-synced random-walk periods, see the planned SYNC mode).
+  // A 32-bit aligned float write is effectively atomic on Cortex-M7; the
+  // worst case is the audio thread seeing either the old or the new BPM for
+  // one block, which is inaudible (it only affects a slow modulation period,
+  // never the audio rate).
+  void setTempo(float bpm) override
+  {
+    tempo_bpm_ = bpm;
+  }
+
 #ifdef EMSCRIPTEN
   // Simulator-only LFO settings (set from the JS UI, K-rate). On hardware
   // these are the physical OSC-button knobs and are delivered via the
@@ -1237,6 +1250,11 @@ private:
   Params params_;
   float w0_;
   float lfo_;
+  // Current tempo in BPM, delivered via setTempo() (K-rate). Default 120
+  // (the web-simulator slider default). Read from the audio path for
+  // BPM-synced modulation (planned SYNC mode); today it is stored but not
+  // yet consumed, so the stock sound is unaffected.
+  float tempo_bpm_ = 120.f;
 
 #ifdef EMSCRIPTEN
   // Host-side (web simulator) shape-LFO synthesizer. On hardware the platform
