@@ -807,7 +807,7 @@
       {
         const b = document.createElement("button");
         b.textContent = PRESET_RANDOM;
-        b.className = "btn btn-outline btn-sm";
+        b.className = "btn btn-primary";
         b.title = "Random: RATE 20-100%, all walk periods/smooths + RWAV/RDRV/RFLD/RWFC + WAV1/WAV2 randomized.";
         b.dataset.name = PRESET_RANDOM;
         b.onclick = () => applyPresetRaw(randomRaw(), PRESET_RANDOM);
@@ -816,7 +816,7 @@
       {
         const b = document.createElement("button");
         b.textContent = PRESET_RESET;
-        b.className = "btn btn-outline btn-sm";
+        b.className = "btn btn-outline btn-primary";
         b.title = "Always restore the factory default parameters.";
         b.dataset.name = PRESET_RESET;
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
