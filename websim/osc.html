@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-theme="light">
 <!-- TODO: make sure headroom is the same as the hardware -->
 
 <head>
@@ -8,134 +8,135 @@
   <script src="scripts/qwerty-hancock.js"></script>
   <link rel="icon" type="image/x-icon" href="images/favicon.ico">
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;700&display=swap" rel="stylesheet">
-  <style>
-    body {
-      font-family: 'Space Grotesk', sans-serif;
-      -webkit-font-smoothing: subpixel-antialiased;
-    }
-    .columns {
-      display: flex;
-      gap: 32px;
-      align-items: flex-start;
-    }
-    .col-main {
-      flex: 0 0 auto;
-    }
-    .col-side {
-      flex: 0 0 auto;
-    }
-    /* Top-level controls (Master Volume, BPM) laid out as columns side by side.
-       Each control is a vertical stack (label on top, slider, value). */
-    .top-controls {
-      display: flex;
-      gap: 48px;
-      align-items: flex-start;
-      margin: 8px 0 16px 0;
-    }
-    .top-control {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      align-items: flex-start;
-    }
-    .top-control h2 {
-      margin: 0 0 4px 0;
-    }
-    /* Slider + value on one line (value to the right of the slider), the same
-       visual pattern as the "Parameters" rows (label | slider | value). */
-    .control-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    /* Preset bank: a grid of buttons that apply a full 25-parameter preset.
-       Each button carries a tooltip (title) describing its character. */
-    .preset-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin: 4px 0 12px 0;
-    }
-    .preset-grid button {
-      font-family: inherit;
-      font-size: 12px;
-      padding: 6px 8px;
-      cursor: pointer;
-    }
-    .preset-grid button.active {
-      font-weight: 700;
-      outline: 2px solid #333;
-    }
-  </style>
+  <!-- FlyonUI (Tailwind v4 + flyonui plugin), built by Vite: see app.css /
+       vite.config.js in the websim/ dir. Loaded with relative paths because
+       serve.sh serves sim/ as the document root.
+       flyon.css = Tailwind utilities + flyonui base/theme layers + flyonui
+                   component CSS (button/card/range/switch/badge/kbd/label/
+                   divider), all compiled into one file by Vite from app.css.
+       flyon.js  = the entry module (theme init). The flyonuiRepair plugin
+                   (vite.flyonui.js) fixes flyonui's minified artifacts before
+                   Lightning CSS runs, so the components import cleanly. -->
+  <link rel="stylesheet" href="./flyon.css">
+  <script type="module" src="./flyon.js"></script>
 </head>
 
-<body>
-  <div class="columns">
-    <div class="col-main">
-    <!-- add buttons and sliders here -->
-    <button id="TogglePlaybackButton">Toggle playback</button>
+<body class="min-h-screen bg-base-100 text-base-content p-4 sm:p-6">
+  <div class="flex flex-col gap-6 max-w-5xl mx-auto">
 
-    <!-- Top-level controls: Master Volume and BPM, laid out as columns
-         side by side (each control is a vertical stack). -->
-    <div class="top-controls">
-      <div class="top-control">
-        <h2>Master Volume</h2>
-        <div class="control-row">
-          <input type="range" min=0 max=1 value=0.5 step=0.01 id="VolumeSlider">
-          <span id="VolumeLabel"></span>
+    <!-- ---- Top bar: title + theme switch (checked = vscode dark, off = valorant light) -->
+    <div class="flex items-center gap-3">
+      <h5 class="text-lg font-semibold m-0">Drone</h5>
+      <div class="flex-1"></div>
+      <input type="checkbox" id="ThemeSwitch" class="switch switch-primary" title="Toggle dark theme (VSCode) / light theme (Valorant)">
+    </div>
+
+    <div class="flex flex-col xl:flex-row gap-6 items-start">
+
+    <!-- ============================ LEFT COLUMN ============================ -->
+    <div class="flex flex-col gap-6 w-full xl:w-auto xl:flex-1">
+
+      <!-- ---- Output card (Master Volume + BPM) ---------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">Output</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-3">
+
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">Master Volume</span>
+            <input type="range" min="0" max="1" value="0.5" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
+            <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+          </label>
+
+          <!-- BPM: simulator-only tempo control. Delivered to the DSP through
+               Module.fx_set_bpm (wasm.cc -> Osc::setTempo -> tempo_bpm_). On
+               hardware the platform delivers BPM itself via unit_set_tempo(); the
+               slider here only matters in the web simulator. -->
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">BPM</span>
+            <input type="range" min="56" max="240" value="120" step="1" id="BpmSlider" class="range range-primary range-sm flex-1">
+            <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+          </label>
         </div>
       </div>
 
-      <!-- BPM: simulator-only tempo control. Delivered to the DSP through
-           Module.fx_set_bpm (wasm.cc -> Osc::setTempo -> tempo_bpm_). On
-           hardware the platform delivers BPM itself via unit_set_tempo(); the
-           slider here only matters in the web simulator. -->
-      <div class="top-control">
-        <h2>BPM</h2>
-        <div class="control-row">
-          <input type="range" min=56 max=240 value=120 step=1 id="BpmSlider">
-          <span id="BpmLabel"></span>
+      <!-- ---- Oscillator card --------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">Oscillator</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-3">
+
+          <p class="text-xs opacity-60 m-0">
+            Tips: play with a QWERTY keyboard,
+            <span class="kbd kbd-sm">Z</span> / <span class="kbd kbd-sm">X</span> to switch octave
+          </p>
+
+          <div id="keyboard" class="w-full"></div>
+        </div>
+      </div>
+
+      <!-- ---- Scope card --------------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">Scope</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-3">
+          <canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
+          <canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
         </div>
       </div>
     </div>
 
-    <h2>Oscillator</h2>
-    <p>Tips: play with a QWERTY keyboard, Z and X to switch octave </p>
-    <!-- <select id="OscillatorType">
-      <option value="sawtooth">Sawtooth</option>
-      <option value="square">Square</option>
-      <option value="triangle">Triangle</option>
-      <option value="sine">Sine</option>
-      <option value="noise">Noise</option>
-    </select> -->
-    <button id="OscLatchButton">Latch Off</button>
-    <div id="keyboard"></div>
+    <!-- ============================ RIGHT COLUMN =========================== -->
+    <div class="flex flex-col gap-6 w-full xl:w-96 xl:shrink-0">
 
-    <h2>Scope</h2>
-    <canvas id="TimeDomain" width="512" height="128"></canvas><br />
-    <canvas id="FrequencyDomain" width="512" height="128"></canvas>
+      <!-- ---- LFO (Shape) card --------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">LFO (Shape)</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-3">
+          <p class="text-xs opacity-60 m-0">Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
+
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">F (freq, Hz)</span>
+            <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
+            <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">1.00</span>
+          </label>
+
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">S (depth, %)</span>
+            <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
+            <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- ---- Presets card --------------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">Presets</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-3">
+          <p class="text-xs opacity-60 m-0">One-click parameter banks (simulator-only). Hover for a description.</p>
+          <div class="flex flex-wrap gap-2" id="Presets"></div>
+        </div>
+      </div>
+
+      <!-- ---- Parameters card ---------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-header">
+          <h5 class="card-title">Parameters</h5>
+        </div>
+        <div class="card-body flex-col items-stretch gap-1">
+          <div id="Parameters"></div>
+        </div>
+      </div>
+
     </div>
 
-    <div class="col-side">
-    <h2>LFO (Shape)</h2>
-    <p>Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
-    <div>
-      <label style="display:inline-block; width:100px; margin-right:10px;">F (freq, Hz)</label>
-      <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" style="width:200px; margin-right:10px;">
-      <span id="LfoFreqLabel">1.00</span>
-    </div>
-    <div>
-      <label style="display:inline-block; width:100px; margin-right:10px;">S (depth, %)</label>
-      <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" style="width:200px; margin-right:10px;">
-      <span id="LfoDepthLabel">0%</span>
-    </div>
-
-    <h2>Presets</h2>
-    <p>One-click parameter banks (simulator-only). Hover for a description.</p>
-    <div class="preset-grid" id="Presets"></div>
-
-    <h2>Parameters</h2>
-    <div id="Parameters"></div>
     </div>
   </div>
 
@@ -260,12 +261,11 @@
       // thread, the same write the hardware's unit_set_param_value() does.
       function createEditableParam(wasmProcessor, index) {
         let container = document.createElement("div");
+        container.className = "flex items-center gap-3 py-1";
 
         let label = document.createElement("label");
         label.textContent = EDIT_PARAM_NAMES[index];
-        label.style.display = "inline-block";
-        label.style.width = "100px";
-        label.style.marginRight = "10px";
+        label.className = "w-14 text-sm font-medium shrink-0";
         container.appendChild(label);
 
         let input = document.createElement("input");
@@ -274,11 +274,11 @@
         input.max = 1023;
         input.step = 1;
         input.id = "editparam_" + index;
-        input.style.width = "200px";
-        input.style.marginRight = "10px";
+        input.className = "range range-primary range-sm flex-1 min-w-0";
         container.appendChild(input);
 
         let value_string = document.createElement("span");
+        value_string.className = "badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right";
         container.appendChild(value_string);
 
         const apply = (raw) => {
@@ -325,20 +325,10 @@
       //   source.connect(wasmProcessor);
       // }
 
-      // resume/stop button
-      let togglePlaybackButton = document.getElementById("TogglePlaybackButton");
-      togglePlaybackButton.onclick = () => {
-        if (context.state !== "running") {
-          context.resume();
-        } else {
-          context.suspend();
-        }
-      };
-
       // Browsers start AudioContext in "suspended" state until a user
       // gesture, so playback is off by default. Resume automatically on
-      // the first click/keypress so the user does not have to press the
-      // Toggle playback button manually.
+      // the first click/keypress so the user does not have to do anything
+      // special to start playback.
       const autoResume = () => {
         if (context.state !== "running") {
           context.resume();
@@ -390,18 +380,6 @@
 
       let osc_frequency = 440.0;
 
-      let latchEnabled = false;
-      let latchButton = document.getElementById("OscLatchButton");
-      latchButton.onclick = function () {
-        latchEnabled = !latchEnabled;
-        this.innerText = `Latch ${latchEnabled ? "On" : "Off"}`;
-
-        // Note: this unit runs its own single-voice A-H-R envelope (2 s exp
-        // attack, hold while the key is held, 2 s exp release). The NTS-1 mkII
-        // platform's own EG is set to oPEn on the device, so it does not
-        // double-shape the signal.
-      };
-
       keyboard.keyDown = function (note, frequency) {
         if (!window.frequencyStack) {
           window.frequencyStack = [];
@@ -437,6 +415,8 @@
         Module.noteOff(note);
       };
 
+      // Z/X shift the hotkey octave up/down (the key labels follow the
+      // shift; the key range stays the fixed 11 white + 7 black).
       document.addEventListener("keydown", (e) => {
         if (e.key === "z") {
           currentOctave = Math.max(0, currentOctave - 1);
@@ -452,14 +432,33 @@
       let canvasFFT = document.getElementById("FrequencyDomain");
       let canvasWaveContext = canvasWave.getContext("2d");
       let canvasFFTContext = canvasFFT.getContext("2d");
+
+      // Theme-aware drawing colors, cached outside the per-frame loop. app.css
+      // exposes --scope-bg/--scope-fg on .scope-canvas (mapped to the active
+      // flyonui theme's base-100/base-content); we resolve them once and
+      // refresh on <html> data-theme changes (MutationObserver), so the trace
+      // and histogram stay readable on every theme at zero per-frame cost.
+      let scopeBg = "";
+      let scopeFg = "";
+      function refreshScopeColors() {
+        const s = getComputedStyle(canvasWave);
+        scopeBg = s.getPropertyValue("--scope-bg").trim() || "#fff";
+        scopeFg = s.getPropertyValue("--scope-fg").trim() || "#000";
+      }
+      refreshScopeColors();
+      new MutationObserver(refreshScopeColors).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+
       draw();
       function draw() {
         analyser.getFloatTimeDomainData(data);
 
-        canvasWaveContext.fillStyle = "rgb(255, 255, 255)";
+        canvasWaveContext.fillStyle = scopeBg;
         canvasWaveContext.fillRect(0, 0, canvasWave.width, canvasWave.height);
         canvasWaveContext.lineWidth = 1;
-        canvasWaveContext.strokeStyle = "rgb(0, 0, 0)";
+        canvasWaveContext.strokeStyle = scopeFg;
         canvasWaveContext.beginPath();
 
         // find trigger point
@@ -509,7 +508,7 @@
         let posX = 0;
         for (let i = 0; i < data.length; i++) {
           let barHeight = data[i] + canvasFFT.height;
-          canvasFFTContext.fillStyle = "rgb(0, 0, 0)";
+          canvasFFTContext.fillStyle = scopeFg;
           canvasFFTContext.fillRect(
             posX,
             canvasFFT.height - barHeight,
@@ -631,10 +630,10 @@
       function applyPresetRaw(raws, presetLabel) {
         if (context.state !== "running") context.resume();
         if (presetApplyTimer) clearTimeout(presetApplyTimer);
-        // Deactivate all preset buttons.
-        document.querySelectorAll(".preset-grid button").forEach((b) => b.classList.remove("active"));
-        const me = document.querySelector('.preset-grid button[data-name="' + presetLabel + '"]');
-        if (me) me.classList.add("active");
+        // Deactivate all preset buttons (FlyonUI btn-active class).
+        document.querySelectorAll("#Presets button").forEach((b) => b.classList.remove("btn-active"));
+        const me = document.querySelector('#Presets button[data-name="' + presetLabel + '"]');
+        if (me) me.classList.add("btn-active");
         // Paced application: one setEditParam every 8 ms (see the block above).
         let i = 0;
         (function step() {
@@ -660,6 +659,7 @@
       {
         const b = document.createElement("button");
         b.textContent = PRESET_RANDOM;
+        b.className = "btn btn-outline btn-sm";
         b.title = "Random: RATE 20-100%, all walk periods/smooths + RWAV/RDRV/RFLD/RWFC + WAV1/WAV2 randomized.";
         b.dataset.name = PRESET_RANDOM;
         b.onclick = () => applyPresetRaw(randomRaw(), PRESET_RANDOM);
@@ -668,6 +668,7 @@
       {
         const b = document.createElement("button");
         b.textContent = PRESET_RESET;
+        b.className = "btn btn-outline btn-sm";
         b.title = "Always restore the factory default parameters.";
         b.dataset.name = PRESET_RESET;
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
@@ -699,6 +700,10 @@
       updateLfoDepth();
     };
   </script>
+  <!-- Emscripten replaces this placeholder with the glue script
+       (<script async type="text/javascript" src="drone.js"></script>)
+       when linking with --shell-file. It is mandatory: tools/link.py
+       aborts the build if the placeholder is missing. Leave as-is. -->
   {{{ SCRIPT }}}
 </body>
 

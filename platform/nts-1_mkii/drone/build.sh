@@ -4,6 +4,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SIM_DIR="$SCRIPT_DIR/sim"
+SANDBOX_DIR="$(cd "$SCRIPT_DIR/../../../websim" && pwd)"
 
 echo "============================================"
 echo "Building drone NTS-1 mkII ARM unit"
@@ -11,6 +13,35 @@ echo "============================================"
 
 cd "$SCRIPT_DIR"
 make install
+
+# Build the FlyonUI (Tailwind v4) web assets via Vite, so the web simulator
+# stays in sync with the unit build. Stale-check: rebuild only if an input is
+# newer than the last output, or node_modules is missing (first run).
+flyon_stale() {
+  local out="$SIM_DIR/flyon.css"
+  [ ! -f "$out" ] && return 0
+  [ ! -d "$SANDBOX_DIR/node_modules" ] && return 0
+  for f in "$SANDBOX_DIR/app.css" "$SANDBOX_DIR/entry.js" \
+           "$SANDBOX_DIR/vite.config.js" "$SANDBOX_DIR/package.json" \
+           "$SANDBOX_DIR/osc.html"; do
+    [ -f "$f" ] && [ "$f" -nt "$out" ] && return 0
+  done
+  return 1
+}
+
+if flyon_stale; then
+  echo ""
+  echo "============================================"
+  echo "Building FlyonUI assets (Vite)..."
+  echo "============================================"
+  cd "$SANDBOX_DIR"
+  if [ ! -d node_modules ]; then
+    echo "node_modules missing - running npm install..."
+    npm install --no-audit --no-fund
+  fi
+  npx vite build
+  echo ""
+fi
 
 echo ""
 echo "============================================"

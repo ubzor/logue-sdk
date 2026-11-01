@@ -1,0 +1,202 @@
+/* Main stylesheet for the FlyonUI-powered simulator shells.
+ *
+ * Built by Vite (see vite.config.js) into sim/flyon.css.
+ *
+ * Everything (Tailwind utilities + flyonui base/theme layers + flyonui
+ * component CSS) is imported here and compiled into a single flyon.css by
+ * @tailwindcss/vite. No separate component-stylesheet is needed.
+ *
+ * NOTE on flyonui's minified component CSS: flyonui 2.4.1 ships
+ * components/*.css with a few minification artifacts (value/declaration
+ * boundaries fused together) that make Lightning CSS - which @tailwindcss/vite
+ * runs over every @import - crash or drop the &-nested blocks (e.g. the switch
+ * knob). The `flyonuiRepair` Vite plugin (see vite.flyonui.js) fixes the source
+ * *before* Lightning CSS runs, so the components can be imported normally and
+ * their &-nested pseudo-elements survive. */
+@import "tailwindcss";
+
+/* ---- flyonui: base layers ------------------------------------------------ */
+@import "./node_modules/flyonui/theme/light.css";
+@import "./node_modules/flyonui/theme/dark.css";
+@import "./node_modules/flyonui/base/scrollbar.css";
+@import "./node_modules/flyonui/base/rootcolor.css";
+@import "./node_modules/flyonui/base/reset.css";
+@import "./node_modules/flyonui/base/custombase.css";
+@import "./node_modules/flyonui/base/svg.css";
+@import "./node_modules/flyonui/base/properties.css";
+
+/* ---- extra themes (flyonui ships light+dark only in flyonui.css) -------- */
+@import "./node_modules/flyonui/theme/spotify.css";
+@import "./node_modules/flyonui/theme/valorant.css";
+@import "./node_modules/flyonui/theme/slack.css";
+@import "./node_modules/flyonui/theme/vscode.css";
+
+/* ---- flyonui: components the shells actually use ------------------------
+ * These are REPAIRED COPIES staged into ./flyonui-patched/ by the flyonuiRepair
+ * Vite plugin (vite.flyonui.js, buildStart) - flyonui 2.4.1's own minified
+ * components/*.css carry fused value/declaration boundaries that make
+ * Lightning CSS (run by @tailwindcss/vite over every @import) crash or drop
+ * the &-nested blocks (switch knob, etc.). The plugin copies each whitelisted
+ * component from node_modules/flyonui/components/ into flyonui-patched/ with
+ * the repair applied, and we import those copies here. They are compiled into
+ * flyon.css by @tailwindcss/vite. The COMPONENTS list in vite.flyonui.js must
+ * stay in sync with this @import block. */
+@import "./flyonui-patched/button.css";
+@import "./flyonui-patched/card.css";
+@import "./flyonui-patched/range.css";
+@import "./flyonui-patched/switches.css";
+@import "./flyonui-patched/badge.css";
+@import "./flyonui-patched/kbd.css";
+@import "./flyonui-patched/label.css";
+@import "./flyonui-patched/divider.css";
+
+/* ------------------------------------------------------------------ */
+/* Custom bits not covered by FlyonUI                                 */
+/* ------------------------------------------------------------------ */
+
+/* flyonui range-slider repair ----------------------------------------
+ *
+ * flyonui 2.4.1 ships components/range.css in modern CSS-nesting syntax
+ * (e.g. `.range { &::-webkit-slider-thumb { ... } }`). The @tailwindcss/vite
+ * plugin parses every @import with Lightning CSS, which cannot re-parse a
+ * nested block that mixes nesting with pseudo-elements; on failure it
+ * flattens only the first few declarations and *drops the rest*. For the
+ * range thumb that loses `width`, `top: 50%` (vertical centering), the
+ * border and the track background - so every slider in the shells renders
+ * as a full-width translucent bar with no visible thumb.
+ *
+ * The range slider is the one flyonui component whose CSS is mangled, so
+ * entry.js additionally ships the *original* flyonui/components/range.css
+ * verbatim in flyonui-vendor.css (via a `?raw` import, which bypasses the
+ * CSS pipeline entirely). That file is written into <head> AFTER flyon.css,
+ * so its @layer utilities rules win over the broken ones in flyon.css while
+ * still resolving the --color-* base variables that flyon.css defines.
+ * Browsers natively expand the modern nesting - which is exactly how
+ * flyonui intends the file to be consumed.
+ */
+/* flyonui declares the range component once per breakpoint (.range,
+   .sm\:range, .md\:range, ... each wrapped in @media (min-width:Npx)).
+   The @tailwindcss/vite plugin (Lightning CSS) mangles the nested
+   pseudo-element rules, dropping width/top:50%/border for the thumb.
+   On a wide viewport the breakpoint-specific rules (.sm\:range, etc.)
+   have higher specificity (0,2,0) than a plain .range repair (0,1,0),
+   so we re-assert the dropped properties for *every* breakpoint variant.
+   We use FLAT CSS (no nesting) so Lightning CSS passes it through intact. */
+@layer utilities {
+  .range::-webkit-slider-runnable-track {
+    background-color: color-mix(in oklab, var(--color-neutral) 10%, transparent);
+  }
+  .range::-moz-range-track {
+    background-color: color-mix(in oklab, var(--color-neutral) 10%, transparent);
+  }
+  .range::-webkit-slider-thumb {
+    width: var(--range-thumb-size);
+    height: var(--range-thumb-size);
+    top: 50%;
+    margin-top: calc(var(--range-thumb-size) / -2);
+  }
+  .range::-moz-range-thumb {
+    width: var(--range-thumb-size);
+    height: var(--range-thumb-size);
+  }
+  @media (min-width: 640px) {
+    .sm\:range::-webkit-slider-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+      top: 50%;
+      margin-top: calc(var(--range-thumb-size) / -2);
+    }
+    .sm\:range::-moz-range-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+    }
+  }
+  @media (min-width: 768px) {
+    .md\:range::-webkit-slider-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+      top: 50%;
+      margin-top: calc(var(--range-thumb-size) / -2);
+    }
+    .md\:range::-moz-range-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+    }
+  }
+  @media (min-width: 1024px) {
+    .lg\:range::-webkit-slider-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+      top: 50%;
+      margin-top: calc(var(--range-thumb-size) / -2);
+    }
+    .lg\:range::-moz-range-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+    }
+  }
+  @media (min-width: 1280px) {
+    .xl\:range::-webkit-slider-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+      top: 50%;
+      margin-top: calc(var(--range-thumb-size) / -2);
+    }
+    .xl\:range::-moz-range-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+    }
+  }
+  @media (min-width: 1536px) {
+    .\32 xl\:range::-webkit-slider-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+      top: 50%;
+      margin-top: calc(var(--range-thumb-size) / -2);
+    }
+    .\32 xl\:range::-moz-range-thumb {
+      width: var(--range-thumb-size);
+      height: var(--range-thumb-size);
+    }
+  }
+}
+
+
+/* flyonui 2.4.1 declares the pseudo-element content via a custom property:
+ *   --tw-content:"";  content:var(--tw-content);
+ * The declaration lives in an @property block inside flyonui.css, which Vite
+ * drops (see the Lightning-CSS issue documented above). Without a fallback the
+ * knob/content pseudo-elements (switch ::before, tree-view ::before, etc.) get
+ * content:none and vanish. Define it explicitly so they render. */
+@layer base {
+  :root { --tw-content: ""; }
+}
+
+/* The Space Grotesk web font is loaded by the shell (<link> in <head>);
+   just make it the body font. */
+body {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* qwerty-hancock.js paints its own inline styles, but give the container
+   a deterministic baseline. */
+#keyboard {
+  width: 100%;
+}
+
+/* Scope canvases: theme-aware background + drawing colors. The JS scope
+ * (draw() in osc.html) reads --scope-bg / --scope-fg through a
+ * MutationObserver on <html> and paints the canvas in those colors, so the
+ * time-domain trace and the FFT histogram stay readable on every theme
+ * (light, dark, spotify, valorant, vscode, slack) without hard-coding a
+ * per-theme selector list. The CSS background mirrors --scope-bg so the
+ * canvas looks right even before the first draw() frame. */
+.scope-canvas {
+  width: 100%;
+  height: 128px;
+  display: block;
+  --scope-bg: var(--color-base-100);
+  --scope-fg: var(--color-base-content);
+  background: var(--scope-bg);
+}

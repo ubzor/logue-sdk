@@ -1,0 +1,21 @@
+{
+  "name": "logue-websim",
+  "version": "1.0.0",
+  "description": "`` git submodule update --init `` to get emsdk, and then follow the official instruction: https://emscripten.org/docs/getting_started/downloads.html",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": "true",
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "flyonui": "^2.4.1",
+    "vite": "^5.4.21"
+  }
+}

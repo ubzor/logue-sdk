@@ -5,6 +5,48 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIM_DIR="$SCRIPT_DIR/sim"
+# The FlyonUI (Tailwind v4) assets are built by Vite from the shared websim/
+# project. They live next to the other simulator sources.
+SANDBOX_DIR="$(cd "$SCRIPT_DIR/../../../websim" && pwd)"
+
+# Build the FlyonUI assets (flyon.css + flyon.js) if missing or stale. Stale
+# if any Vite input is newer than the last build, or if node_modules is
+# missing (first run). Vite is fast (<2 s) so we also rebuild when the shell
+# HTML changed (new utility classes may need to be picked up by Tailwind) or
+# when the flyonui package files changed. All of it - base/theme layers plus
+# component CSS - is compiled into the single flyon.css by @tailwindcss/vite
+# (the flyonuiRepair plugin in vite.flyonui.js fixes flyonui's minified
+# artifacts before Lightning CSS runs, so no separate verbatim stylesheet is
+# needed - see websim/app.css header).
+flyon_stale() {
+  local out="$SIM_DIR/flyon.css"
+  [ ! -f "$out" ] && return 0
+  [ ! -d "$SANDBOX_DIR/node_modules" ] && return 0
+  for f in "$SANDBOX_DIR/app.css" "$SANDBOX_DIR/entry.js" \
+           "$SANDBOX_DIR/vite.config.js" "$SANDBOX_DIR/vite.flyonui.js" \
+           "$SANDBOX_DIR/package.json" "$SANDBOX_DIR/osc.html"; do
+    [ -f "$f" ] && [ "$f" -nt "$out" ] && return 0
+  done
+  # The flyonui component files imported by app.css can also become stale.
+  for f in button card range switches badge kbd label divider; do
+    local p="$SANDBOX_DIR/node_modules/flyonui/components/$f.css"
+    [ -f "$p" ] && [ "$p" -nt "$out" ] && return 0
+  done
+  return 1
+}
+
+if flyon_stale; then
+  echo "============================================"
+  echo "Building FlyonUI assets (Vite)..."
+  echo "============================================"
+  cd "$SANDBOX_DIR"
+  if [ ! -d node_modules ]; then
+    echo "node_modules missing - running npm install..."
+    npm install --no-audit --no-fund
+  fi
+  npx vite build
+  echo ""
+fi
 
 # Build the WASM simulator if it's missing or stale
 # Stale if any source is newer than drone.html, or if the generated assets

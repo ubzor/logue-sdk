@@ -279,6 +279,14 @@ wasm: $(WASMOBJS)
 	@mkdir -p $(WASMDIR)/scripts $(WASMDIR)/images
 	@cp -p $(SANDBOXDIR)/scripts/*.js $(WASMDIR)/scripts/
 	@cp -p $(SANDBOXDIR)/images/*.ico $(WASMDIR)/images/ 2>/dev/null || true
+	@echo 'Building FlyonUI assets (Vite) in $(SANDBOXDIR)'
+	@if [ ! -d "$(SANDBOXDIR)/node_modules" ]; then \
+		echo "node_modules missing - running npm install in $(SANDBOXDIR)"; \
+		cd "$(SANDBOXDIR)" && npm install --no-audit --no-fund; \
+	fi
+	@cd "$(SANDBOXDIR)" && npx vite build
+	@cp -p "$(SANDBOXDIR)/sim/flyon.css" "$(WASMDIR)/flyon.css"
+	@cp -p "$(SANDBOXDIR)/sim/flyon.js" "$(WASMDIR)/flyon.js"
 	@echo Done
 
 $(WASMOBJDIR):
