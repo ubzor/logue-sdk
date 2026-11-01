@@ -22,7 +22,7 @@
 </head>
 
 <body class="min-h-screen bg-base-100 text-base-content p-4 sm:p-6">
-  <div class="flex flex-col gap-6 max-w-5xl mx-auto">
+  <div class="flex flex-col gap-6 max-w-[1200px] mx-auto">
 
     <!-- ---- Top bar: title + theme switch (checked = vscode dark, off = valorant light) -->
     <div class="flex items-center gap-3">
@@ -36,102 +36,117 @@
     <!-- ============================ LEFT COLUMN ============================ -->
     <div class="flex flex-col gap-6 w-full xl:w-auto xl:flex-1">
 
-      <!-- ---- Output card (Master Volume + BPM) ---------------------------- -->
+      <!-- ---- Global card (Volume + BPM + LFO + Octave) --------------------- -->
+      <!-- All the "performance-time" knobs in one compact block. No sub-
+           headings: each row's label is self-explanatory (LFO F/S mirror the
+           hardware OSC-button A/B knobs, see the row tooltips). -->
       <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">Output</h5>
-        </div>
-        <div class="card-body flex-col items-stretch gap-3">
+        <div class="card-body flex-col items-stretch !gap-6 pt-6">
 
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Master Volume</span>
-            <input type="range" min="0" max="1" value="0.5" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
-            <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
-          </label>
+          <div class="grid grid-cols-2 gap-x-10 gap-y-3" title="Volume/BPM (left column) and LFO F/S (right column): two equal columns to keep the Global card compact.">
+            <div class="flex flex-col gap-2">
+              <label class="flex items-center gap-3">
+                <span class="w-16 text-sm font-medium shrink-0">Volume</span>
+                <input type="range" min="0" max="1" value="0.5" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
+                <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right"></span>
+              </label>
 
-          <!-- BPM: simulator-only tempo control. Delivered to the DSP through
-               Module.fx_set_bpm (wasm.cc -> Osc::setTempo -> tempo_bpm_). On
-               hardware the platform delivers BPM itself via unit_set_tempo(); the
-               slider here only matters in the web simulator. -->
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">BPM</span>
-            <input type="range" min="56" max="240" value="120" step="1" id="BpmSlider" class="range range-primary range-sm flex-1">
-            <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
-          </label>
-        </div>
-      </div>
+              <!-- BPM: simulator-only tempo control. Delivered to the DSP
+                   through Module.fx_set_bpm (wasm.cc -> Osc::setTempo ->
+                   tempo_bpm_). On hardware the platform delivers BPM itself
+                   via unit_set_tempo(); the slider here only matters in the
+                   web simulator. -->
+              <label class="flex items-center gap-3">
+                <span class="w-16 text-sm font-medium shrink-0">BPM</span>
+                <input type="range" min="56" max="240" value="120" step="1" id="BpmSlider" class="range range-primary range-sm flex-1">
+                <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right"></span>
+              </label>
+            </div>
 
-      <!-- ---- Oscillator card --------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">Oscillator</h5>
-        </div>
-        <div class="card-body flex-col items-stretch gap-3">
+            <div class="flex flex-col gap-2">
+              <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO frequency (Hz).">
+                <span class="w-20 text-sm font-medium shrink-0">LFO F (Hz)</span>
+                <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
+                <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">1.00</span>
+              </label>
 
-          <p class="text-xs opacity-60 m-0">
-            Tips: play with a QWERTY keyboard,
-            <span class="kbd kbd-sm">Z</span> / <span class="kbd kbd-sm">X</span> to switch octave
-          </p>
+              <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO depth (%)">
+                <span class="w-20 text-sm font-medium shrink-0">LFO S (%)</span>
+                <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
+                <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+              </label>
+            </div>
+          </div>
 
+
+          <!-- Octave (FlyonUI "Join radio with btn style", see
+               https://flyonui.com/docs/forms/radio/#join-radio-with-btn-style):
+               <div class="join drop-shadow"> with one input[type=radio]
+               .join-item .btn .btn-soft per option; the checked input is
+               painted primary by the flyonui .btn rule itself (see
+               .octave-join in app.css). JS (setOctaveShift) only applies the
+               shift and mirrors the Z/X hotkeys into .checked. -->
+          <div class="flex items-center gap-3">
+            <span class="w-16 text-sm font-medium shrink-0">Octave</span>
+            <div class="octave-join drop-shadow" title="Current octave shift of the whole keyboard range">
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-2" aria-label="-2" title="Down two octaves (A0..D2)">
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-1" aria-label="-1" title="Down one octave (A1..D3)">
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="0" aria-label="0" title="Base range (A2..D4)" checked>
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="1" aria-label="+1" title="Up one octave (A3..D5)">
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="2" aria-label="+2" title="Up two octaves (A4..D6)">
+            </div>
+          </div>
+
+          <!-- Keyboard (moved here from the old Oscillator card). No margin-top wrapper:
+               the card-body gap-3 handles spacing after the Octave row. The qwerty-hancock
+               lib rewrites #keyboard's inline style (margin:0) at init, so any inline margin
+               would be clobbered anyway; w-full + the lib's ResizeObserver track the card width. -->
           <div id="keyboard" class="w-full"></div>
-        </div>
-      </div>
-
-      <!-- ---- Scope card --------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">Scope</h5>
-        </div>
-        <div class="card-body flex-col items-stretch gap-3">
-          <canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
-          <canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- ============================ RIGHT COLUMN =========================== -->
-    <div class="flex flex-col gap-6 w-full xl:w-96 xl:shrink-0">
-
-      <!-- ---- LFO (Shape) card --------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">LFO (Shape)</h5>
-        </div>
-        <div class="card-body flex-col items-stretch gap-3">
-          <p class="text-xs opacity-60 m-0">Simulates the hardware OSC-button A/B knobs (F = frequency, S = depth).</p>
-
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">F (freq, Hz)</span>
-            <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
-            <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">1.00</span>
-          </label>
-
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">S (depth, %)</span>
-            <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
-            <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
-          </label>
         </div>
       </div>
 
       <!-- ---- Presets card --------------------------------------------------- -->
       <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">Presets</h5>
-        </div>
-        <div class="card-body flex-col items-stretch gap-3">
+        <div class="card-body flex-col items-stretch !gap-6 pt-6">
           <p class="text-xs opacity-60 m-0">One-click parameter banks (simulator-only). Hover for a description.</p>
           <div class="flex flex-wrap gap-2" id="Presets"></div>
         </div>
       </div>
 
-      <!-- ---- Parameters card ---------------------------------------------- -->
+    </div>
+
+    <!-- ============================ RIGHT COLUMN =========================== -->
+    <!-- No fixed width: the column is sized by its content. .scope-canvas is
+         capped at max-width:512px (app.css), so the Scope card settles at
+         512 + 24+24 card padding = 560px (border-box) and the Parameters
+         card matches it (w-full inside the column). -->
+    <div class="flex flex-col gap-6 xl:shrink-0">
+
+      <!-- ---- Scope card --------------------------------------------------- -->
       <div class="card card-border shadow-none w-full">
-        <div class="card-header">
-          <h5 class="card-title">Parameters</h5>
+        <div class="card-body flex-col items-stretch !gap-6 pt-6">
+          <!-- width/height attributes = native drawing-buffer resolution
+               (512x128). CSS .scope-canvas { width:100%; max-width:512px }
+               stretches the buffer to fit, but never past 512px - so the
+               512px native buffer is rendered 1:1 on every viewport. The
+               right column is w-140 (560px) on xl, exactly 512 + 24+24
+               card padding, so there is no dead space around the scope. -->
+          <canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
+          <canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
         </div>
-        <div class="card-body flex-col items-stretch gap-1">
-          <div id="Parameters"></div>
+      </div>
+
+      <!-- ---- Parameters card ---------------------------------------------- -->
+      <!-- Three equal columns, each a stack of semantic groups (see PARAM_GROUPS
+           in the script below). Groups are assigned column-by-column (g0, g1 ->
+           col 0; g2, g3 -> col 1; g4, g5 -> col 2) so the heights balance. -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-body flex-col items-stretch gap-1 pt-6">
+          <div id="Parameters" class="grid grid-cols-3 gap-x-4 gap-y-6 items-start">
+            <div id="ParamCol0" class="flex flex-col gap-3"></div>
+            <div id="ParamCol1" class="flex flex-col gap-3"></div>
+            <div id="ParamCol2" class="flex flex-col gap-3"></div>
+          </div>
         </div>
       </div>
 
@@ -179,6 +194,26 @@
         "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
         "RWAV", "RDRV", "RFLD",
         "XFM", "XFM2", "FCUT", "RES", "RWFC",
+      ];
+
+      // Semantic groups of the 25 edit parameters (UI-only; the DSP enum order
+      // in osc.h is untouched). Each group becomes one titled block in the
+      // 3-column Parameters layout. Items are edit_ indices (select_ order).
+      // Group -> column: g0, g1 -> col 0; g2, g3 -> col 1; g4, g5 -> col 2.
+      // Column heights (rows): 3+4=7 | 3+8=11 | 5+5=10 -> balanced.
+      //   TIMBRE        WAV1 WAV2 RWAV          - wavetables A/B + morph wander
+      //   ANCHORS       SUB1 SUB2 CHRD CINT     - 3 anchor voices (f/2, f/4, chord)
+      //   PITCH         DETU XFM XFM2           - A/B detune + cross-FM (Tone stream)
+      //   WANDER        RATE SPD1..SMT3         - depth ceiling + 3 stream periods/smooth
+      //   TEXTURE       SATU ASYM FOLD RDRV RFLD - saturation stack + drive/fold wander
+      //   TIMBRE FILTER FCUT RES RWFC           - internal SVF + cutoff wander
+      const PARAM_GROUPS = [
+        { title: "TIMBRE",        items: [13, 14, 17] },
+        { title: "ANCHORS",       items: [8, 9, 15, 16] },
+        { title: "PITCH",         items: [0, 20, 21] },
+        { title: "WANDER",        items: [1, 2, 3, 4, 5, 6, 7] },
+        { title: "TEXTURE",       items: [10, 11, 12, 18, 19] },
+        { title: "TIMBRE FILTER", items: [22, 23, 24] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 25 editable
@@ -259,7 +294,10 @@
       // through the direct edit-parameter channel (Module.setEditParam) —
       // the (select_, PARAM_VAL) pair is applied atomically by the worklet
       // thread, the same write the hardware's unit_set_param_value() does.
-      function createEditableParam(wasmProcessor, index) {
+      // `targetEl` is the column block the row is appended to (the 3-column
+      // Parameters layout); the slider keeps its global id="editparam_<i>" so
+      // the preset bank (applyPresetRaw) can still find it by index.
+      function createEditableParam(wasmProcessor, index, targetEl) {
         let container = document.createElement("div");
         container.className = "flex items-center gap-3 py-1";
 
@@ -299,7 +337,7 @@
         const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
         apply(initRaw);
 
-        document.getElementById("Parameters").appendChild(container);
+        (targetEl || document.getElementById("Parameters")).appendChild(container);
       }
 
       // audio graph
@@ -365,17 +403,34 @@
         applyBpm();
       };
 
-      // keyboard osc
-      let currentOctave = 3;
+      // keyboard osc — explicit keyMap: 18 keys covering A2..D4
+      // (11 white: A S D F G H J K L ; '  +  7 black: W R T U I O [).
+      // Notes containing '#' are rendered as black keys. setKeyOctave()
+      // (Z/X below) works as an octave shift (-2..+2) applied to the whole
+      // range, relabeling the keys (A2..D4 -> A3..D5 etc.).
+      let octaveShift = 0;
       let keyboard = new QwertyHancock({
         id: "keyboard",
-        width: 512,
-        height: 64,
-        octaves: currentOctave,
-        startNote: "A2",
-        whiteNotesColour: "white",
-        blackNotesColour: "black",
-        hoverColour: "#f3e939"
+        // No width: the container is w-full (see #keyboard in the markup,
+        // inside the Global card) and the library reads the computed width
+        // once at init. The keyboard therefore resizes with the Global card.
+        // 154 px: sized so the Global card (Volume/BPM/LFO/Octave/keyboard)
+        // matches the Scope card (2x128 canvases + gaps) on the xl breakpoint.
+        // Black keys auto-scale to height/1.5 (~103 px) in qwerty-hancock.
+        height: 154,
+        keyMap: {
+          65: "A2", 87: "A#2", 83: "B2", 68: "C3", 82: "C#3",
+          70: "D3", 84: "D#3", 71: "E3", 72: "F3", 85: "F#3",
+          74: "G3", 73: "G#3", 75: "A3", 79: "A#3", 76: "B3",
+          186: "C4", 219: "C#4", 222: "D4"
+        },
+        whiteKeyColour: "#fff",
+        blackKeyColour: "#000",
+        // Theme-aware: --color-primary is set by the active flyonui theme
+        // (reddish for light/valorant, blue for dark/vscode). var() works in
+        // inline styles and inherits from <html>, so the highlight color
+        // updates automatically on theme toggle with no JS intervention.
+        activeColour: "var(--color-primary)"
       });
 
       let osc_frequency = 440.0;
@@ -415,15 +470,38 @@
         Module.noteOff(note);
       };
 
-      // Z/X shift the hotkey octave up/down (the key labels follow the
-      // shift; the key range stays the fixed 11 white + 7 black).
+      // Octave switching: radio group (the "Octave" buttons below the
+      // keyboard, FlyonUI "Join radio with btn style") + Z/X hotkeys. Both go
+      // through setOctaveShift(), so whichever one fires, the other is
+      // updated. Range: -2..+2 from the base A2..D4 (keys are relabeled,
+      // count and layout stay the same).
+      const octaveRadios = Array.from(document.querySelectorAll('input[name="Octave"]'));
+      function setOctaveShift(value, source) {
+        value = Math.max(-2, Math.min(2, Math.round(value)));
+        if (source !== "hotkey") {
+          // Radio click: keep the checked state (the browser already did it)
+          // and apply the shift.
+        } else {
+          // Z/X hotkey: check the matching radio so the button group reflects
+          // the current octave.
+          const r = octaveRadios.find((x) => x.value === String(value));
+          if (r) r.checked = true;
+        }
+        octaveShift = value;
+        keyboard.setKeyOctave(octaveShift);
+      }
+      octaveRadios.forEach((r) => {
+        r.addEventListener("change", () => setOctaveShift(parseInt(r.value, 10), "radio"));
+      });
+
+      // Z/X shift the whole range by one octave.
+      // Uses keyCode (physical key position) so it works on any keyboard
+      // layout (same approach as the note hotkeys). 90 = Z, 88 = X.
       document.addEventListener("keydown", (e) => {
-        if (e.key === "z") {
-          currentOctave = Math.max(0, currentOctave - 1);
-          keyboard.setKeyOctave(currentOctave);
-        } else if (e.key === "x") {
-          currentOctave = Math.min(7, currentOctave + 1);
-          keyboard.setKeyOctave(currentOctave);
+        if (e.keyCode === 90) {
+          setOctaveShift(octaveShift - 1, "hotkey");
+        } else if (e.keyCode === 88) {
+          setOctaveShift(octaveShift + 1, "hotkey");
         }
       });
 
@@ -451,13 +529,38 @@
         attributeFilter: ["data-theme"],
       });
 
+      // Vertical gain for the time-domain trace. The DSP output goes through a
+      // fixed gain of 0.1 (volume node) before the analyser, so a nominal
+      // -20 dBFS tone lands at v ≈ ±0.1 in getFloatTimeDomainData. The old
+      // mapping (v * 0.5) rendered that as ~5 px on the 128 px canvas - barely
+      // visible. WAVE_GAIN = 1.5 sits between the original v * 0.5 scale
+      // (~8 px of 128, ~6% of the canvas); louder signals scale up
+      // proportionally and the trace clamps to [0, H] so it can never leave
+      // the canvas.
+      const WAVE_GAIN = 1.5;
+
       draw();
       function draw() {
         analyser.getFloatTimeDomainData(data);
 
         canvasWaveContext.fillStyle = scopeBg;
         canvasWaveContext.fillRect(0, 0, canvasWave.width, canvasWave.height);
-        canvasWaveContext.lineWidth = 1;
+
+        // Skip the trace entirely when the signal is inaudible (-60 dBFS
+        // threshold): otherwise the flat zero-line shows up as a stray
+        // horizontal stripe across the middle of the canvas.
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const a = Math.abs(data[i]);
+          if (a > peak) peak = a;
+        }
+        if (peak < 1e-3) {
+          canvasFFTContext.clearRect(0, 0, canvasFFT.width, canvasFFT.height);
+          requestAnimationFrame(draw);
+          return;
+        }
+
+        canvasWaveContext.lineWidth = 1.5;
         canvasWaveContext.strokeStyle = scopeFg;
         canvasWaveContext.beginPath();
 
@@ -488,7 +591,12 @@
 
         for (let i = start_index; i <= end_index; i++) {
           let v = data[i];
-          let y = (v * 0.5 + 1.0) * canvasWave.height / 2; // -2..2 range
+          // Center on the mid-line, invert Y (positive v -> up, like a real
+          // scope), apply WAVE_GAIN, and hard-clamp so the trace can never
+          // leave the canvas.
+          let y = canvasWave.height / 2 - v * WAVE_GAIN * (canvasWave.height / 2);
+          if (y < 0) y = 0;
+          if (y > canvasWave.height) y = canvasWave.height;
 
           if (i === start_index) {
             canvasWaveContext.moveTo(x, y);
@@ -520,10 +628,27 @@
         requestAnimationFrame(draw);
       }
 
-      // one slider per selectable DSP parameter (the 13 edit parameters
-      // behind the hardware's PARAM/VALUE multiplexer), in select_ order
-      for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
-        createEditableParam(wasmProcessor, i);
+      // Build the 3-column Parameters layout: each PARAM_GROUPS entry becomes
+      // a titled block inside its assigned column (g0, g1 -> col 0; g2, g3 ->
+      // col 1; g4, g5 -> col 2). All 25 sliders are created exactly once, in
+      // their select_ (edit_) index order; the per-slider global ids
+      // ("editparam_<i>") let the preset bank address them by index.
+      {
+        const paramColumns = [
+          document.getElementById("ParamCol0"),
+          document.getElementById("ParamCol1"),
+          document.getElementById("ParamCol2"),
+        ];
+        for (let g = 0; g < PARAM_GROUPS.length; ++g) {
+          const col = paramColumns[Math.floor(g / 2)];
+          const heading = document.createElement("div");
+          heading.className = "text-xs uppercase tracking-wide opacity-60 mt-1";
+          heading.textContent = PARAM_GROUPS[g].title;
+          col.appendChild(heading);
+          for (const idx of PARAM_GROUPS[g].items) {
+            createEditableParam(wasmProcessor, idx, col);
+          }
+        }
       }
 
       // ---- Preset bank -------------------------------------------------------

@@ -179,6 +179,50 @@ body {
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
+/* Octave radio group (FlyonUI "Join radio with btn style").
+ *
+ * Markup (see the docs example):
+ *
+ *   <div class="octave-join drop-shadow">
+ *     <input class="octave-join-item btn btn-soft" type="radio"
+ *            name="Octave" value="-2" aria-label="-2" />
+ *     ...
+ *   </div>
+ *
+ * flyonui ships the join classes (join-horizontal / join-item) and the
+ * .drop-shadow utility only in its full flyonui.css bundle, which the Vite
+ * build does not import (see the COMPONENTS list in vite.flyonui.js), so
+ * both are re-implemented here with Tailwind v4's native CSS nesting - the
+ * same technique flyonui itself uses:
+ *
+ *   - each .octave-join-item is an input[type=radio]: the .btn rule in
+ *     flyonui/components/button.css already paints input[type=radio] via
+ *     `&:after { content: attr(aria-label) }` (hence the aria-labels carry
+ *     the visible "-2"/"-1"/"0"/"+1"/"+2" text), and
+ *     `input[type=radio]:checked` flips --btn-bg to the primary color with
+ *     primary content - exactly the docs "checked" look, zero JS needed.
+ *   - .octave-join provides the join geometry: per-corner border radii from
+ *     --join-ss/-se/-es/-ee (the .btn rule consumes them), plus a negative
+ *     inline margin on every non-first item so the segments touch.
+ *   - .drop-shadow mirrors the docs wrapper class: one shadow on the whole
+ *     group (flyonui's own is the default Tailwind filter drop-shadow).
+ *
+ * The CSS keeps group state entirely in :checked, so the Z/X hotkeys only
+ * set `radio.checked` from JS (setOctaveShift in the shell) and the group
+ * follows for free. */
+.octave-join {
+  display: flex;
+  flex: 1 1 0;
+  gap: 0;
+  &:not(:first-child) .octave-join-item { margin-inline-start: calc(var(--border, 1px) * -1); }
+  :first-child .octave-join-item { --join-ss: var(--radius-field); --join-se: 0; --join-es: var(--radius-field); --join-ee: 0; }
+  :last-child .octave-join-item { --join-ss: 0; --join-se: var(--radius-field); --join-es: 0; --join-ee: var(--radius-field); }
+  :only-child .octave-join-item { --join-ss: var(--radius-field); --join-se: var(--radius-field); --join-es: var(--radius-field); --join-ee: var(--radius-field); }
+}
+.octave-join.drop-shadow {
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--color-neutral) 20%, transparent));
+}
+
 /* qwerty-hancock.js paints its own inline styles, but give the container
    a deterministic baseline. */
 #keyboard {
@@ -191,12 +235,21 @@ body {
  * time-domain trace and the FFT histogram stay readable on every theme
  * (light, dark, spotify, valorant, vscode, slack) without hard-coding a
  * per-theme selector list. The CSS background mirrors --scope-bg so the
- * canvas looks right even before the first draw() frame. */
+ * canvas looks right even before the first draw() frame.
+ *
+ * width:100% + max-width:512px stretches the native 512px buffer to the
+ * rendered box, but never past the native resolution - no upscaling. On
+ * viewports where the right column is wider than 512px (e.g. the w-160
+ * right column at ~590px), the canvas stops growing at 512px and the
+ * surplus space is absorbed by the card padding / flex gap. */
 .scope-canvas {
   width: 100%;
+  max-width: 512px;
   height: 128px;
   display: block;
   --scope-bg: var(--color-base-100);
-  --scope-fg: var(--color-base-content);
+  /* Lines/bars are drawn in the active theme's primary color so the scope
+   * accent follows valorant (light) / vscode (dark) and any future theme. */
+  --scope-fg: var(--color-primary);
   background: var(--scope-bg);
 }

@@ -9,54 +9,46 @@ SIM_DIR="$SCRIPT_DIR/sim"
 # project. They live next to the other simulator sources.
 SANDBOX_DIR="$(cd "$SCRIPT_DIR/../../../websim" && pwd)"
 
-# Build the FlyonUI assets (flyon.css + flyon.js) if missing or stale. Stale
-# if any Vite input is newer than the last build, or if node_modules is
-# missing (first run). Vite is fast (<2 s) so we also rebuild when the shell
-# HTML changed (new utility classes may need to be picked up by Tailwind) or
-# when the flyonui package files changed. All of it - base/theme layers plus
-# component CSS - is compiled into the single flyon.css by @tailwindcss/vite
-# (the flyonuiRepair plugin in vite.flyonui.js fixes flyonui's minified
-# artifacts before Lightning CSS runs, so no separate verbatim stylesheet is
-# needed - see websim/app.css header).
-flyon_stale() {
-  local out="$SIM_DIR/flyon.css"
-  [ ! -f "$out" ] && return 0
-  [ ! -d "$SANDBOX_DIR/node_modules" ] && return 0
-  for f in "$SANDBOX_DIR/app.css" "$SANDBOX_DIR/entry.js" \
-           "$SANDBOX_DIR/vite.config.js" "$SANDBOX_DIR/vite.flyonui.js" \
-           "$SANDBOX_DIR/package.json" "$SANDBOX_DIR/osc.html"; do
-    [ -f "$f" ] && [ "$f" -nt "$out" ] && return 0
-  done
-  # The flyonui component files imported by app.css can also become stale.
-  for f in button card range switches badge kbd label divider; do
-    local p="$SANDBOX_DIR/node_modules/flyonui/components/$f.css"
-    [ -f "$p" ] && [ "$p" -nt "$out" ] && return 0
-  done
-  return 1
-}
-
-if flyon_stale; then
-  echo "============================================"
-  echo "Building FlyonUI assets (Vite)..."
-  echo "============================================"
-  cd "$SANDBOX_DIR"
-  if [ ! -d node_modules ]; then
-    echo "node_modules missing - running npm install..."
-    npm install --no-audit --no-fund
-  fi
-  npx vite build
-  echo ""
+# Build the FlyonUI (Tailwind v4) assets via Vite, so the web simulator
+# stays in sync with the unit build. Vite compiles app.css + the flyonui
+# component CSS (button/card/range/switch/badge/kbd/label/divider) into a
+# single flyon.css, and the entry.js into flyon.js. flyonui's minified
+# artifacts are patched by the flyonuiRepair plugin in vite.flyonui.js before
+# Lightning CSS runs, so the components import cleanly.
+# Always rebuild (no stale-check): osc.html, app.css, entry.js, vite config
+# and the flyonui package can all drift independently, and a single stale
+# flyon.css was enough to mask that. Vite is fast (~1 s) so the unconditional
+# rebuild is cheap insurance.
+echo "============================================"
+echo "Building FlyonUI assets (Vite)..."
+echo "============================================"
+cd "$SANDBOX_DIR"
+if [ ! -d node_modules ]; then
+  echo "node_modules missing - running npm install..."
+  npm install --no-audit --no-fund
 fi
+npx vite build
+# Vite outputs flyon.css + flyon.js into $SANDBOX_DIR/sim/. Copy them into
+# $SIM_DIR so the served simulator has them even when `make wasm` below is
+# skipped (drone.html up to date). Without this step a stale check or a
+# partial make-wasm run leaves sim/ without the CSS/JS -> 404 in the browser.
+cp -p "$SANDBOX_DIR/sim/flyon.css" "$SIM_DIR/flyon.css"
+cp -p "$SANDBOX_DIR/sim/flyon.js"  "$SIM_DIR/flyon.js"
+echo ""
 
 # Build the WASM simulator if it's missing or stale
 # Stale if any source is newer than drone.html, or if the generated assets
 # are incomplete (html exists but wasm/js are missing -> interrupted build).
+# Note: osc.html is the Emscripten shell --shell-file source for drone.html,
+# so a change to it alone must re-run em++ (otherwise the old drone.html,
+# with its old class-attribute set, is what the browser loads).
 if [ ! -f "$SIM_DIR/drone.html" ] || [ ! -f "$SIM_DIR/drone.wasm" ] || [ ! -f "$SIM_DIR/drone.js" ] || \
    [ "$SCRIPT_DIR/wasm.cc" -nt "$SIM_DIR/drone.html" ] || \
    [ "$SCRIPT_DIR/header.c" -nt "$SIM_DIR/drone.html" ] || \
    [ "$SCRIPT_DIR/osc.h" -nt "$SIM_DIR/drone.html" ] || \
    [ "$SCRIPT_DIR/Makefile" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$SCRIPT_DIR/config.mk" -nt "$SIM_DIR/drone.html" ]; then
+   [ "$SCRIPT_DIR/config.mk" -nt "$SIM_DIR/drone.html" ] || \
+   [ "$SANDBOX_DIR/osc.html" -nt "$SIM_DIR/drone.html" ]; then
     echo "============================================"
     echo "Building WASM simulator..."
     echo "============================================"

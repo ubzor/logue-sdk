@@ -72,6 +72,7 @@
       height: user_settings.height,
       margin: user_settings.margin || 0,
       startNote: user_settings.startNote || 'A3',
+      keyMap: user_settings.keyMap,
       whiteKeyColour: user_settings.whiteKeyColour || '#fff',
       blackKeyColour: user_settings.blackKeyColour || '#000',
       activeColour: user_settings.activeColour || 'yellow',
@@ -90,7 +91,15 @@
     // Get computed style to ensure we have the real width
     var computedStyle = window.getComputedStyle(container);
 
-    if (typeof settings.width === 'undefined') {
+    // When the caller doesn't pin a width (e.g. the drone sim's Oscillator
+    // keyboard), let the container keep its CSS-driven width (w-full) and
+    // only read the computed value once for key layout. When width IS
+    // provided (fx.html / xypad.html), keep the old behaviour: write it
+    // back as an inline style so the box is exactly that size.
+    var widthExplicit = typeof user_settings.width !== 'undefined';
+    settings._explicitWidth = widthExplicit;
+
+    if (!widthExplicit) {
       settings.width = parseInt(computedStyle.width) || 600;
     }
 
@@ -98,8 +107,11 @@
       settings.height = parseInt(computedStyle.height) || 150;
     }
 
-    // Set container dimensions explicitly
-    container.style.width = settings.width + 'px';
+    // Set container dimensions explicitly (height always; width only when
+    // the caller asked for a fixed size - otherwise the CSS class rules).
+    if (widthExplicit) {
+      container.style.width = settings.width + 'px';
+    }
     container.style.height = settings.height + 'px';
 
     // Set container display to block to ensure dimensions are applied
@@ -110,19 +122,53 @@
     settings.startOctave = parseInt(settings.startNote.charAt(1), 10);
     settings.keyOctave = user_settings.keyOctave || settings.startOctave;
 
+    // Explicit keyMap mode: settings.keyMap = {keyCode: "NoteName+Octave"}
+    // (e.g. {65: "A2", 87: "A#2"}). Keys are created in keyMap order, notes
+    // with '#' are black, the rest white. setKeyOctave() then acts as an
+    // octave *shift* applied to every key (relabelKeys rewrites the ids).
+    // The classic l/u suffix path (fx.html / xypad.html) is untouched.
+    settings.customKeyMap = !!(
+      settings.keyMap && Object.keys(settings.keyMap).length > 0
+    );
+    settings.octaveShift = settings.customKeyMap
+      ? user_settings.keyOctave || 0
+      : 0;
+    if (settings.customKeyMap) {
+      settings.whiteKeyCount = Object.keys(settings.keyMap).filter(function (
+        code
+      ) {
+        return settings.keyMap[code].replace(/\d+$/, '').indexOf('#') === -1;
+      }).length;
+    }
+
     // Add getters and setters
     this.setKeyOctave = function (octave) {
+      if (settings.customKeyMap) {
+        settings.octaveShift = octave;
+        relabelKeys();
+        return settings.octaveShift;
+      }
       settings.keyOctave = octave;
       return settings.keyOctave;
     };
     this.getKeyOctave = function () {
-      return settings.keyOctave;
+      return settings.customKeyMap ? settings.octaveShift : settings.keyOctave;
     };
     this.keyOctaveUp = function () {
+      if (settings.customKeyMap) {
+        settings.octaveShift++;
+        relabelKeys();
+        return settings.octaveShift;
+      }
       settings.keyOctave++;
       return settings.keyOctave;
     };
     this.keyOctaveDown = function () {
+      if (settings.customKeyMap) {
+        settings.octaveShift--;
+        relabelKeys();
+        return settings.octaveShift;
+      }
       settings.keyOctave--;
       return settings.keyOctave;
     };
@@ -136,6 +182,17 @@
 
     createKeyboard();
     addListeners.call(this, container);
+
+    // For fluid-width keyboards (no explicit `width` in the config), track
+    // the container and re-layout the keys when its width changes - e.g.
+    // when the Oscillator card resizes with the viewport or the right
+    // column collapses on mobile. Explicit-width instances (fx.html /
+    // xypad.html) keep the legacy fixed-size behaviour.
+    if (!settings._explicitWidth && typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(function () {
+        reflowKeyboard();
+      }).observe(container);
+    }
   };
 
   /**
@@ -294,16 +351,57 @@
   };
 
   /**
+   * Rewrite the octave in every key id after an octave shift (custom keyMap
+   * mode only) and reposition the black keys, since their absolute `left`
+   * depends on the white key count.
+   */
+  var relabelKeys = function () {
+    if (!settings.customKeyMap) return;
+    var white_key_width = getWhiteKeyWidth(getTotalWhiteKeys());
+    var black_key_width = Math.floor(white_key_width / 2);
+    var ul = document.getElementById(settings.id).querySelector('ul');
+    if (!ul) return;
+    Array.prototype.slice.call(ul.children).forEach(function (el) {
+      // data-base holds the unshifted note id (e.g. "A#3") stored at key
+      // creation time. Deriving the new id from it (instead of from the
+      // current, already-shifted id) means repeated relabel calls cannot
+      // accumulate the shift. Using data-base also sidesteps the ambiguity
+      // of note names: A#2 and A#3 both parse to "A#", but their data-base
+      // values are distinct.
+      var base = el.getAttribute('data-base');
+      if (!base) return;
+      var m = base.match(/^([A-G]#?)(\d+)$/);
+      if (!m) return;
+      var newId = m[1] + (parseInt(m[2], 10) + settings.octaveShift);
+      el.id = newId;
+      el.title = newId;
+      if (el.getAttribute('data-note-type') === 'black') {
+        el.style.left =
+          Math.floor(
+            (white_key_width + 1) * (parseInt(el.dataset.noteNumber, 10) + 1) -
+              black_key_width / 2
+          ) + 'px';
+      }
+    });
+  };
+
+  /**
    * Add styling to individual key on keyboard.
    * @param  {object} key Element of key.
    */
   var styleKey = function (key) {
-    key.el.style.display = 'inline-block';
     key.el.style['-webkit-user-select'] = 'none';
 
     if (key.colour === 'white') {
+      // White keys are flex items of the <ul> (see styleKeyboard): they line
+      // up in one row and never wrap, regardless of how wide the container
+      // is. display:inline-block (the library default) would wrap once the
+      // computed key width no longer fits, which breaks the piano layout.
+      key.el.style.display = 'block';
       styleWhiteKey(key);
     } else {
+      // Black keys stay absolute (positioned by noteNumber) and overlay the
+      // white row - their layout is independent of the flex flow.
       styleBlackKey(key);
     }
   };
@@ -327,7 +425,51 @@
 
     styleElement(keyboard.container);
     styleElement(keyboard.el);
-    keyboard.el.style.width = settings.width + 'px';
+    // The <ul> is a flex row of white keys (black keys are absolute, so they
+    // don't participate in the flex flow). Only pin an explicit width when
+    // the caller asked for one; otherwise the container's CSS width (e.g.
+    // w-full) wins, so the keyboard resizes with its parent card.
+    keyboard.el.style.display = 'flex';
+    keyboard.el.style.flexWrap = 'nowrap';
+    if (settings._explicitWidth) {
+      keyboard.el.style.width = settings.width + 'px';
+    } else {
+      keyboard.el.style.width = '100%';
+    }
+  };
+
+  /**
+   * Re-layout every key after the container's width has changed. Used by the
+   * ResizeObserver installed for non-explicit-width instances (the drone
+   * sim's w-full keyboard): settings.width is refreshed from the container,
+   * then each key's width (white) or left+width (black) is recomputed in
+   * place. The DOM is not rebuilt - only inline styles are rewritten - so
+   * active keys, listeners and octave shift state all survive.
+   */
+  var reflowKeyboard = function () {
+    var container = document.getElementById(settings.id);
+    if (!container) return;
+    var newWidth = container.getBoundingClientRect().width;
+    if (!newWidth || Math.abs(newWidth - settings.width) < 1) return;
+    settings.width = Math.floor(newWidth);
+
+    var white_key_width = getWhiteKeyWidth(getTotalWhiteKeys());
+    var black_key_width = Math.floor(white_key_width / 2);
+    var ul = container.querySelector('ul');
+    if (!ul) return;
+
+    Array.prototype.slice.call(ul.children).forEach(function (el) {
+      if (el.getAttribute('data-note-type') === 'white') {
+        el.style.width = white_key_width + 'px';
+      } else {
+        el.style.width = black_key_width + 'px';
+        el.style.left =
+          Math.floor(
+            (white_key_width + 1) * (parseInt(el.dataset.noteNumber, 10) + 1) -
+              black_key_width / 2
+          ) + 'px';
+      }
+    });
   };
 
   /**
@@ -393,6 +535,13 @@
     key.el.id = key.id;
     key.el.title = key.id;
     key.el.setAttribute('data-note-type', key.colour);
+    key.el.setAttribute('data-note-number', key.noteNumber);
+    // In custom keyMap mode, remember the unshifted (base) note id so
+    // relabelKeys can re-derive the octave without scanning settings.keyMap
+    // by note name (note names are not unique: A#2 and A#3 both parse to "A#").
+    if (key.baseId) {
+      key.el.setAttribute('data-base', key.baseId);
+    }
 
     styleKey(key);
 
@@ -400,7 +549,29 @@
   };
 
   var getTotalWhiteKeys = function () {
+    if (settings.customKeyMap) return settings.whiteKeyCount;
     return settings.octaves * 7;
+  };
+
+  /**
+   * Build a key from a note id like "C#4" (the custom keyMap path).
+   * Octave is parsed from the id itself, so relabeling on octave shift only
+   * needs to rewrite the trailing digit.
+   * @param {string} noteName e.g. "A#", "B", "C#"
+   * @param {number} baseOctave
+   * @param {number} noteNumber index among white keys (position for black keys)
+   * @return {object} key object for createKey()
+   */
+  var makeCustomKey = function (noteName, baseOctave, noteNumber) {
+    var id = noteName + (baseOctave + settings.octaveShift);
+    return {
+      baseId: noteName + baseOctave,
+      colour: noteName.charAt(noteName.length - 1) === '#' ? 'black' : 'white',
+      octave: baseOctave,
+      width: getWhiteKeyWidth(getTotalWhiteKeys()),
+      id: id,
+      noteNumber: noteNumber,
+    };
   };
 
   var createKeys = function () {
@@ -411,6 +582,53 @@
       note_counter = 0,
       octave_counter = settings.startOctave,
       total_white_keys = getTotalWhiteKeys();
+
+    // Custom keyMap path: keys are given explicitly as {keyCode: "Note+Oct"}
+    // (e.g. {65: "A2", 87: "A#2", ...}). Note names containing '#' are
+    // rendered as black keys, everything else as white. The base octave is
+    // taken from the note id and offset by settings.octaveShift (set via
+    // setKeyOctave, e.g. by Z/X).
+    //
+    // The VISUAL order of keys on the web keyboard is always the musical
+    // order (ascending MIDI), regardless of keyCode order. The keyCode
+    // mapping only determines which physical key plays which note.
+    //
+    // NOTE: Object.keys() on an object with integer-like keys iterates in
+    // ascending numeric order (ECMAScript spec), so we collect all notes and
+    // sort them by their MIDI number to get the correct musical layout.
+    if (settings.customKeyMap) {
+      var notes = Object.keys(settings.keyMap).map(function (code) {
+        var note = settings.keyMap[code];
+        return {
+          code: parseInt(code, 10),
+          note: note,
+          name: note.replace(/\d+$/, ''),
+          baseOctave: parseInt(note.slice(-1), 10),
+          midi: getKeyNumber(note)
+        };
+      }).sort(function (a, b) {
+        return a.midi - b.midi;
+      });
+      var white_position = 0;
+      notes.forEach(function (entry) {
+        var isBlack = entry.name.charAt(entry.name.length - 1) === '#';
+        // Black keys sit on the boundary after the previous white key, so
+        // they share that white key's position index (same as the classic
+        // path, where a black key gets noteNumber = i of the white it
+        // follows). white_position is already incremented past the
+        // previous white, so the previous white is at white_position - 1.
+        var pos = isBlack ? white_position - 1 : white_position;
+        var k = createKey(
+          makeCustomKey(entry.name, entry.baseOctave, pos)
+        );
+        if (!isBlack) white_position++;
+        keys.push(k.el);
+      });
+      return {
+        keys: keys,
+        totalWhiteKeys: settings.whiteKeyCount,
+      };
+    }
 
     for (i = 0; i < total_white_keys; i++) {
       if (i % this.whiteNotes.length === 0) {
@@ -498,6 +716,15 @@
   };
 
   var getKeyPressed = function (keyCode) {
+    if (settings.customKeyMap) {
+      // Custom keyMap: the note id already contains its base octave, so just
+      // apply the octave shift.
+      var note = settings.keyMap[keyCode];
+      if (!note) return null;
+      var m = note.match(/^(.*?)(\d+)$/);
+      if (!m) return note;
+      return m[1] + (parseInt(m[2], 10) + settings.octaveShift);
+    }
     return key_map[keyCode]
       .replace('l', parseInt(settings.keyOctave, 10) + settings.keyPressOffset)
       .replace(
@@ -623,13 +850,17 @@
       if (isModifierKey(key)) {
         return;
       }
-      if (key.keyCode in key_map) {
+      // In custom keyMap mode, use settings.keyMap (the user-provided map);
+      // otherwise fall back to the built-in key_map.
+      var activeMap = settings.customKeyMap ? settings.keyMap : key_map;
+      if (key.keyCode in activeMap) {
         key.preventDefault();
         if (key.keyCode in keysDown) {
           return;
         }
         keysDown[key.keyCode] = true;
         var note = getKeyPressed(key.keyCode);
+        if (!note) return;
         var el = document.getElementById(note);
         lightenUp(el);
         that.keyDown(getMidiNoteNumber(note), getFrequencyOfNote(note));
@@ -640,9 +871,11 @@
       if (isModifierKey(key)) {
         return;
       }
-      if (key.keyCode in key_map) {
+      var activeMap = settings.customKeyMap ? settings.keyMap : key_map;
+      if (key.keyCode in activeMap) {
         delete keysDown[key.keyCode];
         var note = getKeyPressed(key.keyCode);
+        if (!note) return;
         var el = document.getElementById(note);
         darkenDown(el);
         that.keyUp(getMidiNoteNumber(note), getFrequencyOfNote(note));
