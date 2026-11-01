@@ -24,9 +24,13 @@
 <body class="min-h-screen bg-base-100 text-base-content p-4 sm:p-6">
   <div class="flex flex-col gap-6 max-w-[1200px] mx-auto">
 
-    <!-- ---- Top bar: title + theme switch (checked = vscode dark, off = valorant light) -->
+    <!-- ---- Top bar: title + theme switch (checked = luxury dark, off = luxury-light light) -->
     <div class="flex items-center gap-3">
-      <h5 class="text-lg font-semibold m-0">Drone</h5>
+      <!-- Tabler "drone" mark via Iconify (@iconify/tailwind4, see app.css).
+           The icon-[tabler--drone] utility inlines the SVG as a currentColor
+           CSS mask, so it follows the active text color in every theme. -->
+      <span id="DroneIcon" class="icon-[tabler--drone] text-2xl" role="img" aria-label="Drone"></span>
+      <span class="text-lg font-semibold tracking-wide">DRONE</span>
       <div class="flex-1"></div>
       <input type="checkbox" id="ThemeSwitch" class="switch switch-primary" title="Toggle dark theme (VSCode) / light theme (Valorant)">
     </div>
@@ -105,21 +109,14 @@
         </div>
       </div>
 
-      <!-- ---- Presets card --------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-6 pt-6">
-          <p class="text-xs opacity-60 m-0">One-click parameter banks (simulator-only). Hover for a description.</p>
-          <div class="flex flex-wrap gap-2" id="Presets"></div>
-        </div>
-      </div>
-
     </div>
 
     <!-- ============================ RIGHT COLUMN =========================== -->
-    <!-- No fixed width: the column is sized by its content. .scope-canvas is
-         capped at max-width:512px (app.css), so the Scope card settles at
-         512 + 24+24 card padding = 560px (border-box) and the Parameters
-         card matches it (w-full inside the column). -->
+    <!-- Only the Scope card lives here now: the Parameters card was moved out
+         below the row so it can span the full page width. No fixed width:
+         the column is sized by its content. .scope-canvas is capped at
+         max-width:512px (app.css), so the Scope card settles at
+         512 + 24+24 card padding = 560px (border-box). -->
     <div class="flex flex-col gap-6 xl:shrink-0">
 
       <!-- ---- Scope card --------------------------------------------------- -->
@@ -136,23 +133,42 @@
         </div>
       </div>
 
-      <!-- ---- Parameters card ---------------------------------------------- -->
-      <!-- Three equal columns, each a stack of semantic groups (see PARAM_GROUPS
-           in the script below). Groups are assigned column-by-column (g0, g1 ->
-           col 0; g2, g3 -> col 1; g4, g5 -> col 2) so the heights balance. -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch gap-1 pt-6">
-          <div id="Parameters" class="grid grid-cols-3 gap-x-4 gap-y-6 items-start">
-            <div id="ParamCol0" class="flex flex-col gap-3"></div>
-            <div id="ParamCol1" class="flex flex-col gap-3"></div>
-            <div id="ParamCol2" class="flex flex-col gap-3"></div>
+    </div>
+
+    </div>
+
+    <!-- ---- Parameters card (full width) ------------------------------------ -->
+    <!-- Moved out of the right column so the card spans the whole page width
+         (max-w-[1200px] mx-auto on the outer container). Three equal columns,
+         each a stack of semantic groups (see PARAM_GROUPS in the script
+         below). Groups are assigned column-by-column (g0, g1 -> col 0;
+         g2, g3 -> col 1; g4, g5 -> col 2) so the heights balance. -->
+    <div class="card card-border shadow-none w-full">
+      <div class="card-body flex-col items-stretch gap-1 pt-6">
+        <div id="Parameters" class="grid grid-cols-3 gap-x-4 gap-y-6 items-stretch">
+          <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
+          <!-- Sits as the first full-width row of the Parameters card
+               (col-span-3), above the 3 parameter columns. The buttons are
+               still created in JS and appended to #Presets, so the preset
+               bank logic (applyPresetRaw / active-button highlight) is
+               unchanged. -->
+          <div class="col-span-3 flex items-center gap-2">
+            <div class="flex flex-wrap gap-2" id="Presets"></div>
           </div>
+          <!-- Col 0 (TIMBRE + ANCHORS) and col 2 (TEXTURE + TIMBRE FILTER) are
+               the two shorter columns; items-stretch on the grid makes each
+               column fill the grid's full height, and justify-between pushes
+               the TOP group (TIMBRE / TEXTURE) to the top edge and the BOTTOM
+               group (ANCHORS / TIMBRE FILTER) to the bottom edge, so the two
+               bottom blocks sit flush with the card's bottom border regardless
+               of how tall the middle column (PITCH + WANDER) is. -->
+          <div id="ParamCol0" class="flex flex-col justify-between gap-2"></div>
+          <div id="ParamCol1" class="flex flex-col gap-2"></div>
+          <div id="ParamCol2" class="flex flex-col justify-between gap-2"></div>
         </div>
       </div>
-
     </div>
 
-    </div>
   </div>
 
   <script>
@@ -299,7 +315,7 @@
       // the preset bank (applyPresetRaw) can still find it by index.
       function createEditableParam(wasmProcessor, index, targetEl) {
         let container = document.createElement("div");
-        container.className = "flex items-center gap-3 py-1";
+        container.className = "flex items-center gap-3";
 
         let label = document.createElement("label");
         label.textContent = EDIT_PARAM_NAMES[index];
@@ -424,12 +440,12 @@
           74: "G3", 73: "G#3", 75: "A3", 79: "A#3", 76: "B3",
           186: "C4", 219: "C#4", 222: "D4"
         },
-        whiteKeyColour: "#fff",
-        blackKeyColour: "#000",
+        whiteKeyColour: "var(--kbd-white)",
+        blackKeyColour: "var(--kbd-black)",
         // Theme-aware: --color-primary is set by the active flyonui theme
-        // (reddish for light/valorant, blue for dark/vscode). var() works in
-        // inline styles and inherits from <html>, so the highlight color
-        // updates automatically on theme toggle with no JS intervention.
+        // (gourmet/luxury etc.). var() works in inline styles and inherits
+        // from <html>, so the highlight color updates automatically on theme
+        // toggle with no JS intervention.
         activeColour: "var(--color-primary)"
       });
 
@@ -641,13 +657,20 @@
         ];
         for (let g = 0; g < PARAM_GROUPS.length; ++g) {
           const col = paramColumns[Math.floor(g / 2)];
+          // Wrap each group's heading + sliders in one flex column so that the
+          // column-level justify-between (on the shorter col 0 / col 2) treats
+          // the whole group as a single item: heading stays glued to its
+          // sliders, and the group as a block is pushed to its column edge.
+          const group = document.createElement("div");
+          group.className = "flex flex-col gap-2";
           const heading = document.createElement("div");
           heading.className = "text-xs uppercase tracking-wide opacity-60 mt-1";
           heading.textContent = PARAM_GROUPS[g].title;
-          col.appendChild(heading);
+          group.appendChild(heading);
           for (const idx of PARAM_GROUPS[g].items) {
-            createEditableParam(wasmProcessor, idx, col);
+            createEditableParam(wasmProcessor, idx, group);
           }
+          col.appendChild(group);
         }
       }
 

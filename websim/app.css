@@ -15,6 +15,11 @@
  * their &-nested pseudo-elements survive. */
 @import "tailwindcss";
 
+/* Iconify (Tabler) icons: generates `icon-[tabler--<name>]` utilities that
+ * inline the SVG as a CSS mask using currentColor, so icons follow the active
+ * text color like any other element. See FlyonUI docs "Setup Icons". */
+@plugin "@iconify/tailwind4";
+
 /* ---- flyonui: base layers ------------------------------------------------ */
 @import "./node_modules/flyonui/theme/light.css";
 @import "./node_modules/flyonui/theme/dark.css";
@@ -30,6 +35,9 @@
 @import "./node_modules/flyonui/theme/valorant.css";
 @import "./node_modules/flyonui/theme/slack.css";
 @import "./node_modules/flyonui/theme/vscode.css";
+@import "./node_modules/flyonui/theme/gourmet.css";
+@import "./node_modules/flyonui/theme/luxury.css";
+@import "./themes/luxury-light.css";
 
 /* ---- flyonui: components the shells actually use ------------------------
  * These are REPAIRED COPIES staged into ./flyonui-patched/ by the flyonuiRepair
@@ -215,9 +223,12 @@ body {
   flex: 1 1 0;
   gap: 0;
   &:not(:first-child) .octave-join-item { margin-inline-start: calc(var(--border, 1px) * -1); }
-  :first-child .octave-join-item { --join-ss: var(--radius-field); --join-se: 0; --join-es: var(--radius-field); --join-ee: 0; }
-  :last-child .octave-join-item { --join-ss: 0; --join-se: var(--radius-field); --join-es: 0; --join-ee: var(--radius-field); }
-  :only-child .octave-join-item { --join-ss: var(--radius-field); --join-se: var(--radius-field); --join-es: var(--radius-field); --join-ee: var(--radius-field); }
+  /* Middle items (neither first nor last): all corners square, so only the
+   * 4 outer corners of the whole group are rounded. */
+  .octave-join-item { --join-ss: 0; --join-se: 0; --join-es: 0; --join-ee: 0; }
+  .octave-join-item:first-child { --join-ss: var(--radius-field); --join-se: 0; --join-es: var(--radius-field); --join-ee: 0; }
+  .octave-join-item:last-child { --join-ss: 0; --join-se: var(--radius-field); --join-es: 0; --join-ee: var(--radius-field); }
+  .octave-join-item:only-child { --join-ss: var(--radius-field); --join-se: var(--radius-field); --join-es: var(--radius-field); --join-ee: var(--radius-field); }
 }
 .octave-join.drop-shadow {
   filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--color-neutral) 20%, transparent));
@@ -249,7 +260,25 @@ body {
   display: block;
   --scope-bg: var(--color-base-100);
   /* Lines/bars are drawn in the active theme's primary color so the scope
-   * accent follows valorant (light) / vscode (dark) and any future theme. */
+   * accent follows the active theme. */
   --scope-fg: var(--color-primary);
   background: var(--scope-bg);
+}
+
+/* Keyboard (qwerty-hancock) theme-aware key colors.
+ *
+ * qwerty-hancock paints each key via inline `style.backgroundColor`, so the
+ * values passed to its constructor must be resolvable at render time. CSS
+ * `var()` works in inline styles and inherits from <html>, so we hand the
+ * library two custom properties and let the active theme define them. This
+ * keeps the keyboard's warm palette in lockstep with luxury (dark) and
+ * luxury-light (light) instead of the hard-coded #fff/#000 that clashed
+ * with the theme. */
+[data-theme="luxury"] {
+  --kbd-white: oklch(88% 0.02 70);
+  --kbd-black: oklch(12% 0.02 65);
+}
+[data-theme="luxury-light"] {
+  --kbd-white: oklch(99% 0.005 70);
+  --kbd-black: oklch(20% 0.03 65);
 }

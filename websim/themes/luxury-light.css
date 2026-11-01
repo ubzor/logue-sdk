@@ -1,0 +1,52 @@
+/* Custom light companion for the flyonui "luxury" dark theme.
+ *
+ * luxury (dark) has a warm, gold-accented palette with sharp corners. Its
+ * default light counterpart in flyonui (gourmet) is a *different* design
+ * (red accent, fully rounded), so luxury and gourmet don't read as a pair.
+ * This theme rebuilds the light side of luxury directly from luxury's own
+ * tokens: same warm hue (~65-70), the same gold primary, and the same sharp
+ * radii - only the lightness of the base/content colors is flipped. The
+ * result is a "day" version of luxury that sits naturally next to the
+ * "night" version.
+ *
+ * Selector format mirrors flyonui's own theme files so the theme is applied
+ * by <html data-theme="luxury-light"> (set by entry.js) exactly like the
+ * built-in ones. Kept out of node_modules/ so it survives `npm install`.
+ */
+:root:has(input.theme-controller[value=luxury-light]:checked),[data-theme="luxury-light"] {
+color-scheme: light;
+/* Warm light bases: hue/chroma follow luxury (warm), lightness flipped. */
+--color-base-100: oklch(97% 0.018 70);
+--color-base-200: oklch(93.5% 0.022 70);
+--color-base-300: oklch(24% 0.03 65);
+--color-base-content: oklch(26% 0.03 65);
+/* Gold primary - identical to luxury (kept for brand consistency). */
+--color-primary: oklch(68.75% 0.0948 67.23);
+--color-primary-content: oklch(20% 0.04 65);
+/* secondary/accent - same hues as luxury so the palette is shared. */
+--color-secondary: oklch(55.79% 0.0221 301.91);
+--color-secondary-content: oklch(97.64% 0.0013 286.38);
+--color-accent: oklch(64.45% 0.1596 354.64);
+--color-accent-content: oklch(97% 0.02 350);
+--color-neutral: oklch(32% 0.03 65);
+--color-neutral-content: oklch(97% 0.018 70);
+/* Semantic colors: kept in the same hue family as luxury, darkened where
+ * needed for contrast on the light background. */
+--color-info: oklch(55.75% 0.0746 234.15);
+--color-info-content: oklch(97% 0.02 230);
+--color-success: oklch(52.65% 0.0537 188.98);
+--color-success-content: oklch(97% 0.02 190);
+--color-warning: oklch(57.37% 0.149 296.3);
+--color-warning-content: oklch(97% 0.03 300);
+--color-error: oklch(50.81% 0.097 4.98);
+--color-error-content: oklch(97% 0.02 358);
+/* Sharp radii - inherited from luxury (gourmet uses 2rem, luxury uses these). */
+--radius-selector: 0.1875rem;
+--radius-field: 0.375rem;
+--radius-box: 0.5625rem;
+--size-selector: 0.25rem;
+--size-field: 0.25rem;
+--border: 1px;
+--depth: 1;
+--noise: 0;
+}

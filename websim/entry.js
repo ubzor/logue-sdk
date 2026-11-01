@@ -7,25 +7,25 @@ import './app.css';
 
 // Theme model: the shell's header row hosts a single switch
 // (#ThemeSwitch) that toggles between the two "personality" themes:
-//   off  -> valorant (light)   /   on -> vscode (dark)
+//   off  -> luxury-light (light)   /   on -> luxury (dark)
 // The shell declares data-theme="light" on <html> as the no-JS fallback.
 // At startup the effective theme is:
 //   1. the persisted "flyon-theme" localStorage value, if present
-//      (legacy values dark/spotify are treated as dark, light/valorant/slack
-//       as light - see isDarkTheme below),
-//   2. otherwise the OS preference: prefers-color-scheme: dark -> vscode,
-//      else -> valorant.
+//      (legacy values dark/spotify/vscode are treated as dark, light/valorant/
+//       slack/gourmet/luxury-light as light - see isDarkTheme below),
+//   2. otherwise the OS preference: prefers-color-scheme: dark -> luxury,
+//      else -> luxury-light.
 // The chosen theme is persisted back to localStorage, so subsequent loads
 // always use the stored value.
 
-const DARK_THEME = 'vscode';
-const LIGHT_THEME = 'valorant';
+const DARK_THEME = 'luxury';
+const LIGHT_THEME = 'luxury-light';
 
-// Legacy themes from pre-switch shells. Kept so a saved "dark" (or "spotify")
-// keeps working on the first load after the upgrade - it just maps onto the
-// vscode personality.
-const DARK_LEGACY = new Set(['vscode', 'dark', 'spotify']);
-const LIGHT_LEGACY = new Set(['light', 'valorant', 'slack']);
+// Legacy themes from pre-switch shells. Kept so a saved "dark" (or "spotify"/
+// "vscode") keeps working on the first load after the upgrade - it just maps
+// onto the luxury personality.
+const DARK_LEGACY = new Set(['vscode', 'dark', 'spotify', 'luxury']);
+const LIGHT_LEGACY = new Set(['light', 'valorant', 'slack', 'gourmet', 'luxury-light']);
 
 function isDarkTheme(name) {
   return DARK_LEGACY.has(name) || !LIGHT_LEGACY.has(name);
@@ -89,7 +89,7 @@ function initThemeSwitcher() {
 }
 
 // Theme switch: the shells render a #ThemeSwitch <label> with a
-// flyonui switch input. Checked = dark (vscode), unchecked = light (valorant).
+// flyonui switch input. Checked = dark (luxury), unchecked = light (luxury-light).
 function initThemeSwitch() {
   const input = document.getElementById('ThemeSwitch');
   if (!input) return;
