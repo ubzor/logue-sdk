@@ -1055,15 +1055,30 @@ public:
       // w0/4 (w0_sub2_ is cached in update_w0_sub2()).
       phasor_sub2_ += w0_sub2_;
 
-      // wrap phasors into [0, 1)
-      if (phasor_a_ >= 1.f)
-        phasor_a_ -= 1.f;
-      if (phasor_b_ >= 1.f)
-        phasor_b_ -= 1.f;
-      if (phasor_sub_ >= 1.f)
-        phasor_sub_ -= 1.f;
-      if (phasor_sub2_ >= 1.f)
-        phasor_sub2_ -= 1.f;
+      // wrap phasors into [0, 1).
+      //
+      // Use a modular floor (x - floorf(x)) instead of a single subtract.
+      // The single-subtract form (if (p >= 1) p -= 1) only handles the
+      // case where the per-sample increment is in (0, 1) and the phasor
+      // starts in [0, 1). Cross-FM (XFM_A / XFM_B) adds a signed per-sample
+      // phase offset of up to +/-1.28 cycles (see the XFM branch above:
+      // prev_wav * 0.5/pi * dev * rw_amt * xfm * 15), so when the previous
+      // sample's wavetable output has the opposite sign to the random-walk
+      // deviation the combined increment (w0_a + xfm_a_idx) can be NEGATIVE,
+      // pushing phasor_a_ below 0. The single subtract never corrects a
+      // negative phasor, so it would feed a value < 0 into osc_wave_scanf()
+      // whose `(uint32_t)x` cast is undefined behavior for negative floats
+      // (out-of-bounds LUT read -> garbage/NaN -> NaN-lock in the SVF /
+      // cross-FM feedback loop). floorf normalizes to [0, 1) for ANY finite
+      // input (positive, negative, or > 1), so the LUT is always queried
+      // with a valid phase. Cost: one floorf per phasor per sample (4 total);
+      // floorf is a single VFP instruction on FPv4 (ARM) and SSE (x86), and
+      // is a no-op when the phasor is already in [0, 1) (the common case at
+      // XFM = 0), so the stock sound is bit-identical.
+      phasor_a_   -= floorf(phasor_a_);
+      phasor_b_   -= floorf(phasor_b_);
+      phasor_sub_ -= floorf(phasor_sub_);
+      phasor_sub2_-= floorf(phasor_sub2_);
 
       // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
       // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
