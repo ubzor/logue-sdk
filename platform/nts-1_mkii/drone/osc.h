@@ -174,14 +174,23 @@ public:
   // +/-kRwFoldScale around the FOLD knob. Fold depth is 0..1; +/-0.3 is a
   // moderate metallic shimmer. Negative results are clamped to 0 in the path.
 
-  // Cross-FM scale: XFM_A / XFM_B knobs (0..100%) scale the cross-modulation
-  // index to +/-kXfmMaxCents (phase modulation of one osc by the other's
-  // wavetable output, in cents). At 100% the index is +/-15 cents; lower
-  // settings give a subtler sideband shimmer. The modulation is applied as a
-  // per-sample phase offset (wavetable_out * depth * kXfmMaxCents) in the
-  // audio path, gated by the shared random-walk depth (rw_amount) so the
-  // sidebands "ring" and "fade" with the walk. See the XFM branch in process().
-  static constexpr float    kXfmMaxCents = 15.f;        // full cross-FM index (c)
+  // Cross-FM scale: XFM_A / XFM_B knobs (0..100%) set the cross-modulation
+  // index: a full-knob turn gives a peak phase deviation of
+  //   kXfmMaxCents / 2  cycles
+  // of one osc's phase, driven by the OTHER osc's wavetable output (classic
+  // FM: index = modulator_output * kXfmMaxCents / 2, in cycles). At 100%
+  // the index is +/-kXfmMaxCents/2 = +/-0.04 cycles of phase deviation
+  // (4% of the carrier frequency — a subtle "breathing" shimmer, NOT a
+  // strong FM spread). The modulator is the raw wavetable output (peak
+  // amplitude 1.0), so even at full knob the phase excursion is bounded to
+  // 4% of the carrier — this is what keeps the drone from "screaming"
+  // on low notes (the old 0.4-cycle index = 25% of the carrier frequency
+  // on a 100 Hz drone, which was inaudibly harsh). Lower settings give a
+  // still-subtler shimmer. The modulation is applied as a per-sample phase
+  // offset in the audio path, gated by the shared random-walk depth
+  // (rw_amount) so the sidebands "ring" and "fade" with the walk.
+  // See the XFM branch in process().
+  static constexpr float    kXfmMaxCents = 0.8f;        // full cross-FM index (0..0.4 cycles)
 
   // (The SVF cutoff / resonance scales live in the Svf namespace, see osc_svf.h:
   //  kCutoffMinHz / kCutoffMaxHz / kQMin / kQMax / kRwCutoffHalfOctaves.)
@@ -943,10 +952,17 @@ public:
     const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
     const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
     const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
-    // Cross-FM: osc A is phase-modulated by B's wavetable output (XFM_A knob)
-    // and osc B by A's (XFM_B knob). The modulation is gated by the shared
-    // random-walk depth (rw_amount) so the sidebands "ring" and "fade" with
-    // the walk. When rw_amount == 0 (walk off) or the XFM knob is 0, the
+    // Cross-FM (classic FM): osc A's phase is modulated by B's wavetable
+    // output (XFM_A knob) and osc B's by A's (XFM_B knob). The modulation
+    // index is in CYCLES (peak phase deviation = kXfmMaxCents / 2 at 100%
+    // knob), NOT an amplitude-scaled wavetable — this is what makes the
+    // sideband spread predictable and frequency-independent (no low-end
+    // "howl" when the drone sits at 50-200 Hz). The peak phase deviation
+    // is kXfmMaxCents/2 = 0.04 cycles (4% of the carrier frequency) at
+    // full knob — a subtle "breathing" shimmer, not a strong FM spread.
+    // Gated by the shared random-
+    // walk depth (rw_amount) so the sidebands "ring" and "fade" with the
+    // walk. When rw_amount == 0 (walk off) or the XFM knob is 0, the
     // per-sample modulation below is a no-op (regression-safe: identical to
     // the stock 2-osc sound). See the XFM branch in the phasor update.
     const bool xfm_a_active = rw_active && p.xfm_a > 0.f;
@@ -1005,16 +1021,24 @@ public:
       // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
       const float rw_fold_mod = rw_fld_active ? rw_[2].dev_b * p.rw_fld * rw_amt : 0.f;
 
-      // phasor update (plus optional cross-FM phase modulation)
-      // Cross-FM: each osc's phase is nudged by the OTHER osc's wavetable
-      // output. The modulation index (in cycles) is
-      //   (other_wavetable_out / 2pi) * depth * kXfmMaxCents
+      // phasor update (plus optional classic cross-FM phase modulation)
+      // Classic FM: each osc's phase is modulated by the OTHER osc's
+      // wavetable output, scaled by a CYCLES-based index. The modulation
+      // index (peak phase deviation, in cycles) is
+      //   (other_wavetable_out * 0.5) * depth * kXfmMaxCents
       // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1). The wavetable
-      // output is in [-1, +1]; dividing by 2pi normalizes it so the index is
-      // in cycles (1 cycle = 1 full phase wrap). Gated by rw_amt so the
-      // sidebands breathe with the walk. At XFM=0 or rw_amt=0 this adds 0.
-      // (The wavetable values are read AFTER the phasor wrap below, so the
-      //  modulated phasor and the wavetable sample are from the same instant.)
+      // output is in [-1, +1]; multiplying by 0.5 normalizes it to a peak
+      // of 0.5 cycles at the XFM knob's full scale, so the index is bounded
+      // to +/-kXfmMaxCents/2 cycles (e.g. +/-0.04 cycles at kXfmMaxCents=0.8).
+      // This is frequency-INDEPENDENT: the same XFM knob position gives the
+      // same sideband spread on a 50 Hz drone and on a 2 kHz note (no more
+      // low-end "howl" when the wavetable is dense — the old (1/2pi)-scaled
+      // version produced an index of up to 159% of the base phase step at
+      // low notes, which was the source of the harsh wobble/whine).
+      // Gated by rw_amt so the sidebands breathe with the walk. At XFM=0 or
+      // rw_amt=0 this adds 0. (The wavetable values are read AFTER the
+      // phasor wrap below, so the modulated phasor and the wavetable sample
+      // are from the same instant.)
       //
       // NOTE: we read the *previous* sample's wavetable output for the
       // modulation (a one-sample lookback) to avoid a data-dependency on the
@@ -1024,11 +1048,11 @@ public:
       // updated at the end of each iteration.
       {
         const float xfm_a_idx = xfm_a_active
-            ? (prev_wav_b_ * (0.5f / 3.141592653589793f) *
+            ? (prev_wav_b_ * 0.5f *
                (rw_[0].dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
             : 0.f;
         const float xfm_b_idx = xfm_b_active
-            ? (prev_wav_a_ * (0.5f / 3.141592653589793f) *
+            ? (prev_wav_a_ * 0.5f *
                (rw_[0].dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
             : 0.f;
         phasor_a_ += w0_a + xfm_a_idx;
@@ -1061,8 +1085,8 @@ public:
       // The single-subtract form (if (p >= 1) p -= 1) only handles the
       // case where the per-sample increment is in (0, 1) and the phasor
       // starts in [0, 1). Cross-FM (XFM_A / XFM_B) adds a signed per-sample
-      // phase offset of up to +/-1.28 cycles (see the XFM branch above:
-      // prev_wav * 0.5/pi * dev * rw_amt * xfm * 15), so when the previous
+      // phase offset of up to +/-kXfmMaxCents/2 cycles (see the XFM branch
+      // above: prev_wav * 0.5 * dev * rw_amt * xfm * kXfmMaxCents), so when the previous
       // sample's wavetable output has the opposite sign to the random-walk
       // deviation the combined increment (w0_a + xfm_a_idx) can be NEGATIVE,
       // pushing phasor_a_ below 0. The single subtract never corrects a

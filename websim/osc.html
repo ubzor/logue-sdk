@@ -284,8 +284,10 @@
           return Math.round((raw / 1023) * 1900) + "c";
         }
         if (idx === 20 || idx === 21) {
-          // XFM / XFM2: cross-FM depth, 0..15 cents (mirrors kXfmMaxCents in osc.h)
-          return Math.round((raw / 1023) * 15) + "c";
+          // XFM / XFM2: cross-FM index, 0..kXfmMaxCents/2 cycles (0..0.4 c at
+          // kXfmMaxCents=0.8, mirrors the constant in osc.h). Displayed in
+          // "cents" for readability (1 c = 0.01 cycle of phase deviation).
+          return ((raw / 1023) * 4).toFixed(1) + "c";
         }
         if (idx === 22) {
           // FCUT: SVF cutoff (log-mapped 80 Hz .. 12 kHz). Display Hz or kHz.
@@ -736,9 +738,16 @@
         // DETU: static A/B detune, +/-kDetuneMaxCents (10 c) centered on 511.
         // Window +/-5 c (raw 256..767) — a clear beat without going out of tune.
         raws[I("DETU")] = rRange(256, 767);
-        // RATE: shared walk depth ceiling (0..100%, quadratic). 20..100% keeps
-        // the wander audible; below ~20% the streams are too subtle to hear.
-        raws[I("RATE")] = rRange(204, 1023);
+        // RATE: shared walk depth ceiling (0..100%, quadratic). It scales
+        // EVERY wandering stream (detune, morph, drive, fold, cutoff, XFM),
+        // so it is the single loudest "chaos" lever in the unit. Random over
+        // 20..50% (raw 204..511) — a "safe" barrier: below ~20% the wander is
+        // too subtle to hear, above ~50% the combined (quadratic-mapped)
+        // depth of all three streams plus the full-range RWAV/RDRV/RFLD/RWFC
+        // depths tends to clip / howl (the old 20..100% window was the source
+        // of the "overwhelming" random presets). 50% keeps the drone
+        // breathing without going nuclear.
+        raws[I("RATE")] = rRange(204, 511);
         // SUB1: sub-octave (f/2) sine, mixed at 0.4. 15..80% — body without mud.
         raws[I("SUB1")] = rRange(153, 818);
         // SUB2: second sub (f/4), LPF'd + gated, mixed at 0.3. 0..45% — light
@@ -760,10 +769,12 @@
         // always "in key" (never a random dissonant gap).
         const CINT_SET = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
         raws[I("CINT")] = Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900);
-        // XFM / XFM2: cross-FM depth, 0..kXfmMaxCents (15 c). Window 0..8 c
-        // (raw 0..548) — shimmer without a wobble.
-        raws[I("XFM")] = rRange(0, 548);
-        raws[I("XFM2")] = rRange(0, 548);
+        // XFM / XFM2: cross-FM index, 0..kXfmMaxCents/2 cycles (0..0.4 c at
+        // kXfmMaxCents=0.8). Window 0..0.2 c (raw 0..511) — a very gentle
+        // sideband shimmer (the classic-FM path is frequency-independent,
+        // so 0.2 c reads the same across the keyboard).
+        raws[I("XFM")] = rRange(0, 511);
+        raws[I("XFM2")] = rRange(0, 511);
         // FCUT: SVF cutoff, log 80 Hz..12 kHz. Window 1 kHz..11 kHz
         // (raw 740..1023) — keeps the filter in its working band, never
         // "in a box" (low) or fully open (high, where the walk does nothing).
