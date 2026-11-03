@@ -35,6 +35,12 @@ struct OscParamsData
   float drive;          // 0.f .. 3.f, SATU knob
   float rw_amount;    // 0.f .. 1.f, edit: SHARED random-walk depth ceiling (quadratic-mapped)
                      //            for all three wandering streams (RATE knob).
+  float rw_amount_lin;// 0.f .. 1.f, edit: LINEAR RATE-knob depth, used ONLY by the Breath
+                     //            stream (voice-level wandering). Linear so that at
+                     //            RATE=50% the breath can still reach full depth
+                     //            (dev=-1 -> lvl=0) and voices can fully disappear;
+                     //            the quadratic rw_amount would cap breath at 25%
+                     //            depth (lvl >= 0.75) at RATE=50%.
   // Three independent wandering streams (Tone / Timbre / Density), each with
   // its own period (SPDx) and time constant (SMTx). They wander with
   // independent random targets on independent (randomly-drawn) periods, so the
@@ -114,6 +120,7 @@ struct OscParamsData
     detune_cents = 0.f;     // default: in tune (sum voice)
     drive = 1.0f;           // default: gentle drive (transparent, ~33% of 0..3)
     rw_amount = 0.f;    // default: random walk off (all three streams)
+    rw_amount_lin = 0.f;// default: breath off (linear RATE depth, same off-state as rw_amount)
     // All three streams default to mid period (~3.2 s) / mid time constant
     // (~0.12 s) — same defaults the old single SPEE/SMTH knobs had.
     rw_rate[0] = 0.5f;   // SPD1 (Tone)

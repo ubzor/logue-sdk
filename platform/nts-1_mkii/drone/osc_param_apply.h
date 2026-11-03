@@ -52,7 +52,8 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       // Quadratic mapping: raw^2 -> 0..1 normalized depth.
       {
         const float x = param_10bit_to_f32(value);
-        params_.rw_amount = x * x;
+        params_.rw_amount = x * x;       // quadratic: Tone / Timbre / Density (unchanged)
+        params_.rw_amount_lin = x;        // linear: Breath stream only (voice-level wander)
       }
       break;
 

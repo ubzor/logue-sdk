@@ -164,6 +164,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // the stock 2-osc sound). See the XFM branch in the phasor update.
   const bool xfm_a_active = rw_active && p.xfm_a > 0.f;
   const bool xfm_b_active = rw_active && p.xfm_b > 0.f;
+  // Per-sample precomputed FM depth: the raw 0..1 knob value raised to
+  // kXfmCurveExp (quadratic by default) so the lower part of the knob is a
+  // very subtle breathing and the harsh sidebands only open up near the top,
+  // then scaled by kXfmMaxCents to cycles. Precomputed once per block (the
+  // knob is L-rate) instead of inside the loop. At 0 the curve is 0.
+  const float xfm_a_curve = powf(p.xfm_a, kXfmCurveExp) * kXfmMaxCents;
+  const float xfm_b_curve = powf(p.xfm_b, kXfmCurveExp) * kXfmMaxCents;
   // SVF: the internal 12 dB/oct low-pass is engaged when the dry/wet (svf_wet)
   // is non-zero. When svf_wet == 0 (the default) the filter is transparent
   // and its state update is skipped (regression-safe). The walk-modified
@@ -224,10 +231,15 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // so they slowly "breathe" in and out of prominence. Its four channels
     // (dev_a/b/c/d) wander independently (each with its own period), so the
     // four voices trade the floor at different times — the heart of a drone.
-    // The per-voice level factor is (1 + rw_lvl * rw_amt * dev), clamped to
-    // [0, 1]: at RW_LVL = 0 (default) all factors are 1.0 (static levels,
-    // regression-safe: identical to the pre-breath sound); at RW_LVL = 100%
-    // & RATE = 100% a voice can swing a full 0..100% of its base level.
+    // The per-voice level factor is (1 + rw_lvl * rw_amount_lin * 2 * dev),
+    // clamped to [0, 1]: at RW_LVL = 0 (default) all factors are 1.0 (static
+    // levels, regression-safe: identical to the pre-breath sound). The linear
+    // rw_amount_lin (not the quadratic rw_amount) is used so that at
+    // RATE=50% the breath can still reach full depth (dev=-1 -> lvl=0) and
+    // a voice can FULLY disappear; the quadratic rw_amount would cap breath
+    // at 25% depth (lvl >= 0.75) at RATE=50%. The x2 factor means at
+    // RW_LVL=100% & RATE=100% the swing is 2.0, so dev=-1 gives lvl=0 and
+    // dev=+1 gives lvl=2 (clamped to 1).
     // SUB2 (the f/4 low-end anchor) is intentionally NOT breathed: it stays
     // static so the low end never "flutters".
     float lvl_a = 1.f;
@@ -236,8 +248,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     float lvl_sub = 1.f;
     if (rw_active && p.rw_lvl > 0.f)
     {
-      rw_[3].advance(p.rw_amount, osc_white);
-      const float swing = p.rw_lvl * rw_amt; // 0..1 normalized depth
+      rw_[3].advance(p.rw_amount, osc_white); // ceiling for advance() stays quadratic (unchanged)
+      const float swing = p.rw_lvl * p.rw_amount_lin * 2.f; // 0..2 — full depth at RATE=100% & RVLL=100%
       lvl_a   = 1.f + swing * rw_[3].dev_a;
       lvl_b   = 1.f + swing * rw_[3].dev_b;
       lvl_c   = 1.f + swing * rw_[3].dev_c;
@@ -252,11 +264,15 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // Classic FM: each osc's phase is modulated by the OTHER osc's
     // wavetable output, scaled by a CYCLES-based index. The modulation
     // index (peak phase deviation, in cycles) is
-    //   (other_wavetable_out * 0.5) * depth * kXfmMaxCents
-    // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1). The wavetable
+    //   (other_wavetable_out * 0.5) * depth
+    // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1)^kXfmCurveExp *
+    // kXfmMaxCents (precomputed as xfm_a_curve / xfm_b_curve above). The wavetable
     // output is in [-1, +1]; multiplying by 0.5 normalizes it to a peak
     // of 0.5 cycles at the XFM knob's full scale, so the index is bounded
     // to +/-kXfmMaxCents/2 cycles (e.g. +/-0.04 cycles at kXfmMaxCents=0.8).
+    // The raw index is then passed through a one-pole low-pass
+    // (kXfmSmoothAlpha) that softens the fast part of the modulation without
+    // touching the carrier itself.
     // This is frequency-INDEPENDENT: the same XFM knob position gives the
     // same sideband spread on a 50 Hz drone and on a 2 kHz note (no more
     // low-end "howl" when the wavetable is dense — the old (1/2pi)-scaled
@@ -274,16 +290,29 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // We use the cached previous wavetable values (prev_wav_a_ / prev_wav_b_)
     // updated at the end of each iteration.
     {
-      const float xfm_a_idx = xfm_a_active
+      // Raw (unfiltered) FM index, in cycles. The knob depth now goes through
+      // the kXfmCurveExp curve (xfm_a_curve / xfm_b_curve, precomputed above)
+      // instead of the linear p.xfm_a * kXfmMaxCents, so the lower part of the
+      // knob is a gentle breathing. The modulating wavetable output
+      // (prev_wav_b_/a_) is the fast part and is NOT smoothed here — only the
+      // resulting INDEX is low-passed below.
+      const float xfm_a_raw = xfm_a_active
           ? (prev_wav_b_ * 0.5f *
-             (rw_[0].dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
+             (rw_[0].dev_b * rw_amt * xfm_a_curve))
           : 0.f;
-      const float xfm_b_idx = xfm_b_active
+      const float xfm_b_raw = xfm_b_active
           ? (prev_wav_a_ * 0.5f *
-             (rw_[0].dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
+             (rw_[0].dev_a * rw_amt * xfm_b_curve))
           : 0.f;
-      phasor_a_ += w0_a + xfm_a_idx;
-      phasor_b_ += w0_b + xfm_b_idx;
+      // One-pole low-pass on the FM index (see osc_constants.h kXfmSmoothAlpha).
+      // It tames the fast sign-flips of the wavetable output so the upper
+      // (harsh) sidebands soften while the slow breathing survives. When the
+      // raw index is 0 (XFM off / walk off) this relaxes to 0, so the stock
+      // sound is unchanged. The state lives in xfm_smooth_a_/b_.
+      xfm_smooth_a_ += kXfmSmoothAlpha * (xfm_a_raw - xfm_smooth_a_);
+      xfm_smooth_b_ += kXfmSmoothAlpha * (xfm_b_raw - xfm_smooth_b_);
+      phasor_a_ += w0_a + xfm_smooth_a_;
+      phasor_b_ += w0_b + xfm_smooth_b_;
     }
     // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
     // No random-walk modulation — the chord voice is a stable "anchor"
