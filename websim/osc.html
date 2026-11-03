@@ -474,6 +474,11 @@
       // Notes containing '#' are rendered as black keys. setKeyOctave()
       // (Z/X below) works as an octave shift (-2..+2) applied to the whole
       // range, relabeling the keys (A2..D4 -> A3..D5 etc.).
+      //
+      // keyCode values are the legacy physical QWERTY-US codes (independent
+      // of the OS layout): 65..76 are the letter rows, 59=';', 222="'".
+      // 219 ('-') is used for C#4 (black key) — kept as-is.
+      // Do NOT use 186 ('+') here — it is NOT part of the piano row.
       let octaveShift = -1;
       // The keyboard starts one octave below the base A2..D4 range (A1..D3).
       // setOctaveShift() must be called explicitly after construction: the
@@ -492,7 +497,7 @@
           65: "A2", 87: "A#2", 83: "B2", 68: "C3", 82: "C#3",
           70: "D3", 84: "D#3", 71: "E3", 72: "F3", 85: "F#3",
           74: "G3", 73: "G#3", 75: "A3", 79: "A#3", 76: "B3",
-          186: "C4", 219: "C#4", 222: "D4"
+          59: "C4", 219: "C#4", 222: "D4"
         },
         whiteKeyColour: "var(--kbd-white)",
         blackKeyColour: "var(--kbd-black)",
