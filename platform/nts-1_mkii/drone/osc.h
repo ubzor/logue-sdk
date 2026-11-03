@@ -8,45 +8,27 @@
  *
  *  DRONE -- dual wavetable drone generator for NTS-1 mkII.
  *
- *  Two independent wavetable phasor accumulators running at the base note
- *  frequency. Each voice scans one of the 91 Korg wavetables (six banks A-F,
- *  airy -> dense) selected by the WAVE A / WAVE B edit knobs; a continuous
- *  morph position is mapped onto the bank arrays (see resolve_wave), and the
- *  morph point drifts slightly toward the denser banks as the pitch rises so
- *  the tone stays consistent across the keyboard. The DETU edit knob
- *  (±10 cents, centered on 0) detunes A and B in OPPOSITE directions around
- *  the base note (A = +c/2, B = -c/2), producing a per-voice phase drift
- *  (inter-voice beat = c * f / 600) — ~4x stronger than an equivalent
- *  post-mix sum detune at the same knob value. The chord and sub voices
- *  stay at the base note (stable anchors). The SATU knob scales the drive
- *  level before a soft-clip tanh saturator.
+ *  This header is the THIN SKELETON of the Osc class. The heavy method bodies
+ *  were factored out (see the #includes at the bottom of this file) so the
+ *  class definition stays small and each concern lives in its own file:
  *
- *  A sub-octave sine (one octave below, fixed -4 cents and FM'd by the
- *  platform shape-LFO) is mixed in parallel with the saturator for low-end
- *  "body". Before the saturator a pre-drive wavefolder (FOLD) can add even
- *  harmonics, and the saturator itself can be made asymmetric (ASYM).
+ *    osc_constants.h       -- the static tuning constants (global scope)
+ *    osc_param_apply.h     -- Osc::apply_edit_param()  (raw 10-bit -> DSP)
+ *    osc_param_display.h   -- Osc::getParameterStrValue() (raw -> display)
+ *    osc_mix.h             -- Osc::process()           (per-sample audio path)
  *
- *  An optional random-walk "wandering" mechanism modulates the detunes of
- *  BOTH A and B oscillators (independent random targets on the same period,
- *  so the inter-voice beat frequency shifts over time — an asymmetric
- *  chorus). The walk works together with the static DET knob: DET sets the
- *  base chorus depth of the whole drone, the walk moves the A/B voices
- *  around the base note so the inter-voice beat drifts in time.
- *    RATE AMT  — maximum deviation (quadratic mapping: knob^2 -> 0..1
- *                normalized, scaled to +/-10 cents at the audio path, so
- *                neither voice strays further from its DETUNE knob value than
- *                AMT allows),
- *    RATE SPD  — how often the random targets are regenerated (0.1 s
- *                fast/restless .. 10 s slow/lazy, log mapping),
- *    RATE SMTH — how quickly the deviations track the targets (a time
- *                constant, 10 ms snappy .. 1.5 s glacial, log mapping).
- *  The two voices wander with independent random targets on the same period,
- *  so the inter-voice beat frequency shifts over time (asymmetric chorus).
- *  Keeping the time constant (SMTH) independent of the period (SPD) makes the
- *  audible depth stable regardless of SPEED. With RATE AMT at 0 the detunes
- *  are static, preserving the original behavior.
+ *  The remaining building blocks are helper structs in their own headers
+ *  (osc_waves.h, osc_saturator.h, osc_svf.h, osc_random_walk.h,
+ *  osc_envelope.h, osc_sub2.h, osc_chord.h, osc_detune.h, osc_lfo_sim.h),
+ *  and the live DSP state lives in OscParamsData (osc_params.h).
  *
- *  No dynamic allocation: all state lives in static members of this class.
+ *  Sound overview: two wavetable phasors (A/B) at the base note with a static
+ *  symmetric detune (DETU), a pre-drive wavefolder (FOLD) and an asymmetric
+ *  soft-clip saturator (SATU/ASYM), a third "chord" voice (CHRD/CINT) with its
+ *  own drive/fold (CHSAT/CHFLD), sub-octave (SUB1) and sub-2 (SUB2) voices, an
+ *  internal 12 dB/oct SVF (FCUT/RESO), and four independent random-walk streams
+ *  (Tone/Timbre/Density/Breath) plus classic cross-FM (XFM1/XFM2). No dynamic
+ *  allocation: all state lives in members of this class.
  *
  */
 
@@ -58,24 +40,21 @@
 #include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
 #include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
 #include "osc_svf.h"          // Svf: 12 dB/oct state-variable filter (post-saturator)
-#include "osc_random_walk.h"  // RandomWalk: dual-channel detune wandering
+#include "osc_random_walk.h"  // RandomWalk: multi-channel wandering
 #include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
 #include "osc_chord.h"        // ChordVoice: third oscillator at selectable interval
-#include "osc_detune.h"       // Detune: cent-based pitch scaling (Taylor series)
-#ifdef EMSCRIPTEN
-#include "osc_lfo_sim.h"      // ShapeLfoSim: simulator-only shape-LFO synthesizer
-#endif
+#include "osc_detune.h"       // Detune: w0 detuning / factor (4th-order Taylor)
+#include "osc_lfo_sim.h"      // LfoSim: web-sim-only shape-LFO synthesizer
+#include "osc_constants.h"    // global-scope tuning constants (kSatuMax, kMix*, ...)
 
 class Osc : public Processor
 {
   // The wavetable scanner (osc_waves.h) is a flat helper struct; let it read
-  // the Osc's private w0_ if needed (it isn't today — update() takes w0 as an
-  // argument — but keep the door open without exposing w0_ publicly).
+  // our private state (params_, the phasor w0) without exposing it.
   friend struct WaveTable;
 
 public:
   uint32_t getBufferSize() const override final { return 0; } // NTS-1 osc do not support sdram allocation
-
   // ---- Audio parameters ----------------------------------------------------
   // PARAM_SEL / PARAM_VAL are the user-facing header slots (header.c slots 0/1
   // and 2/3). DETUNE..CHORD are the 12 internal DSP parameters that the
@@ -150,80 +129,13 @@ public:
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
   // kEditParamCount = 32 = (CHFLD - DETUNE + 1); select_ 0..31 -> DETUNE..CHFLD.
   static constexpr uint8_t kEditParamFirst = DETUNE;
-
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
 
-  // ---- Display scaling constants (raw 10-bit <-> DSP float) ----------------
-  // Single source of truth for the ranges each editable parameter maps onto,
-  // used by BOTH apply_edit_param() (raw -> DSP float) and
-  // getParameterStrValue() (raw -> display string). Keep in sync with the
-  // web simulator (websim/osc.html formatParamValue) and the default raw
-  // values in the header's "init" fields (header.c).
-  //
-  // DET spans +/-kDetuneMaxCents around 0 cents, centered on the raw
-  // midpoint (kRawMid = 511). SATU spans 0..kSatuMax. ASYM spans +/-100%.
-  static constexpr float    kDetuneMaxCents = 10.f;  // sum-voice detune: +/-10 c
-  static constexpr float    kSatuMax        = 3.f;   // 0..3.0 drive level
-  static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
-  static constexpr int32_t  kRawMax         = 1023;  // raw 10-bit value == 100%
-  // Random-walk detune scale: the normalized walk deviations (rw_.dev_a/b,
-  // in [-1, +1]) are multiplied by p.rw_amount (RATE AMT, 0..1) and then by
-  // this (cents) in the audio path, so RATE AMT at 100% (rw_amount = 1)
-  // wanders each voice by +/-kRwDetuneScaleCents around its DETUNE knob value. Kept here (not in RandomWalk) because the scale is
-  // a per-target choice: each walk target gets its own scale at its point of
-  // use (detune below; wavetable morph / drive / fold in the process() audio
-  // path, gated by the RW_WAV / RW_DRV / RW_FLD depth knobs).
-  static constexpr float    kRwDetuneScaleCents = 10.f; // +/-10 cents at RW depth 100%
-  // Random-walk wavetable-morph scale: the normalized deviation is multiplied
-  // by this (in tables) so RW_WAV at 100% wanders the morph position by
-  // +/-kRwMorphScaleTables around the WAV1/WAV2 knob. Matches the platform
-  // LFO morph depth (WaveTable::kLfoMorphDepth = 10 tables) so the walk can
-  // sweep the same span the LFO does.
-  static constexpr float    kRwMorphScaleTables = 10.f; // +/-10 tables at RW_WAV 100%
-  // Random-walk drive scale: the normalized deviation is multiplied by this
-  // (in drive units) so RW_DRV at 100% wanders the saturator drive by
-  // +/-kRwDriveScale around the SATU knob. Drive is in 0..kSatuMax (0..3.0),
-  // so +/-0.5 is a gentle-but-audible swing (e.g. 2.0 -> 1.5..2.5).
-  static constexpr float    kRwDriveScale = 0.5f;       // +/-0.5 drive at RW_DRV 100%
-  // Random-walk wavefolder scale: the normalized deviation is multiplied by
-  // this (in fold-depth units) so RW_FLD at 100% wanders the folder depth by
-  // +/-kRwFoldScale around the FOLD knob. Fold depth is 0..1; +/-0.3 is a
-  // moderate metallic shimmer. Negative results are clamped to 0 in the path.
-
-  // Cross-FM scale: XFM_A / XFM_B knobs (0..100%) set the cross-modulation
-  // index: a full-knob turn gives a peak phase deviation of
-  //   kXfmMaxCents / 2  cycles
-  // of one osc's phase, driven by the OTHER osc's wavetable output (classic
-  // FM: index = modulator_output * kXfmMaxCents / 2, in cycles). At 100%
-  // the index is +/-kXfmMaxCents/2 = +/-0.04 cycles of phase deviation
-  // (4% of the carrier frequency — a subtle "breathing" shimmer, NOT a
-  // strong FM spread). The modulator is the raw wavetable output (peak
-  // amplitude 1.0), so even at full knob the phase excursion is bounded to
-  // 4% of the carrier — this is what keeps the drone from "screaming"
-  // on low notes (the old 0.4-cycle index = 25% of the carrier frequency
-  // on a 100 Hz drone, which was inaudibly harsh). Lower settings give a
-  // still-subtler shimmer. The modulation is applied as a per-sample phase
-  // offset in the audio path, gated by the shared random-walk depth
-  // (rw_amount) so the sidebands "ring" and "fade" with the walk.
-  // See the XFM branch in process().
-  static constexpr float    kXfmMaxCents = 0.8f;        // full cross-FM index (0..0.4 cycles)
-
-  // (The SVF cutoff / resonance scales live in the Svf namespace, see osc_svf.h:
-  //  kCutoffMinHz / kCutoffMaxHz / kQMin / kQMax / kRwCutoffHalfOctaves.)
-
-  // ---- Parameter selector / value multiplexer (state) ----
-  // Knob A (PARAM_SEL, slot 0) picks one of the 12 DSP parameters
-  // (DETUNE..CHORD), knob B (PARAM_VAL, slot 1) edits its raw 10-bit value.
-  // The 12 raw 10-bit values (0..1023) are cached in edit_value_ so that
-  // re-selecting a previously used parameter restores its value instead of
-  // resetting it to the default.
-
-  // Raw 10-bit values (0..1023) of the 30 editable parameters, cached so the
-  // selector can recall them. Defaults match the DSP defaults in
-  // OscParamsData::reset() (osc_params.h):
-  // DETUNE 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511, SPD3 511,
-  // SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0, WAV1 0, WAV2 128,
+  // ---- Multiplexer state (select_ / edit_value_) --------------------
+  // edit_value_[i] is the raw 10-bit cache of editable parameter i, so
+  // re-selecting a parameter restores its last value. Defaults match the
+  // DSP defaults in OscParamsData::reset() (osc_params.h).
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
   // RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
@@ -308,308 +220,22 @@ public:
   // ~4x stronger than the post-mix sum detune at the same knob value,
   // matching the old two-knob DET1/DET2 feel at moderate settings. The
   // Taylor factors are cached in K-rate (update_w0_det) when the random
+
+  // Map a raw 10-bit value (0..1023) for one of the 32 editable
+  // parameters (DETUNE..CHFLD) onto the DSP state. This is the single
+  // source of truth for the parameter scaling: it is used both by the
+  // edit-menu path (setParameter(DETUNE..CHFLD)) and by the PARAM_VAL
+  // multiplexer path. The body lives in osc_param_apply.h.
+  void apply_edit_param(uint8_t idx, int32_t value);
   // walk is off; when the walk is active, process() recomputes them per
   // sample for the combined (static + walk) per-voice detune. The chord
   // voice and the sub voices stay at the base note (they are stable
   // "anchors", not beating voices).
   float w0_a_det_ = 0.f; // w0 * 2^(+detune_cents/2 / 1200)
   float w0_b_det_ = 0.f; // w0 * 2^(-detune_cents/2 / 1200)
-
-
-  // Pre-drive wavefolder: before the tanh saturator, mix is folded into
-  // [-1, 1] via  triangle(2x) — adding even harmonics and a "metallic"
-  // edge. Depth is the FOLD knob (0 = off, 1 = full triangle fold).
-
-  // (Display scaling constants kDetuneMaxCents / kSatuMax / kRawMid / kRawMax
-  //  live in OscParams, see osc_params.h.)
-
-  // ---- Audio-path mix constants ----
-  // Final-mix gains. Worst-case peaks (see the budget comment in process()):
-  //   A+B saturator out * kMixOsc < 0.5
-  //   CHORD saturator out * kMixChordDirect < 0.6
-  //   SUB1 * kMixSub < 0.5
-  //   SUB2 * kMixSub2 < 0.4
-  // The branches rarely peak together, and the final hard-clip guards the sum.
-  // SUB1/SUB2 were raised from 0.4/0.3 (the basses were reading too quiet
-  // against the driven A+B voice); CHORD (kMixChordDirect) is ~0.8 so the
-  // chord saturator output lands near the A+B level instead of the old ~0.05.
-  static constexpr float kMixOsc  = 0.5f;
-  static constexpr float kMixSub  = 0.5f;
-  static constexpr float kMixSub2 = 0.4f;
-  // (The saturator drive limit lives in Saturator::kDriveLimit, see osc_saturator.h.)
-  //
-  // CHORD is mixed in parallel with the A+B saturator output so the MAIN knob
-  // can duck A+B without silencing it. The chord runs through its OWN
-  // wavefolder + saturator pass (Saturator::fold / Saturator::saturate with
-  // the SAME SATU/ASYM/FOLD knobs — the chord inherits the unit's drive
-  // character) before being scaled by this constant. The saturator output is
-  // bounded in (-1, 1) and typically ~0.5-0.76 RMS-ish, so 0.8 gives a chord
-  // peak of ~0.4-0.6 — comparable to A+B (kMixOsc=0.5 over two voices) and
-  // far louder than the old double-normalized path. Tune by ear (0.5..1.0).
-  static constexpr float kMixChordDirect = 0.8f;
-
-  // ---- Chord voice (CHORD / CHRD_INT edit params) --------------------------
-  // The third oscillator runs at a continuous interval above the base
-  // (CINT knob: 0..1900 cents, any harmonic reachable). The CHORD knob
-  // (0..100%) sets the voice level. All interval/gain logic lives in
-  // ChordVoice (osc_chord.h): the audio path is one multiply
-  // (w0 * 2^(cents/1200) via Taylor) plus one wavetable lookup.
-  //
-  // The CHORD knob (0..100%) sets the voice level with a LINEAR gain
-  // (chord_gain = p.chord_level). At lvl=0 the voice is silent. The voice is
-  // shaped by its own folder+saturator pass and scaled by kMixChordDirect in
-  // the final mix, so at lvl=1 (full knob) it reaches near the A+B level.
-
-  // ---- Sample-rate / reference-frequency helpers ----
-  // getSampleRate() (Processor base) returns 48000.f for all logue products;
-  // reuse it in constexpr audio-path sites to avoid a stray 48000 literal.
-  // (kCentsToX lives in Detune, see osc_detune.h.)
-  static constexpr float    kSampleRate   = getSampleRate(); // 48000
-  static constexpr float    kRefHz        = 880.f;           // A4
-  static constexpr float    kTwoPi        = 6.283185307179586f;
-  // 0.5 * 2^(kSubDetuneCents/1200) == 0.5 * 2^(-4/1200); derived from the
-  // sub-octave fixed detune so it cannot drift if kSubDetuneCents changes.
-  static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
-
   // (The A-H-R envelope lives in AhEnvelope, see osc_envelope.h.)
   // (The runtime DSP parameter struct Params is defined in osc_params.h as
   //  OscParamsData; see the `using Params = ::OscParamsData;` alias above.)
-
-  // Map a raw 10-bit value (0..1023) for one of the 10 editable parameters
-  // (DETUNE..WAV2) onto the DSP state. This is the single source of truth
-  // for the parameter scaling: it is used both by the edit-menu path
-  // (setParameter(DETUNE..WAV2)) and by the PARAM_VAL path.
-  void apply_edit_param(uint8_t idx, int32_t value)
-  {
-    switch (idx)
-    {
-    case DETUNE:
-      // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (50% = 511 = 0 cents)
-      // The DETU knob detunes A and B in OPPOSITE directions (±c/2 each),
-      // producing a per-voice phase drift (inter-voice beat = c*f/600).
-      // The Taylor factors are cached in w0_a_det_/w0_b_det_ (K-rate) and
-      // used directly in process() when the walk is off. See update_w0_det.
-      params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
-      update_w0_det();
-      break;
-
-    case RATE_AMT:
-      // Shared depth ceiling for all three streams (0..100% -> quadratic
-      // 0..1). Changing it does NOT recompute the per-stream periods/smoothing
-      // (those depend only on SPDx/SMTx), so no setup() call is needed here.
-      {
-        const float x = param_10bit_to_f32(value);
-        params_.rw_amount = x * x; // quadratic: knob^2 -> 0..1 normalized depth
-      }
-      break;
-
-    // Three independent wandering streams. SPDx sets the stream's target-update
-    // period (0.1 s .. 10 s, log); SMTx its tracking time constant (10 ms ..
-    // 1.5 s, log). Each stream has its own RandomWalk instance (rw_[i]), so the
-    // streams are not phase-locked. setup() is called on the single affected
-    // stream so its interval / tracking pick up the new value.
-    case SPD1:
-      params_.rw_rate[0] = param_10bit_to_f32(value);
-      rw_[0].setup(params_.rw_rate[0], params_.rw_amount, params_.rw_smooth[0]);
-      break;
-    case SMT1:
-      params_.rw_smooth[0] = param_10bit_to_f32(value);
-      rw_[0].setup(params_.rw_rate[0], params_.rw_amount, params_.rw_smooth[0]);
-      break;
-    case SPD2:
-      params_.rw_rate[1] = param_10bit_to_f32(value);
-      rw_[1].setup(params_.rw_rate[1], params_.rw_amount, params_.rw_smooth[1]);
-      break;
-    case SMT2:
-      params_.rw_smooth[1] = param_10bit_to_f32(value);
-      rw_[1].setup(params_.rw_rate[1], params_.rw_amount, params_.rw_smooth[1]);
-      break;
-    case SPD3:
-      params_.rw_rate[2] = param_10bit_to_f32(value);
-      rw_[2].setup(params_.rw_rate[2], params_.rw_amount, params_.rw_smooth[2]);
-      break;
-    case SMT3:
-      params_.rw_smooth[2] = param_10bit_to_f32(value);
-      rw_[2].setup(params_.rw_rate[2], params_.rw_amount, params_.rw_smooth[2]);
-      break;
-
-    case SUB1:
-      params_.sub_level = param_10bit_to_f32(value);
-      break;
-
-    case SUB2:
-      params_.sub2_level = param_10bit_to_f32(value);
-      break;
-
-    case SATU:
-      // 0..1023 -> 0..kSatuMax drive level
-      params_.drive = param_10bit_to_f32(value) * kSatuMax;
-      break;
-
-    case ASYM:
-      // 0..1023 -> -1..+1 (0% = 0)
-      params_.asym = param_10bit_to_f32(value) * 2.f - 1.f;
-      break;
-
-    case FOLD:
-      params_.fold_depth = param_10bit_to_f32(value);
-      break;
-
-    case WAV1:
-      params_.wave_a = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
-      break;
-
-    case WAV2:
-      params_.wave_b = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
-      break;
-
-    case WAV3:
-      // Osc C (chord voice) wavetable index, 0..kWavesTotal-1. Gives the chord
-      // voice its own timbre (independent of osc A / B). Re-resolve the
-      // pitch-shifted morph position (same as WAV1/WAV2 — it is shared across
-      // all three voices and depends only on the base pitch, not the index).
-      params_.wave_c = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
-      break;
-
-    case CHORD:
-      // 0..1023 -> 0..1 chord-voice level (LINEAR). Applied in process() as
-      // chord_gain = p.chord_level, then shaped by the chord's own
-      // folder+saturator and scaled by kMixChordDirect. See osc_chord.h.
-      params_.chord_level = param_10bit_to_f32(value);
-      break;
-
-    case CHRD_INT:
-      // 0..1023 -> 0..1900 cents (linear). Continuous interval: any harmonic
-      // is reachable, no quantization. The interval is stored in params_
-      // (OscParamsData::chord_cents — the single source of truth for the
-      // CINT default), then the chord phasor's phase increment is recomputed
-      // (K-rate, Taylor via Detune::factor).
-      {
-        params_.chord_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        chord_.update(w0_, params_.chord_cents);
-      }
-      break;
-
-    case MAIN:
-      // 0..1023 -> 0..1 level of the "main" voice (the A+B mixed output that
-      // passes through the folder/saturator/SVF chain). The per-sample multiply
-      // (y_filt * kMixOsc * main_level) is applied in the audio path; here we
-      // only store the 0..1 gain. At 100% (default) the gain is 1.0, so the
-      // stock sound is unchanged (regression-safe).
-      params_.main_level = param_10bit_to_f32(value);
-      break;
-
-    case CHSAT:
-      // 0..1023 -> 0..kSatuMax drive level for the CHORD voice's OWN saturator
-      // (independent of the A+B SATU knob). Same scaling as SATU. Applied in
-      // the CHORD branch of process() via Saturator::saturate(chord_fold,
-      // chord_drive, p.asym). Default (341) = same gentle drive as SATU.
-      params_.chord_drive = param_10bit_to_f32(value) * kSatuMax;
-      break;
-
-    case CHFLD:
-      // 0..1023 -> 0..1 wavefolder depth for the CHORD voice's OWN folder
-      // (independent of the A+B FOLD knob). Same scaling as FOLD. Applied in
-      // the CHORD branch of process() via Saturator::fold(chord_in,
-      // chord_fold). Default (0) = off.
-      params_.chord_fold = param_10bit_to_f32(value);
-      break;
-
-    case RW_WAV:
-      // 0..1023 -> 0..1 random-walk depth on the wavetable morph. The actual
-      // table scale (kRwMorphScaleTables) is applied in the audio path; here we
-      // only store the 0..1 depth gate.
-      params_.rw_wav = param_10bit_to_f32(value);
-      break;
-
-    case RW_DRV:
-      // 0..1023 -> 0..1 random-walk depth on the saturator drive. The drive
-      // scale (kRwDriveScale) is applied in the audio path.
-      params_.rw_drv = param_10bit_to_f32(value);
-      break;
-
-    case RW_FLD:
-      // 0..1023 -> 0..1 random-walk depth on the wavefolder depth. The fold
-      // scale (kRwFoldScale) is applied in the audio path.
-      params_.rw_fld = param_10bit_to_f32(value);
-      break;
-
-    case XFM_A:
-      // 0..1023 -> 0..1 cross-FM depth on osc A (B modulates A's phase). The
-      // cent scale (kXfmMaxCents) is applied in the audio path, gated by the
-      // shared random-walk depth (rw_amount) so the sidebands breathe.
-      params_.xfm_a = param_10bit_to_f32(value);
-      break;
-
-    case XFM_B:
-      // 0..1023 -> 0..1 cross-FM depth on osc B (A modulates B's phase).
-      params_.xfm_b = param_10bit_to_f32(value);
-      break;
-
-    case FCUT:
-      // 0..1023 -> 0..1 SVF cutoff knob (log-mapped 80 Hz .. 12 kHz) AND the
-      // dry/wet balance (same knob: 0 = raw signal, 100% = full LPF). This
-      // keeps the knob count low while giving a single "open the filter"
-      // control. Both the K-rate coefficient (svf_.updateCutoff) and the
-      // per-sample dry/wet (svf_wet) are recomputed here.
-      {
-        const float knob = param_10bit_to_f32(value);
-        params_.svf_cut = knob;
-        params_.svf_wet = knob;
-        svf_.updateCutoff(Svf::cutoffHz(knob), Svf::quality(params_.svf_res), getSampleRate());
-      }
-      break;
-
-    case RES:
-      // 0..1023 -> 0..1 SVF resonance (linear 0..1 -> 0.5 .. 2.5 Q). Recompute the
-      // damping coefficient at K-rate (the cutoff coefficient is unchanged).
-      {
-        params_.svf_res = param_10bit_to_f32(value);
-        svf_.updateResonance(Svf::quality(params_.svf_res));
-      }
-      break;
-
-    case RW_FC:
-      // 0..1023 -> 0..1 random-walk depth on the SVF cutoff (RWFC knob). The
-      // per-sample cutoff modulation (cc_w = cc * 2^(+/-half-oct * dev_a))
-      // is applied in the audio path, gated by rw_active && svf_active. At
-      // RWFC = 0 the cutoff is static (regression-safe). The depth is scaled
-      // by the global walk depth (rw_amount) at the point of use, so RATE = 0
-      // still disables the cutoff walk even if RWFC is turned up.
-      params_.rw_fc = param_10bit_to_f32(value);
-      break;
-
-    case RW_LVL:
-      // 0..1023 -> 0..1 breath depth on the four voice levels (RW_LVL knob).
-      // The Osc scales each voice by (1 + rw_lvl * dev), where dev is the
-      // Breath stream's (rw_[3]) per-channel deviation. At RW_LVL = 0 the
-      // levels are static (regression-safe: identical to the pre-breath
-      // sound). The actual (1 + rw_lvl * dev) multiply happens in the audio
-      // path; here we only store the 0..1 depth gate.
-      params_.rw_lvl = param_10bit_to_f32(value);
-      break;
-
-    case RW_LSP:
-      // 0..1023 -> 0..1 breath stream period (RW_LSP knob, log 0.1 s .. 10 s).
-      // Recompute the Breath stream (rw_[3])'s interval/tracking (K-rate).
-      params_.rw_lsp = param_10bit_to_f32(value);
-      rw_[3].setup(params_.rw_lsp, params_.rw_amount, params_.rw_lsm);
-      break;
-
-    case RW_LSM:
-      // 0..1023 -> 0..1 breath stream time constant (RW_LSM knob, log
-      // 10 ms .. 1.5 s). Recompute the Breath stream's tracking (K-rate).
-      params_.rw_lsm = param_10bit_to_f32(value);
-      rw_[3].setup(params_.rw_lsp, params_.rw_amount, params_.rw_lsm);
-      break;
-
-    default:
-      break;
-    }
-  }
 
   void setParameter(uint8_t index, int32_t value) override final
   {
@@ -650,155 +276,11 @@ public:
   //                        raw 10-bit value ("50%", "+25%", wavetable index).
   // The RW_WAV / RW_DRV / RW_FLD depths format as 0..100% (the default branch).
   // The manual formatter below avoids pulling printf machinery into the ARM
-  // image. Longest possible output is 5 chars ("+100%").
-  const char *getParameterStrValue(uint8_t id, int32_t value) const override final
-  {
-    static const char *const names[kEditParamCount] = {
-        "DETU", "RATE",
-        "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
-        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "WAV3",
-        "CHRD", "CINT",
-        "MAIN",
-        "RWAV", "RDRV", "RFLD",
-        "XFM1", "XFM2", "FCUT", "RESO", "RWFC",
-        "RVLL", "RVLS", "RVLS",
-        "SATC", "FLDC"};
-    const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
-    const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
-    if (is_param_sel)
-    {
-      return (value >= 0 && value < (int)kEditParamCount) ? names[value] : "";
-    }
-    if (!is_param_val)
-      return "";
 
-    // PARAM VAL: format the currently selected parameter's cached raw value.
-    const uint8_t idx = (select_ < kEditParamCount) ? select_ : 0;
-    const int32_t raw = edit_value_[idx];
-    const int32_t k = kEditParamFirst + idx;
-
-    static char buf[8];
-
-    // SPDx / SMTx (stream period / time constant): display as 0..100% (the
-    // default branch). The actual s / ms value is a log mapping of the raw
-    // 0..1023 value; showing % keeps the display consistent and avoids
-    // pulling a fasterpowf into the K-rate display path.
-
-    // CINT (chord interval): display cents (0..1900), not a name.
-    if (k == CHRD_INT)
-    {
-      int ci = (int)(param_10bit_to_f32(raw) * ChordVoice::kMaxCents + 0.5f);
-      // format as "NNNc" (e.g. "700c", "1900c")
-      int n2 = 0;
-      int t2 = ci;
-      char d2[5];
-      int nd2 = 0;
-      do
-      {
-        d2[nd2++] = (char)('0' + t2 % 10);
-        t2 /= 10;
-      } while (t2 > 0);
-      for (int i = nd2 - 1; i >= 0; --i)
-        buf[n2++] = d2[i];
-      buf[n2++] = 'c';
-      buf[n2] = '\0';
-      return buf;
-    }
-
-    // XFM_A / XFM_B (cross-FM depth): "Nc" (0..kXfmMaxCents = 0..15, <= 2 digits).
-    // No printf in the image (the codebase hand-rolls formatting), so write the
-    // at-most-2-digit value directly.
-    if (k == XFM_A || k == XFM_B)
-    {
-      int xc = (int)(param_10bit_to_f32(raw) * kXfmMaxCents + 0.5f);
-      int n = 0;
-      if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
-      buf[n++] = (char)('0' + xc % 10);
-      buf[n++] = 'c';
-      buf[n] = '\0';
-      return buf;
-    }
-
-    // RES (SVF resonance Q): "X.Y" (0.5..2.5, fixed 3 chars, no loop needed).
-    if (k == RES)
-    {
-      int q10 = (int)(Svf::quality(param_10bit_to_f32(raw)) * 10.f + 0.5f); // 5..25
-      buf[0] = (char)('0' + q10 / 10);
-      buf[1] = '.';
-      buf[2] = (char)('0' + q10 % 10);
-      buf[3] = '\0';
-      return buf;
-    }
-
-    // FCUT (SVF cutoff + dry/wet): the cutoff frequency, "NNN H" (< 1 kHz) or
-    // "NN.Nk" (>= 1 kHz, at most 2 whole + 1 frac digit since max is 12.0k).
-    if (k == FCUT)
-    {
-      int hz = (int)(Svf::cutoffHz(param_10bit_to_f32(raw)) + 0.5f); // 80..12000
-      int n = 0;
-      if (hz >= 1000)
-      {
-        // "NN.Nk"
-        int k10 = hz / 100; // e.g. 9600 -> 96 (N.N * 10), 12000 -> 120
-        int whole = k10 / 10; // 9 / 12
-        int frac = k10 % 10;  // 6 / 0
-        if (whole >= 10) buf[n++] = (char)('0' + whole / 10);
-        buf[n++] = (char)('0' + whole % 10);
-        buf[n++] = '.';
-        buf[n++] = (char)('0' + frac);
-        buf[n++] = 'k';
-      }
-      else
-      {
-        // "NNN H" (80..999)
-        int t = hz;
-        if (t >= 100) buf[n++] = (char)('0' + t / 100);
-        t %= 100;
-        if (t >= 10 || hz >= 100) buf[n++] = (char)('0' + t / 10);
-        buf[n++] = (char)('0' + t % 10);
-        buf[n++] = 'H';
-      }
-      buf[n] = '\0';
-      return buf;
-    }
-
-    int v;
-    if (k == WAV1 || k == WAV2 || k == WAV3)
-      v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
-    else if (k == ASYM)
-      v = (int)((raw * 200) / kRawMax) - 100;
-    else if (k == DETUNE)
-      v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
-    else if (k == SATU || k == CHSAT)
-      v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (CHSAT = chord's own drive)
-    else
-      v = (int)((raw * 100) / kRawMax);
-
-    // CHFLD formats as 0..100% (the default branch), so it is NOT in this
-    // no-percent list. CHSAT, like SATU, shows a bare 0..300 number.
-    const bool percent = (k != WAV1 && k != WAV2 && k != WAV3 && k != SATU && k != CHSAT && k != DETUNE && k != CHRD_INT);
-    int n = 0;
-    if (v < 0)
-      buf[n++] = '-';
-    else if (k == ASYM)
-      buf[n++] = '+';
-    int t = (v < 0) ? -v : v;
-    char d[4];
-    int nd = 0;
-    do
-    {
-      d[nd++] = (char)('0' + t % 10);
-      t /= 10;
-    } while (t > 0);
-    for (int i = nd - 1; i >= 0; --i)
-      buf[n++] = d[i];
-    if (percent)
-      buf[n++] = '%';
-    buf[n] = '\0';
-    return buf;
-  }
-
-  // life-cycle methods
+  // Format the display string for a header slot (0..3): PARAM_SEL shows
+  // the name of the selected parameter, PARAM_VAL shows its formatted
+  // value. The body lives in osc_param_display.h.
+  const char *getParameterStrValue(uint8_t id, int32_t value) const override final;
   void init(float *) override final
   {
     params_.reset();
@@ -860,7 +342,6 @@ public:
     note_on_ = false;
     eg_.reset();
   }
-
   // ---- note handling ---------------------------------------------------------
 
   // Key press: note active. Start (or restart) the A-H-R sequence from the top
@@ -939,485 +420,9 @@ public:
     lfo_sim_.depth = (depth < 0.f) ? 0.f : (depth > 1.f) ? 1.f : depth;
   }
 #endif
-
-  void process(const float *__restrict in, float *__restrict out, uint32_t frames) override final
-  {
-    (void)in; // drone generator does not use the audio input
-
-#ifdef __EMSCRIPTEN__
-    // Consume any pending direct edit-parameter request from the UI thread
-    // (see simEditRequest). The (select_, PARAM_VAL) pair is applied
-    // atomically here so the DSP never sees an intermediate select_ value --
-    // the hardware's unit_set_param_value() path does the same thing (K-rate,
-    // one knob turn = one apply).
-    {
-      const uint32_t req = sim_edit_request_;
-      if (req & (1U << 31))
-      {
-        const uint8_t idx = (uint8_t)(req & 0x1FU);
-        const int32_t raw = (int32_t)((req >> 8) & 0x3FFU);
-        if (idx < kEditParamCount)
-        {
-          edit_value_[idx] = raw;
-          select_ = idx;
-          apply_edit_param(kEditParamFirst + idx, raw);
-        }
-        sim_edit_request_ = 0;
-      }
-    }
-#endif
-
-    // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
-    const Params p = params_;
-
-    // base phase increment
-    const float w0 = w0_;
-
-    // ---- Random-walk detune deviation (target-based wandering, dual channel) ----
-    // When rw_amount == 0 (knob at 0) the walk is disabled and w0_a / w0_b are
-    // the cached static values (regression: byte-for-byte identical to the old
-    // code). rw_amount is the quadratic-mapped knob value (see setParameter),
-    // so rw_active is true for any non-zero knob position.
-    //
-    // The walk state (rw_.dev_a/b) is NORMALIZED to [-1, +1]; RATE AMT (the
-    // quadratic-mapped rw_amount) is the depth ceiling, and the audio path
-    // scales it to cents (kRwDetuneScaleCents = +/-10 cents) so neither voice
-    // strays further from its DETUNE knob value than AMT allows. The two
-    // channels wander with INDEPENDENT random targets (chosen on the same
-    // period), so the inter-voice beat frequency shifts over time — an
-    // asymmetric, ever-changing chorus.
-    //
-    // The deviations smoothly track random targets (see RandomWalk::advance)
-    // that are regenerated every `interval` samples. RATE SPD sets that period
-    // (0.1 s .. 10 s), RATE SMTH sets the tracking time constant (10 ms ..
-    // 1.5 s); keeping them independent makes the audible depth stable
-    // regardless of SPEED.
-    // (The A-H-R envelope is advanced per-sample inside the loop below; the
-    // relaxation coefficients are cached once per block for cheap access.)
-    const float alpha_a = eg_alpha_a_;
-    const float alpha_r = eg_alpha_r_;
-
-    // ---- Second sub (SUB2) level (see osc_sub2.h for the voice DSP) ----
-    const float sub2_level = p.sub2_level;
-
-    // ---- Chord voice gain (precomputed once per block) ----
-    // Linear gain: chord_gain = p.chord_level (0..1), like SUB1/SUB2. At lvl=0
-    // the voice is silent. At lvl=1 (CHRD=100%) the voice reaches full
-    // amplitude and is then shaped by its own folder+saturator (see the CHORD
-    // branch in the final mix) before being scaled by kMixChordDirect.
-    //
-    // (Previously this used the normalized kMixChord*lvl/(1+lvl) form so the
-    // chord could not push the shared A+B saturator into clipping — that
-    // constraint no longer applies now that the chord has its OWN saturator
-    // pass, and the old double-normalization was the root cause of the chord
-    // reading far too quiet. See osc_chord.h for the kMixChord constant, now
-    // unused by the audio path.)
-    const float chord_gain = p.chord_level;
-
-    const bool rw_active = p.rw_amount > 0.f;
-    // A and B run at the base note ± the static DETU knob (symmetric ±c/2,
-    // cached in w0_a_det_/w0_b_det_ at K-rate), plus the random-walk detune
-    // (asymmetric, per-sample) when rw_active. When the walk is off, the
-    // cached values are used directly (0 Taylor cost per sample).
-    float w0_a = w0_a_det_; // static symmetric detune (osc A, +c/2)
-    float w0_b = w0_b_det_; // static symmetric detune (osc B, -c/2)
-
-    // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
-    // offset is added per-sample below. waves_.wave_shift_ is recomputed on
-    // setParameter(WAV1/WAV2/WAV3) / setPitch(); wave_a / wave_b / wave_c are
-    // the knobs (the chord voice now has its own table, see WAV3).
-    const float wave_base_a = p.wave_a + waves_.wave_shift_;
-    const float wave_base_b = p.wave_b + waves_.wave_shift_;
-    const float wave_base_c = p.wave_c + waves_.wave_shift_;
-    if (rw_active)
-    {
-      // Recompute each stream's interval / tracking from its own SPDx/SMTx
-      // (setup() is cheap and caches; the shared rw_amount ceiling is passed
-      // but only used for max_dev, which does not affect the period/tracking).
-      // The first three streams are addressed by p.rw_rate[i] / p.rw_smooth[i]
-      // (SPD1..3 / SMT1..3, 3-element arrays). The fourth stream (Breath, i=3)
-      // has its OWN knobs (RW_LSP / RW_LSM -> p.rw_lsp / p.rw_lsm), set at
-      // K-rate in apply_edit_param — so it is set up separately below, NOT in
-      // this loop (which would read out-of-bounds rw_rate[3] / rw_smooth[3]).
-      for (uint8_t i = 0; i < 3; i++)
-        rw_[i].setup(p.rw_rate[i], p.rw_amount, p.rw_smooth[i]);
-      rw_[3].setup(p.rw_lsp, p.rw_amount, p.rw_lsm); // Breath stream (RW_LSP/RW_LSM)
-      // Initialize each stream's targets to its current deviations on first
-      // activation (avoids a visible jump when the RATE knob crosses 0).
-      for (uint8_t i = 0; i < kRwStreamCount; i++)
-      {
-        if (rw_[i].target_a == 0.f && rw_[i].dev_a != 0.f)
-          rw_[i].target_a = rw_[i].dev_a;
-        if (rw_[i].target_b == 0.f && rw_[i].dev_b != 0.f)
-          rw_[i].target_b = rw_[i].dev_b;
-      }
-    }
-
-    // Random-walk scaled values (computed per-sample inside the loop below).
-    // Each stream's dev_a/b (rw_[i].dev_a/b) are normalized to [-1, +1] and
-    // advance per-sample via rw_[i].advance(). Each stream scales its own
-    // deviations to its targets' units at the point of use:
-    //   Tone (rw_[0])    -> detune (cents) + cross-FM
-    //   Timbre (rw_[1])  -> wavetable morph (tables) + SVF cutoff
-    //   Density (rw_[2]) -> drive + wavefolder depth
-    // The scaled values must be recomputed every sample (not cached per-block)
-    // because rw_[i].advance() moves dev_a/b on every sample.
-    const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
-    const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
-    const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
-    // Cross-FM (classic FM): osc A's phase is modulated by B's wavetable
-    // output (XFM_A knob) and osc B's by A's (XFM_B knob). The modulation
-    // index is in CYCLES (peak phase deviation = kXfmMaxCents / 2 at 100%
-    // knob), NOT an amplitude-scaled wavetable — this is what makes the
-    // sideband spread predictable and frequency-independent (no low-end
-    // "howl" when the drone sits at 50-200 Hz). The peak phase deviation
-    // is kXfmMaxCents/2 = 0.04 cycles (4% of the carrier frequency) at
-    // full knob — a subtle "breathing" shimmer, not a strong FM spread.
-    // Gated by the shared random-
-    // walk depth (rw_amount) so the sidebands "ring" and "fade" with the
-    // walk. When rw_amount == 0 (walk off) or the XFM knob is 0, the
-    // per-sample modulation below is a no-op (regression-safe: identical to
-    // the stock 2-osc sound). See the XFM branch in the phasor update.
-    const bool xfm_a_active = rw_active && p.xfm_a > 0.f;
-    const bool xfm_b_active = rw_active && p.xfm_b > 0.f;
-    // SVF: the internal 12 dB/oct low-pass is engaged when the dry/wet (svf_wet)
-    // is non-zero. When svf_wet == 0 (the default) the filter is transparent
-    // and its state update is skipped (regression-safe). The walk-modified
-    // cutoff coefficient (svf_.cc_w) is set per-sample below when active.
-    const float svf_wet = p.svf_wet;
-    const bool svf_active = svf_wet > 0.f;
-
-    for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
-    {
-      // update random-walk deviations (advance once per sample when active).
-      // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
-      // every random-walk modulation (detune below; wavetable morph / drive /
-      // fold further down). The normalized deviations (rw_.dev_a/b, in [-1,+1])
-      // are multiplied by p.rw_amount (0..1, quadratic-mapped from the knob)
-      // at each point of use, so RATE = 0 means no wandering at all and
-      // RATE = 100% gives full scale. Without this factor the knobs would be
-      // binary (any non-zero RATE gave full-depth walk) — see the bug this
-      // fixes (rw_amount was only used as an on/off gate, never as a scale).
-      const float rw_amt = p.rw_amount;
-      float rw_dev_a_cents = 0.f;
-      float rw_dev_b_cents = 0.f;
-      if (rw_active)
-      {
-        // Advance all three streams (each draws its own random targets on its
-        // own period, so they are not phase-locked). The Tone stream (rw_[0])
-        // drives detune + cross-FM; Timbre (rw_[1]) drives wavetable morph +
-        // SVF cutoff; Density (rw_[2]) drives drive + wavefolder.
-        rw_[0].advance(p.rw_amount, osc_white);
-        rw_[1].advance(p.rw_amount, osc_white);
-        rw_[2].advance(p.rw_amount, osc_white);
-        // Per-sample scaled Tone-stream walk values (dev_a/b change every sample).
-        rw_dev_a_cents = rw_[0].dev_a * rw_amt * kRwDetuneScaleCents;
-        rw_dev_b_cents = rw_[0].dev_b * rw_amt * kRwDetuneScaleCents;
-        // recompute w0_a / w0_b from the combined (static + walk) per-voice
-        // detune: A gets +c/2 (static) + rw_dev_a (walk), B gets -c/2 (static)
-        // + rw_dev_b (walk). 4th-order Taylor via Detune::w0_detuned
-        // (see osc_detune.h).
-        const float half_det = 0.5f * p.detune_cents;
-        w0_a = Detune::w0_detuned(w0, +half_det + rw_dev_a_cents);
-        w0_b = Detune::w0_detuned(w0, -half_det + rw_dev_b_cents);
-      }
-      // Timbre stream (rw_[1]): wavetable morph A/B.
-      const float rw_dev_a_tables = rw_wav_active ? rw_[1].dev_a * rw_amt * kRwMorphScaleTables : 0.f;
-      const float rw_dev_b_tables = rw_wav_active ? rw_[1].dev_b * rw_amt * kRwMorphScaleTables : 0.f;
-      // Density stream (rw_[2]): saturator drive + wavefolder depth.
-      const float rw_dev_drive    = rw_drv_active ? rw_[2].dev_a * rw_amt * kRwDriveScale : 0.f;
-      // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld * rw_amt).
-      // p.rw_fld is 0..1 (RFLD knob). At RFLD=0 -> eff_fold = p.fold_depth (no mod).
-      // At RFLD=100% & RATE=100% -> eff_fold wanders from 0 to 2*p.fold_depth
-      // (clamped to 1). The rw_amt factor keeps the folder walk gated by the
-      // global RATE AMT depth, consistent with the detune/morph/drive walks.
-      // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
-      const float rw_fold_mod = rw_fld_active ? rw_[2].dev_b * p.rw_fld * rw_amt : 0.f;
-
-      // ---- Breath stream (rw_[3]): voice-level wandering -------------------
-      // The fourth stream drives the four voice LEVELS (A / B / chord / sub)
-      // so they slowly "breathe" in and out of prominence. Its four channels
-      // (dev_a/b/c/d) wander independently (each with its own period), so the
-      // four voices trade the floor at different times — the heart of a drone.
-      // The per-voice level factor is (1 + rw_lvl * rw_amt * dev), clamped to
-      // [0, 1]: at RW_LVL = 0 (default) all factors are 1.0 (static levels,
-      // regression-safe: identical to the pre-breath sound); at RW_LVL = 100%
-      // & RATE = 100% a voice can swing a full 0..100% of its base level.
-      // SUB2 (the f/4 low-end anchor) is intentionally NOT breathed: it stays
-      // static so the low end never "flutters".
-      float lvl_a = 1.f;
-      float lvl_b = 1.f;
-      float lvl_c = 1.f;
-      float lvl_sub = 1.f;
-      if (rw_active && p.rw_lvl > 0.f)
-      {
-        rw_[3].advance(p.rw_amount, osc_white);
-        const float swing = p.rw_lvl * rw_amt; // 0..1 normalized depth
-        lvl_a   = 1.f + swing * rw_[3].dev_a;
-        lvl_b   = 1.f + swing * rw_[3].dev_b;
-        lvl_c   = 1.f + swing * rw_[3].dev_c;
-        lvl_sub = 1.f + swing * rw_[3].dev_d;
-        if (lvl_a < 0.f) lvl_a = 0.f; else if (lvl_a > 1.f) lvl_a = 1.f;
-        if (lvl_b < 0.f) lvl_b = 0.f; else if (lvl_b > 1.f) lvl_b = 1.f;
-        if (lvl_c < 0.f) lvl_c = 0.f; else if (lvl_c > 1.f) lvl_c = 1.f;
-        if (lvl_sub < 0.f) lvl_sub = 0.f; else if (lvl_sub > 1.f) lvl_sub = 1.f;
-      }
-
-      // phasor update (plus optional classic cross-FM phase modulation)
-      // Classic FM: each osc's phase is modulated by the OTHER osc's
-      // wavetable output, scaled by a CYCLES-based index. The modulation
-      // index (peak phase deviation, in cycles) is
-      //   (other_wavetable_out * 0.5) * depth * kXfmMaxCents
-      // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1). The wavetable
-      // output is in [-1, +1]; multiplying by 0.5 normalizes it to a peak
-      // of 0.5 cycles at the XFM knob's full scale, so the index is bounded
-      // to +/-kXfmMaxCents/2 cycles (e.g. +/-0.04 cycles at kXfmMaxCents=0.8).
-      // This is frequency-INDEPENDENT: the same XFM knob position gives the
-      // same sideband spread on a 50 Hz drone and on a 2 kHz note (no more
-      // low-end "howl" when the wavetable is dense — the old (1/2pi)-scaled
-      // version produced an index of up to 159% of the base phase step at
-      // low notes, which was the source of the harsh wobble/whine).
-      // Gated by rw_amt so the sidebands breathe with the walk. At XFM=0 or
-      // rw_amt=0 this adds 0. (The wavetable values are read AFTER the
-      // phasor wrap below, so the modulated phasor and the wavetable sample
-      // are from the same instant.)
-      //
-      // NOTE: we read the *previous* sample's wavetable output for the
-      // modulation (a one-sample lookback) to avoid a data-dependency on the
-      // current phasor (which we are about to advance). For a drone this is
-      // inaudibly different and keeps the audio path branch-light.
-      // We use the cached previous wavetable values (prev_wav_a_ / prev_wav_b_)
-      // updated at the end of each iteration.
-      {
-        const float xfm_a_idx = xfm_a_active
-            ? (prev_wav_b_ * 0.5f *
-               (rw_[0].dev_b * rw_amt * p.xfm_a * kXfmMaxCents))
-            : 0.f;
-        const float xfm_b_idx = xfm_b_active
-            ? (prev_wav_a_ * 0.5f *
-               (rw_[0].dev_a * rw_amt * p.xfm_b * kXfmMaxCents))
-            : 0.f;
-        phasor_a_ += w0_a + xfm_a_idx;
-        phasor_b_ += w0_b + xfm_b_idx;
-      }
-      // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
-      // No random-walk modulation — the chord voice is a stable "anchor"
-      // like SUB2, not a beating voice. advance() returns false if the
-      // interval is OFF (no oscillator).
-      const bool chord_active = chord_.advance();
-
-      // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
-      // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
-      // The LFO is applied as a per-sample detune via Detune::factor (4th-order
-      // Taylor, see osc_detune.h) — the LFO value is small (±5 cents), so the
-      // series is more than accurate enough.
-      {
-        const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-        phasor_sub_ += w0_sub_ * Detune::factor(lfo_fm_cents);
-      }
-
-      // second sub phasor: pure f/4, no LFO-FM and no fixed detune (it is a
-      // stable low-end anchor, not a beating voice). Advances exactly at
-      // w0/4 (w0_sub2_ is cached in update_w0_sub2()).
-      phasor_sub2_ += w0_sub2_;
-
-      // wrap phasors into [0, 1).
-      //
-      // Use a modular floor (x - floorf(x)) instead of a single subtract.
-      // The single-subtract form (if (p >= 1) p -= 1) only handles the
-      // case where the per-sample increment is in (0, 1) and the phasor
-      // starts in [0, 1). Cross-FM (XFM_A / XFM_B) adds a signed per-sample
-      // phase offset of up to +/-kXfmMaxCents/2 cycles (see the XFM branch
-      // above: prev_wav * 0.5 * dev * rw_amt * xfm * kXfmMaxCents), so when the previous
-      // sample's wavetable output has the opposite sign to the random-walk
-      // deviation the combined increment (w0_a + xfm_a_idx) can be NEGATIVE,
-      // pushing phasor_a_ below 0. The single subtract never corrects a
-      // negative phasor, so it would feed a value < 0 into osc_wave_scanf()
-      // whose `(uint32_t)x` cast is undefined behavior for negative floats
-      // (out-of-bounds LUT read -> garbage/NaN -> NaN-lock in the SVF /
-      // cross-FM feedback loop). floorf normalizes to [0, 1) for ANY finite
-      // input (positive, negative, or > 1), so the LUT is always queried
-      // with a valid phase. Cost: one floorf per phasor per sample (4 total);
-      // floorf is a single VFP instruction on FPv4 (ARM) and SSE (x86), and
-      // is a no-op when the phasor is already in [0, 1) (the common case at
-      // XFM = 0), so the stock sound is bit-identical.
-      phasor_a_   -= floorf(phasor_a_);
-      phasor_b_   -= floorf(phasor_b_);
-      phasor_sub_ -= floorf(phasor_sub_);
-      phasor_sub2_-= floorf(phasor_sub2_);
-
-      // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
-      // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
-      // and this line is compiled out, so the two paths share the same
-      // morph code below. See osc_lfo_sim.h for the synthesizer.
-#ifdef EMSCRIPTEN
-      lfo_ = lfo_sim_.process();
-#endif
-
-      // generate wavetable samples in -1..1. Each voice's table index is the
-      // base position (knob + pitch-shift) plus the LFO morph offset, so the
-      // timbre "breathes" across the wavetable. WaveTable::resolve_wave() crossfades the
-      // fractional part between adjacent tables, so the morph glides smoothly.
-      const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
-      // Wavetable scan positions: base (WAV1/WAV2 knob) + LFO morph (platform
-      // shape-LFO) + random-walk morph (RW_WAV knob, via rw_dev_a/b_tables).
-      // The walk morph is added so each voice wanders through the 91 Korg
-      // wavetables around its knob position — an unpredictable, organic
-      // timbre drift that the static LFO sweep alone cannot produce.
-      const float wav_a_pos = wave_base_a + lfo_morph + rw_dev_a_tables;
-      const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables;
-      const float wav_a = WaveTable::resolve_wave(wav_a_pos, phasor_a_);
-      const float wav_b = WaveTable::resolve_wave(wav_b_pos, phasor_b_);
-      // Cache this sample's wavetable outputs for the NEXT sample's cross-FM
-      // modulation (one-sample lookback, see the XFM branch in the phasor
-      // update above). When cross-FM is off these writes are the only cost.
-      prev_wav_a_ = wav_a;
-      prev_wav_b_ = wav_b;
-
-      // Chord voice: third oscillator at a selectable interval above the base
-      // (CINT knob: OFF/5TH/OCT/O+5/M3). Uses the WAV1 (osc A) wavetable so
-      // it blends with the main voice. Computed only when both the interval
-      // is active (chord_active) and the level is non-zero (chord_gain > 0)
-      // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
-      // wavetable lookup. See osc_chord.h for the interval table.
-      const float wav_c = (chord_active && chord_gain > 0.f)
-          ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord_.phasor)
-          : 0.f;
-
-      // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
-      const float sub = osc_sinf(phasor_sub_);
-
-      // ---- second sub (f/4): clean sine -> very soft saturator -> LPF -> gate ----
-      // Only computed when the voice is actually audible (level > 0) to keep
-      // the default path (SUB2 = 0) free of this cost.
-      // See osc_sub2.h for the DSP details (sine -> soft saturator -> LPF -> gate).
-      const float sub2 = sub2_.process(phasor_sub2_, w0, sub2_level);
-
-      // mix the two main voices (A+B) equally, then run through the pre-drive
-      // wavefolder (FOLD knob) and the asymmetric soft-clip saturator
-      // (SATU/ASYM knobs). See osc_saturator.h for the DSP details.
-      //
-      // The chord voice is NOT in this mix: it is mixed in parallel in the
-      // final mix below, through its OWN folder+saturator pass (same SATU/ASYM/
-      // FOLD knobs), so the MAIN level knob can duck only the A+B main tone —
-      // MAIN=0 silences A+B while CHORD (and the subs) keep sounding. Because
-      // the chord has its own drive, it keeps the unit's timbre "color" (the
-      // old double-normalized bypass path read far too quiet and "dry").
-      const float mix = kMixOsc * (wav_a * lvl_a + wav_b * lvl_b);
-      // (The static DETU knob is applied per-voice above, via w0_a / w0_b —
-      //  not post-mix: A and B are detuned in opposite directions around the
-      //  base note, producing a per-voice phase drift that sounds ~4x
-      //  stronger than an equivalent post-mix sum detune.)
-      // Wavefolder depth: FOLD knob modulated by random-walk fold (RW_FLD knob).
-      // Multiplicative: eff_fold = p.fold_depth * (1 + rw_fold_mod), where
-      // rw_fold_mod = dev_b * p.rw_fld (normalized -1..1 * 0..1 = -1..1).
-      // At RFLD=0: eff_fold = p.fold_depth (no modulation).
-      // At RFLD=100%: eff_fold wanders from 0 to 2*p.fold_depth (clamped to 1).
-      // When p.fold_depth = 0: eff_fold = 0 (no fold, RFLD has no effect).
-      float eff_fold = p.fold_depth * (1.f + rw_fold_mod);
-      if (eff_fold < 0.f) eff_fold = 0.f;
-      else if (eff_fold > 1.f) eff_fold = 1.f;
-      // Saturator drive: SATU knob + random-walk drive (RW_DRV knob, via
-      // rw_dev_drive, per-sample). Clamp to 0..kSatuMax so the walk never
-      // pushes the drive beyond the saturator's stable range.
-      float eff_drive_clamped = p.drive + rw_dev_drive;
-      if (eff_drive_clamped < 0.f) eff_drive_clamped = 0.f;
-      else if (eff_drive_clamped > kSatuMax) eff_drive_clamped = kSatuMax;
-      const float folded = Saturator::fold(mix, eff_fold);
-      const float y = Saturator::saturate(folded, eff_drive_clamped, p.asym);
-
-      // ---- internal SVF (12 dB/oct low-pass, post-saturator) ----
-      // When the FCUT dry/wet (svf_wet) is non-zero, the saturator output is
-      // low-passed by the SVF before the sub mix. The cutoff is modulated
-      // per-sample by the shared random walk (RWFC depth is folded into the
-      // FCUT knob's dry/wet — see apply_edit_param): the effective cutoff
-      // coefficient svf_.cc_w wanders by +/-kRwCutoffHalfOctaves octaves
-      // around the FCUT knob value, so the drone's top end "breathes" on the
-      // same 0.1 s .. 10 s timescale as the detune / morph / drive walks.
-      // When svf_wet == 0 (the default) the filter is transparent and this
-      // whole block is skipped (regression-safe).
-      //
-      // The walk modulation is applied to the per-sample cutoff coefficient
-      // (cc_w = cc * 2^(+/-half-oct * dev)), clamped to the stable range. The
-      // deviation used is dev_a (the same channel as the detune walk, so the
-      // top-end "breathes" in sync with the chorus).
-      float y_filt = y;
-      if (svf_active)
-      {
-        // Walk-modified cutoff coefficient: cc * 2^(+/-half-oct * dev_a).
-        // The deviation (dev_a, [-1,+1]) is scaled by the RWFC depth
-        // (p.rw_fc, 0..1) and the global walk depth (rw_amt) so the cutoff
-        // wanders by at most kRwCutoffHalfOctaves octaves at full depth.
-        const float rw_fc_dev = (rw_active && p.rw_fc > 0.f)
-            ? rw_[1].dev_a * rw_amt * p.rw_fc  // Timbre stream (rw_[1])
-            : 0.f;
-        const float oct_dev = Svf::kRwCutoffHalfOctaves * rw_fc_dev;
-        // 2^oct_dev via exp2: 2^x = exp2(x). oct_dev is small (|x| <= 1), so
-        // a 3rd-order Taylor in y = oct_dev * ln(2) is more than enough.
-        const float ln2 = 0.6931471805599453f;
-        const float e = oct_dev * ln2;
-        const float scale = 1.f + e + (e * e * 0.5f);
-        float cc_w = svf_.cc * scale;
-        if (cc_w < Svf::kCcMin) cc_w = Svf::kCcMin;
-        else if (cc_w > Svf::kCcMax) cc_w = Svf::kCcMax;
-        svf_.cc_w = cc_w;
-        y_filt = svf_.process(y, svf_wet);
-      }
-
-      // ---- advance the A-H-R envelope by one sample ----
-      // (per-sample so the 2 s phases are sample-accurate at any block size)
-      eg_.advance(alpha_a, alpha_r);
-
-      // scale output to a musical level (saturator max output is ~0.76)
-      // and apply the A-H-R envelope level.
-      //
-      // Four parallel branches:
-      //   - y_filt (A+B through folder/saturator/SVF) * main_level  -> MAIN knob
-      //   - the CHORD voice — runs through its OWN folder+saturator pass (same
-      //     SATU/ASYM/FOLD knobs) so it keeps the unit's drive "color", and is
-      //     mixed in parallel so the MAIN knob ducks only A+B. Scaled by
-      //     kMixChordDirect so it lands near the A+B level (not the old ~0.05).
-      //   - sub (sub-octave sine) and sub2 (f/4) — low end, bypass soft-clip.
-      // Per-branch worst-case peaks (saturator outputs bounded in (-1, 1)):
-      //   |y_filt * 0.5f|    < 0.5  (A+B through saturator)
-      //   |chord_sat * 0.8f| < 0.8  (chord through its own saturator)
-      //   |sub * 0.5f|       < 0.5  (sine bounded in [-1, 1])
-      //   |sub2 * 0.4f|      < 0.4  (LPF'd, gated voice bounded in (-1, 1))
-      //   |sum|              < 2.2  (worst case, branches rarely peak together;
-      //                               the hard clip below guards digital overflow)
-      // At the default SUB1 = 50%, the sub branch is at 0.25 amplitude; SUB2
-      // defaults to 0 (off). A hard clip prevents digital overflow when all
-      // branches peak simultaneously.
-      //
-      // CHORD through its OWN folder + saturator (stateless — same functions
-      // as the A+B path, but driven by the chord's OWN knobs CHSAT/CHFLD, so
-      // the chord's drive/fold are independent of the A+B SATU/FOLD).
-      // chord_gain is linear (p.chord_level, 0..1); lvl_c is the per-sample
-      // LFO level modulation. ASYM is SHARED (p.asym, same as A+B) per design.
-      //
-      // The chord's drive/fold are clamped exactly like the A+B path (no
-      // random-walk modulation — RW_DRV/RW_FLD affect only the A+B voice).
-      float chord_drive_clamped = p.chord_drive;
-      if (chord_drive_clamped < 0.f) chord_drive_clamped = 0.f;
-      else if (chord_drive_clamped > kSatuMax) chord_drive_clamped = kSatuMax;
-      float chord_fold_clamped = p.chord_fold;
-      if (chord_fold_clamped < 0.f) chord_fold_clamped = 0.f;
-      else if (chord_fold_clamped > 1.f) chord_fold_clamped = 1.f;
-      const float chord_in   = wav_c * chord_gain * lvl_c;
-      const float chord_fold = Saturator::fold(chord_in, chord_fold_clamped);
-      const float chord_sat  = Saturator::saturate(chord_fold, chord_drive_clamped, p.asym);
-      float raw = (y_filt * kMixOsc * p.main_level
-                 + chord_sat * kMixChordDirect
-                 + sub * p.sub_level * lvl_sub * kMixSub
-                 + sub2 * sub2_level * kMixSub2) * eg_.env;
-      if (raw > 1.f)
-        raw = 1.f;
-      else if (raw < -1.f)
-        raw = -1.f;
-      out[0] = raw;
-    }
-  }
-
+  // Per-sample audio path (phasor advance, wavetable resolve, A+B chain,
+  // chord, sub/sub-2, final mix, envelope). The body lives in osc_mix.h.
+  void process(const float *__restrict in, float *__restrict out, uint32_t frames) override final;
 private:
   // cached derived coefficients, recomputed only when inputs change
   // (setPitch / setParameter(DETUNE)) to keep the audio path lightweight.
@@ -1558,3 +563,10 @@ private:
   // WaveTable::kLfoMorphDepth.
   WaveTable waves_;
 };
+
+// The Osc method bodies are defined here, AFTER the class is complete, so
+// they can reference every data member and the global-scope tuning constants
+// from osc_constants.h.
+#include "osc_param_apply.h"   // Osc::apply_edit_param()
+#include "osc_param_display.h" // Osc::getParameterStrValue()
+#include "osc_mix.h"           // Osc::process()
