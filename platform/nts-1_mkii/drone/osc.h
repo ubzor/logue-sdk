@@ -104,14 +104,29 @@ public:
     // (DETUNE..RW_LSM = 0..29) are not renumbered.
     CHSAT,          // chord saturator drive (0..3.0, default = SATU default)
     CHFLD,          // chord wavefolder depth (0..1, default = FOLD default = off)
+    // ---- Enrichment: second chord interval, jitter, ring-mod, phase-FM ----
+    // Appended at the END (after CHFLD) so the existing edit indices
+    // (DETUNE..CHFLD = 0..31) are not renumbered. See the per-param comments
+    // in osc_param_apply.h / osc_mix.h for the DSP details.
+    CINT2,          // second chord-voice interval (0..1900 cents, continuous; shares CHRD level + CHSAT/CHFLD)
+    JIT,            // random phase jitter on A/B (0..100% -> 0..kJitMaxCycles peak, default 0 = off)
+    RMOD,           // A*B ring-mod parallel voice (0..100%, default 0 = off)
+    FM_A,           // STATIC phase-FM index on osc A (B modulates A), 0..100% -> 0..kFmMaxCents/2 cycles (no RATE needed)
+    FM_B,           // STATIC phase-FM index on osc B (A modulates B), 0..100% -> 0..kFmMaxCents/2 cycles (no RATE needed)
+    // RFM_A / RFM_B: random-walk DEPTH on the FM index (the "откуда гулять" knob,
+    // like RDRV on SATU or RWAV on WAV1). The walk deviation (rw_[0]) scales
+    // RFM and is gated by the shared RATE ceiling, so RFM adds a "breathing"
+    // on top of the static FM index. RFM=0 -> pure static FM (no wandering).
+    RFM_A,          // random-walk depth on FM A index (0..100%, RATE-gated)
+    RFM_B,          // random-walk depth on FM B index (0..100%, RATE-gated)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..RW_LSM).
-  static constexpr uint8_t kEditParamCount = 32; // DETUNE..CHFLD
-  // The first editable enum value. The UI (header.c PARAM slot, 0..31) expects
-  // this order (select_ index -> parameter), 32 parameters total:
+  // Number of editable DSP parameters (DETUNE..FM_B).
+  static constexpr uint8_t kEditParamCount = 41; // DETUNE..RFM_B
+  // The first editable enum value. The UI (header.c PARAM slot, 0..36) expects
+  // this order (select_ index -> parameter), 37 parameters total:
   //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
   //   2 SPD1            3 SMT1            (Tone stream period / smooth)
   //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
@@ -126,8 +141,15 @@ public:
   //   27 RW_LVL (RW_LVL: breath depth on voice levels)
   //   28 RW_LSP (RW_LSP: breath stream period)  29 RW_LSM (RW_LSM: breath smooth)
   //   30 CHSAT (chord's own saturator drive)  31 CHFLD (chord's own fold depth)
+  //   32 CINT2 (second chord interval, 0..1900 c)
+  //   33 JIT (random phase jitter on A/B)
+  //   34 RMOD (A*B ring-mod parallel voice)
+  //   35 FM1 (FM_A: STATIC phase-FM on A by B)
+  //   36 FM2 (FM_B: STATIC phase-FM on B by A)
+  //   37 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)
+  //   38 RFMB (RFM_B: random-walk depth on FM B, RATE-gated)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 32 = (CHFLD - DETUNE + 1); select_ 0..31 -> DETUNE..CHFLD.
+  // kEditParamCount = 41 = (RFM_B - DETUNE + 1); select_ 0..40 -> DETUNE..RFM_B.
   static constexpr uint8_t kEditParamFirst = DETUNE;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
@@ -139,7 +161,7 @@ public:
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
   // RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0};
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -183,13 +205,16 @@ public:
   volatile uint32_t sim_edit_request_;
 
   // Write an edit-parameter request from the main thread (UI). Index is
-  // 0..16 (kEditParamCount - 1), raw is 0..1023. Safe to call from any
+  // 0..(kEditParamCount - 1), raw is 0..1023. Safe to call from any
   // thread; the audio worklet thread picks it up on the next block.
+  // The index occupies 6 bits (bits 18..23) so kEditParamCount may grow
+  // up to 64 without re-packing. raw occupies 10 bits (bits 8..17).
+  // Bit 31 is the "request pending" flag; bits 24..30 are reserved (0).
   void simEditRequest(uint8_t index, int32_t raw)
   {
     if (index >= kEditParamCount)
       return;
-    const uint32_t packed = (1U << 31) | (static_cast<uint32_t>(index) & 0x1FU) |
+    const uint32_t packed = (1U << 31) | (static_cast<uint32_t>(index) & 0x3FU) |
                             ((static_cast<uint32_t>(raw) & 0x3FFU) << 8);
     sim_edit_request_ = packed;
   }
@@ -287,6 +312,7 @@ public:
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
     chord_.reset(); // chord-voice phasor (the CINT interval default lives in params_.chord_cents)
+    chord2_.reset(); // second chord-voice phasor (CINT2)
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
@@ -309,6 +335,8 @@ public:
     prev_wav_b_ = 0.f;
     xfm_smooth_a_ = 0.f; // cross-FM index LPF state (no FM on the first sample)
     xfm_smooth_b_ = 0.f;
+    fm_smooth_a_ = 0.f; // phase-FM index LPF state (no FM on the first sample)
+    fm_smooth_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_.reset();
@@ -331,6 +359,7 @@ public:
     phasor_a_ = 0.f;
     phasor_b_ = 0.f;
     chord_.reset();
+    chord2_.reset();
     phasor_sub_ = 0.f;
     phasor_sub2_ = 0.f;
     sub2_.lpf_state = 0.f;
@@ -342,6 +371,8 @@ public:
     prev_wav_b_ = 0.f;
     xfm_smooth_a_ = 0.f; // cross-FM index LPF state
     xfm_smooth_b_ = 0.f;
+    fm_smooth_a_ = 0.f; // phase-FM index LPF state
+    fm_smooth_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
     eg_.reset();
@@ -385,6 +416,7 @@ public:
     w0_ = w0; // base phase increment
     update_w0_det(); // recompute A/B detuned w0 (symmetric ±c/2, K-rate)
     chord_.update(w0_, params_.chord_cents); // chord phasor: f * 2^(cents/1200)
+    chord2_.update(w0_, params_.chord2_cents); // second chord phasor: f * 2^(cents2/1200)
     update_w0_sub(); // sub factor is a compile-time constant, no param dependency
     update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
     waves_.update(w0_); // re-resolve wavetables: morph position shifts with pitch
@@ -441,6 +473,12 @@ private:
   Sub2Voice sub2_;
   // Chord voice (third oscillator at selectable interval). See osc_chord.h.
   ChordVoice chord_;
+  // Second chord voice (fourth oscillator at a second selectable interval).
+  // Shares the chord's level (CHRD), wavetable (WAV3), folder/saturator
+  // (CHSAT/CHFLD), and the Breath stream's lvl_c (so both intervals breathe
+  // in sync — the chord is one object, not two independent voices). See the
+  // CINT2 branch in the audio path (osc_mix.h) and osc_param_apply.h.
+  ChordVoice chord2_;
 
   // Four independent random-walk streams (dual channel each). See
   // osc_random_walk.h. Index 0 = Tone (detune + cross-FM), 1 = Timbre
@@ -566,6 +604,13 @@ private:
   // reset so the first sample's FM is a no-op (the index is 0 when XFM=0).
   float xfm_smooth_a_ = 0.f;
   float xfm_smooth_b_ = 0.f;
+  // One-pole low-pass state for the PHASE-FM modulation INDEX (see the FM
+  // branch in the phasor update, osc_mix.h, and osc_constants.h kFmSmoothAlpha).
+  // Same mechanism as xfm_smooth_* but for the FM1/FM2 knobs (phase modulation,
+  // distinct from XFM's wavetable-table modulation). Zeroed on init / reset so
+  // the first sample's FM is a no-op (the index is 0 when FM=0 / walk off).
+  float fm_smooth_a_ = 0.f;
+  float fm_smooth_b_ = 0.f;
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
   // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
   // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its

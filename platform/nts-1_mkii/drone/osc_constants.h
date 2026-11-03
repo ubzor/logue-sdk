@@ -66,6 +66,64 @@
   // of the range (quadratic = 2). Keep 1 for the stock linear feel.
   static constexpr float    kXfmCurveExp = 2.0f;
 
+// ---- Phase-FM (FM1 / FM2): classic phase modulation, distinct from XFM -----
+// XFM modulates the WAVETABLE TABLE INDEX (a slow "breathing" morph through
+// the 91-table bank). FM1/FM2 modulate the CARRIER PHASOR directly: the
+// modulator's wavetable output (prev_wav_b_ for FM1, prev_wav_a_ for FM2) is
+// multiplied by 0.5 and the depth (RW-gated, like XFM) and added to the
+// carrier's per-sample phase increment. This produces the classic FM harmonic
+// sidebands (a Bessel-expanded partial set) rather than a table morph. The
+// depth is in CYCLES (peak phase deviation = kFmMaxCents / 2 at 100% knob,
+// after the 0.5 normalization and the kFmCurveExp curve), so the sideband
+// spread is frequency-independent (no low-end "howl"). Gated by the shared
+// random-walk depth (rw_amount) so the sidebands "ring" and "fade" with the
+// walk — the most drone-like FM behavior. At FM=0 or RATE=0 the FM is off and
+// the stock sound is unchanged.
+  // Maximum phase-FM index (peak phase deviation in cycles, before the 0.5
+  // normalization) at 100% knob. kFmMaxCents / 2 = 0.2 cycles (20% of the
+  // carrier) is a clearly-audible FM "color" without going into the dense
+  // aliasing region; the knob sweeps 0..kFmMaxCents quadratically from raw.
+  static constexpr float    kFmMaxCents   = 0.4f;        // full FM index (0..0.2 cycles)
+  // One-pole low-pass coefficient (per sample) for the FM modulation INDEX.
+  // Reuses the XFM value (0.02 @48 kHz => ~0.3 ms) — the same "tame the fast
+  // sign-flips, keep the slow breathing" rationale applies.
+  static constexpr float    kFmSmoothAlpha = kXfmSmoothAlpha; // 0.02
+  // Phase-FM depth curve: same quadratic as XFM (kFmCurveExp) so the lower
+  // part of the knob is a very subtle "breathing" and the harsh sidebands
+  // only open up near the top.
+  static constexpr float    kFmCurveExp    = kXfmCurveExp;  // 2.0
+
+// ---- Phase jitter (JIT): random phase wobble on A/B -------------------------
+// The JIT knob adds a per-sample random offset (white() - 0.5) * jit to each
+// voice's phasor increment, "smearing" the carrier into a dense set of
+// partials (the carrier's harmonics spread into a quasi-noise band). The
+// effect is frequency-DEPENDENT (unlike XFM/FM, which are cycles-based and
+// frequency-independent): at low notes the jitter is inaudible (a 0.005-cycle
+// wobble on a 50 Hz carrier is a 0.25 Hz wobble, below audibility), while at
+// high notes it becomes an audible "spread". This is the desired drone
+// behavior — the low end stays clean, the top end "blooms". jit_cycles is the
+// PEAK phase deviation in cycles (0..kJitMaxCycles); the per-sample offset is
+// (white() - 0.5) * jit_cycles, so the RMS is jit_cycles / sqrt(12).
+  // Maximum phase-jitter peak (cycles) at 100% knob. 0.005 = 0.5% of the
+  // carrier cycle: at 500 Hz that is a +/-2.5 Hz wobble (clearly audible
+  // "spread"), at 50 Hz a +/-0.25 Hz wobble (inaudible, stays clean).
+  static constexpr float    kJitMaxCycles = 0.005f;
+
+// ---- Ring-mod (RMOD): A*B parallel voice ------------------------------------
+// The RMOD knob computes (wav_a * wav_b) * ring_mix and adds it to the final
+// mix as a PARALLEL branch (like the chord), NOT inserted into the A+B
+// saturator chain. Rationale: A*B is a spectral "difference" (the sum of the
+// two wavetables' partials, shifted by +/- each other's frequencies) — it
+// adds metallic "ring" and "beating" without disturbing the A+B fundamental.
+// If RMOD were inserted into the A+B mix, at 100% the fundamental would
+// vanish (A*B has no fundamental, only sidebands), which is not a drone.
+// As a parallel voice, RMOD=100% adds a full-level metallic "ring" on top of
+// the intact A+B tone.
+  // Ring-mod parallel-voice scale. |wav_a * wav_b| <= 1, so the branch peak
+  // is kMixRing * ring_mix (<= kMixRing). 0.5 matches kMixOsc so a full RMOD
+  // sits near the A+B level (not louder, not quieter).
+  static constexpr float    kMixRing = 0.5f;
+
 // ---- Sub-octave sine (low-end body) ------------------------------------------
 // The sub voice is a fixed sine one octave below the base note (w0/2). It is
 // slightly detuned below the true octave (-4 cents) so it does not comb-filter
@@ -105,6 +163,8 @@
   // the SUB1 sub (kMixSub=0.5 * 0.5 level). The chord's own CHRD knob scales
   // the input to its saturator, so users can ride it up or down from here.
   static constexpr float    kMixChordDirect = 0.8f;
+  // (kMixRing for the RMOD parallel voice is defined in the RMOD block above,
+  // next to kJitMaxCycles / kFm*, so the enrichment constants stay together.)
 
 // ---- Pitch / frequency constants ---------------------------------------------
   // Platform sample rate (NTS-1 mkII: 48 kHz). Hard-coded: the Processor base

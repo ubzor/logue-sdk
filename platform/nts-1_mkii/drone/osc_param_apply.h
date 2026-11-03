@@ -223,6 +223,61 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.chord_fold = param_10bit_to_f32(value);
       break;
 
+    // ---- Enrichment: second chord interval (CINT2) ----
+    // A second chord-voice oscillator at a continuous interval above the base
+    // (0..ChordVoice::kMaxCents = 1900 c). Shares the chord's level (CHRD),
+    // wavetable (WAV3), folder/saturator (CHSAT/CHFLD), and the Breath stream's
+    // lvl_c (both intervals breathe in sync — the chord is one object). The
+    // phasor is recomputed at K-rate (chord2_.update) exactly like CHRD_INT.
+    case CINT2:
+      {
+        params_.chord2_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
+        chord2_.update(w0_, params_.chord2_cents);
+      }
+      break;
+
+    // ---- Enrichment: random phase jitter on A/B (JIT) ----
+    // The knob maps 0..1023 -> 0..kJitMaxCycles (peak phase deviation, cycles).
+    // The audio path adds (osc_white() - 0.5) * jit_cycles to each voice's
+    // phasor increment, "smearing" the carrier into a dense partial. At 0 the
+    // jitter is off (regression-safe). The per-sample white() draws happen in
+    // process() (never here, K-rate only).
+    case JIT:
+      params_.jit_cycles = param_10bit_to_f32(value) * kJitMaxCycles;
+      break;
+
+    // ---- Enrichment: A*B ring-mod parallel voice (RMOD) ----
+    // The knob maps 0..1023 -> 0..1 (mix depth). The audio path computes
+    // (wav_a * wav_b) * ring_mix and adds it to the final mix as a parallel
+    // branch (like the chord). At 0 the ring-mod is off (regression-safe).
+    case RMOD:
+      params_.ring_mix = param_10bit_to_f32(value);
+      break;
+
+    // ---- Enrichment: phase-FM (FM_A / FM_B = STATIC index, RFM_A/B = walk) ----
+    // Classic phase modulation of A by B (FM_A) and B by A (FM_B), distinct
+    // from XFM (which modulates the wavetable TABLE index, not the phasor).
+    // FM_A/FM_B are the STATIC index: the knob maps 0..1023 -> 0..kFmMaxCents
+    // (peak phase deviation, cycles, before the 0.5 normalization). Unlike the
+    // old RW-gated version, the static index is NOT gated by RATE — turning FM
+    // on gives constant sidebands immediately (a classic FM index), no walk
+    // required. RFM_A/RFM_B (0..1) are the random-walk DEPTH on that index:
+    // the audio path adds (rw_[0].dev * rw_amt * rfm * kFmMaxCents) so the FM
+    // "breathes" with the walk on top of the static sidebands (gated by RATE,
+    // like every other walk). At fm=0 & rfm=0 the FM is fully off.
+    case FM_A:
+      params_.fm_a = param_10bit_to_f32(value) * kFmMaxCents;
+      break;
+    case FM_B:
+      params_.fm_b = param_10bit_to_f32(value) * kFmMaxCents;
+      break;
+    case RFM_A:
+      params_.rfm_a = param_10bit_to_f32(value);
+      break;
+    case RFM_B:
+      params_.rfm_b = param_10bit_to_f32(value);
+      break;
+
     default:
       break;
   }

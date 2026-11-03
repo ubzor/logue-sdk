@@ -195,7 +195,7 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      const EDIT_PARAM_COUNT = 32;
+      const EDIT_PARAM_COUNT = 41;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DETU, 1 RATE (shared depth ceiling),
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
@@ -210,7 +210,15 @@
       // 27 RVLL (RW_LVL, breath depth), 28 RVLS (RW_LSP, breath period),
       // 29 RVLSM (RW_LSM, breath smooth),
       // 30 CHSAT (chord's own saturator drive, 0..300),
-      // 31 CHFLD (chord's own wavefolder depth, 0..100%).
+      // 31 CHFLD (chord's own wavefolder depth, 0..100%),
+      // 32 CINT2 (second chord interval, 0..1900 c),
+      // 33 JIT (random phase jitter on A/B, 0..100%),
+      // 34 RMOD (A*B ring-mod parallel voice, 0..100%),
+      // 35 FM1 (STATIC phase-FM on A by B, 0..100%),
+      // 36 FM2 (STATIC phase-FM on B by A, 0..100%),
+      // 37 RFMA (random-walk depth on FM A, 0..100%, RATE-gated),
+      // 38 RFMB (random-walk depth on FM B, 0..100%, RATE-gated),
+      // 39..40 (reserved).
       const EDIT_PARAM_NAMES = [
         "Detune", "Rate",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
@@ -221,6 +229,7 @@
         "Cross-FM A", "Cross-FM B", "Cutoff", "Resonance", "Cutoff Wander",
         "Breath Depth", "Breath Rate", "Breath Smooth",
         "Chord Drive", "Chord Fold",
+        "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Wander", "FM B Wander",
       ];
 
       // Semantic groups of the 29 edit parameters (UI-only; the DSP enum order
@@ -244,16 +253,16 @@
         { title: "TIMBRE FILTER", col: 0, items: [24, 25, 26] },
         { title: "BREATH",        col: 0, items: [27, 28, 29] },
         // ---- Column 1 ----
-        { title: "PITCH",         col: 1, items: [0, 22, 23] },
+        { title: "PITCH",         col: 1, items: [0, 22, 23, 35, 36, 33] },
         // mt-auto: WANDER is the bottom block of col 1, so push it to the
         // column's bottom edge (see the layout loop for the mechanism).
-        { title: "WANDER",        col: 1, className: "mt-auto", items: [1, 2, 3, 4, 5, 6, 7] },
+        { title: "WANDER",        col: 1, className: "mt-auto", items: [37, 38, 1, 2, 3, 4, 5, 6, 7] },
         // ---- Column 2 ----
-        { title: "ANCHORS",       col: 2, items: [8, 9, 16, 17, 18] },
+        { title: "ANCHORS",       col: 2, items: [8, 9, 16, 17, 32, 18] },
         // TEXTURE: the A+B saturation stack (SATU/ASYM/FOLD) + their wander
         // (RDRV/RFLD), plus the CHORD voice's OWN drive/fold (CHSAT/CHFLD) so
         // the chord's drive can be set independently of the main voice.
-        { title: "TEXTURE",       col: 2, items: [10, 11, 12, 20, 21, 30, 31] },
+        { title: "TEXTURE",       col: 2, items: [34, 10, 11, 12, 20, 21, 30, 31] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 30 editable
@@ -310,8 +319,8 @@
         }
         if (idx === 10 || idx === 30)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU / CHSAT)
-        if (idx === 17) {
-          // CINT (edit idx 17): 0..1900 cents (continuous interval)
+        if (idx === 17 || idx === 32) {
+          // CINT (edit idx 17) / CINT2 (edit idx 32): 0..1900 cents (continuous interval)
           return Math.round((raw / 1023) * 1900) + "c";
         }
         if (idx === 22 || idx === 23) {
@@ -319,6 +328,12 @@
           // (0..0.4 c at kXfmMaxCents=0.8, mirrors the constant in osc.h).
           // Displayed in "cents" for readability (1 c = 0.01 cycle of phase).
           return ((raw / 1023) * 4).toFixed(1) + "c";
+        }
+        if (idx === 35 || idx === 36) {
+          // FM1 / FM2 (edit 35/36): phase-FM index, 0..kFmMaxCents/2 cycles
+          // (0..0.2 c at kFmMaxCents=0.4, mirrors the constant in osc.h).
+          // Displayed in "cents" for readability (1 c = 0.01 cycle of phase).
+          return ((raw / 1023) * 0.4).toFixed(1) + "c";
         }
         if (idx === 24) {
           // FCUT (edit 24): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.
@@ -753,7 +768,7 @@
       // RWAV 0, RDRV 0, RFLD 0, XFM 0, XFM2 0, FCUT 921, RES 0, RWFC 0,
       // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
       // CHFLD 0 (chord fold off, = FOLD default).
-      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0];
+      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to

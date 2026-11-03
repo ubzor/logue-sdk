@@ -38,7 +38,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     const uint32_t req = sim_edit_request_;
     if (req & (1U << 31))
     {
-      const uint8_t idx = (uint8_t)(req & 0x1FU);
+      const uint8_t idx = (uint8_t)(req & 0x3FU);
       const int32_t raw = (int32_t)((req >> 8) & 0x3FFU);
       if (idx < kEditParamCount)
       {
@@ -171,6 +171,34 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // knob is L-rate) instead of inside the loop. At 0 the curve is 0.
   const float xfm_a_curve = powf(p.xfm_a, kXfmCurveExp) * kXfmMaxCents;
   const float xfm_b_curve = powf(p.xfm_b, kXfmCurveExp) * kXfmMaxCents;
+  // ---- Phase-FM (FM1/FM2 = STATIC index + RFM walk): per-block cache ----
+  // FM_A / FM_B are the STATIC FM index (peak phase deviation, cycles, after
+  // the 0.5 normalization): the knob value (already 0..kFmMaxCents) times 0.5.
+  // Unlike XFM (pure walk) the static index is NOT gated by RATE — turning FM
+  // on gives constant sidebands immediately. RFM_A / RFM_B add a random-walk
+  // "breathing" on top: the walk depth (dev * rw_amt * rfm) is gated by RATE,
+  // like every other walk. Precomputed once per block (knobs are L-rate); the
+  // per-sample raw index (prev_wav * 0.5 * eff_index) is in the loop below.
+  // At fm=0 & rfm=0 the FM is fully off (regression-safe).
+  const float fm_a_static = p.fm_a * 0.5f;  // static peak index (cycles)
+  const float fm_b_static = p.fm_b * 0.5f;  // static peak index (cycles)
+  const bool fm_a_wander = rw_active && p.rfm_a > 0.f;  // walk on FM A (RATE-gated)
+  const bool fm_b_wander = rw_active && p.rfm_b > 0.f;  // walk on FM B (RATE-gated)
+  const float fm_a_wander_depth = p.rfm_a * kFmMaxCents * 0.5f;  // walk peak (cycles)
+  const float fm_b_wander_depth = p.rfm_b * kFmMaxCents * 0.5f;  // walk peak (cycles)
+  // ---- JIT: per-block cache (the per-sample white() draws are in the loop) ----
+  // The knob is L-rate; cache the > 0 gate so the loop's branch is a simple
+  // const test. At 0 (default) the jitter is off and the phasor update is
+  // identical to the stock sound.
+  const bool jit_active = p.jit_cycles > 0.f;
+  // ---- RMOD: per-block cache (the per-sample wav_a*wav_b is in the loop) ----
+  // The knob is L-rate; cache the > 0 gate so the loop's ring-mod branch is a
+  // simple const test. At 0 (default) the ring-mod is off.
+  const bool rmod_active = p.ring_mix > 0.f;
+  // ---- CINT2: per-block cache (the per-sample chord2 advance is in the loop) ----
+  // chord2_gain mirrors chord_gain (the CINT2 voice shares the CHRD level).
+  // Used to gate the second chord's resolve_wave lookup (skip when silent).
+  const float chord2_gain = p.chord_level;
   // SVF: the internal 12 dB/oct low-pass is engaged when the dry/wet (svf_wet)
   // is non-zero. When svf_wet == 0 (the default) the filter is transparent
   // and its state update is skipped (regression-safe). The walk-modified
@@ -311,14 +339,50 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // sound is unchanged. The state lives in xfm_smooth_a_/b_.
       xfm_smooth_a_ += kXfmSmoothAlpha * (xfm_a_raw - xfm_smooth_a_);
       xfm_smooth_b_ += kXfmSmoothAlpha * (xfm_b_raw - xfm_smooth_b_);
-      phasor_a_ += w0_a + xfm_smooth_a_;
-      phasor_b_ += w0_b + xfm_smooth_b_;
+      // ---- Phase-FM (FM1/FM2): static index + RFM walk "breathing" ----
+      // eff_index = static (fm_a_static) + walk (dev * rw_amt * wander_depth).
+      // The static part is ALWAYS present (no RATE gate) — turning FM on gives
+      // constant sidebands immediately. The walk part (RFM) is RATE-gated and
+      // adds a slow "breathing" on top, like RDRV on SATU. The combined index
+      // is then scaled by the modulator's wavetable output (prev_wav * 0.5 is
+      // already folded into the static/wander depths above, so here we
+      // multiply by the full prev_wav in [-1,1] to get the per-sample index).
+      // One-pole (kFmSmoothAlpha) tames the fast sign-flips; the state lives in
+      // fm_smooth_a_/b_ (separate from xfm_smooth_*). At fm=0 & rfm=0 the
+      // eff_index is 0 and the LPF relaxes to 0 (regression-safe).
+      const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
+      const float fm_b_wander = fm_b_wander ? (rw_[0].dev_a * rw_amt * fm_b_wander_depth) : 0.f;
+      const float fm_a_eff = fm_a_static + fm_a_wander;  // effective index (cycles)
+      const float fm_b_eff = fm_b_static + fm_b_wander;  // effective index (cycles)
+      const float fm_a_raw = prev_wav_b_ * fm_a_eff;  // modulator ([-1,1]) * index
+      const float fm_b_raw = prev_wav_a_ * fm_b_eff;  // modulator ([-1,1]) * index
+      fm_smooth_a_ += kFmSmoothAlpha * (fm_a_raw - fm_smooth_a_);
+      fm_smooth_b_ += kFmSmoothAlpha * (fm_b_raw - fm_smooth_b_);
+      // ---- JIT: random phase jitter on A/B (per-sample white() draws) ----
+      // (osc_white() - 0.5) * jit_cycles is a uniform offset in
+      // [-jit/2, +jit/2] cycles, "smearing" the carrier into a dense partial.
+      // At jit_cycles = 0 (default) both offsets are 0 (regression-safe).
+      // Each voice draws its OWN white() so A and B are not phase-locked.
+      const float jit_a = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
+      const float jit_b = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
+      // Combined per-sample phase increment: base detuned w0 + XFM (table
+      // morph, smoothed) + FM (phase mod, smoothed) + JIT (random wobble).
+      // The floorf wrap below (modular, x - floorf(x)) handles the signed
+      // XFM/FM/JIT offsets, so the phasor stays in [0, 1) for any finite
+      // input (no negative-LUT-UB, see the wrap comment below).
+      phasor_a_ += w0_a + xfm_smooth_a_ + fm_smooth_a_ + jit_a;
+      phasor_b_ += w0_b + xfm_smooth_b_ + fm_smooth_b_ + jit_b;
     }
     // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
     // No random-walk modulation — the chord voice is a stable "anchor"
     // like SUB2, not a beating voice. advance() returns false if the
     // interval is OFF (no oscillator).
     const bool chord_active = chord_.advance();
+    // Second chord phasor (CINT2): same stable-anchor behavior as chord_.
+    // advance() returns false if the second interval is 0 (OFF / unison).
+    // chord2_gain mirrors chord_gain (the CINT2 voice shares the CHRD level);
+    // it is used to gate the resolve_wave lookup below (skip when silent).
+    const bool chord2_active = chord2_.advance();
 
     // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
     // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
@@ -396,6 +460,15 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // wavetable lookup. See osc_chord.h for the interval table.
     const float wav_c = (chord_active && chord_gain > 0.f)
         ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord_.phasor)
+        : 0.f;
+    // Second chord voice (CINT2): same wavetable (WAV3) + LFO morph as the
+    // first chord, but at a different interval (chord2_.phasor). Gated by
+    // chord2_active (interval > 0) AND chord2_gain > 0 (CHRD > 0) to keep the
+    // default path (CINT2 = 0 or CHRD = 0) free of the extra lookup. Both
+    // intervals share lvl_c (Breath stream dev_c) in the final mix, so they
+    // breathe in sync (the chord is one object, not two independent voices).
+    const float wav_c2 = (chord2_active && chord2_gain > 0.f)
+        ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord2_.phasor)
         : 0.f;
 
     // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
@@ -517,13 +590,30 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     float chord_fold_clamped = p.chord_fold;
     if (chord_fold_clamped < 0.f) chord_fold_clamped = 0.f;
     else if (chord_fold_clamped > 1.f) chord_fold_clamped = 1.f;
-    const float chord_in   = wav_c * chord_gain * lvl_c;
+    // Both chord intervals (CINT + CINT2) share the CHRD level (chord_gain),
+    // the Breath stream's lvl_c (they breathe in sync), and the chord's OWN
+    // folder+saturator (CHSAT/CHFLD, ASYM shared). Summing them BEFORE the
+    // saturator means the chord's drive/fold sees the combined level (a full
+    // chord "drives" the saturator more than a single interval), which is the
+    // desired "chord = one object" behavior. At CINT2 = 0 (default off) or
+    // CHRD = 0, wav_c2 = 0 and the sum is just wav_c (regression-safe).
+    const float chord_in   = (wav_c + wav_c2) * chord_gain * lvl_c;
     const float chord_fold = Saturator::fold(chord_in, chord_fold_clamped);
     const float chord_sat  = Saturator::saturate(chord_fold, chord_drive_clamped, p.asym);
+    // ---- RMOD: A*B ring-mod parallel voice (like the chord, NOT in A+B) ----
+    // (wav_a * wav_b) * ring_mix is a spectral "difference" (the two
+    // wavetables' partials shifted by +/- each other's frequencies) — it
+    // adds metallic "ring" / "beating" without disturbing the A+B
+    // fundamental. Mixed in parallel (like the chord) so RMOD=100% adds a
+    // full-level metallic "ring" on top of the intact A+B tone, instead of
+    // replacing it (which is what an in-A+B mix would do). At ring_mix = 0
+    // (default) the branch is 0 (regression-safe).
+    const float ring_out = rmod_active ? (wav_a * wav_b) * p.ring_mix : 0.f;
     float raw = (y_filt * kMixOsc * p.main_level
                + chord_sat * kMixChordDirect
                + sub * p.sub_level * lvl_sub * kMixSub
-               + sub2 * sub2_level * kMixSub2) * eg_.env;
+               + sub2 * sub2_level * kMixSub2
+               + ring_out * kMixRing) * eg_.env;
     if (raw > 1.f)
       raw = 1.f;
     else if (raw < -1.f)

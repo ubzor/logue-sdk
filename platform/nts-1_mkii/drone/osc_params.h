@@ -114,6 +114,39 @@ struct OscParamsData
   // defaults (drive=1.0, fold=0) so the stock sound is bit-identical.
   float chord_drive;  // 0.f .. 3.f, edit CHSAT: chord's own saturator drive
   float chord_fold;   // 0.f .. 1.f, edit CHFLD: chord's own wavefolder depth
+  // ---- Enrichment: second chord interval, jitter, ring-mod, phase-FM ----
+  // CINT2: second chord-voice interval (0..ChordVoice::kMaxCents). Shares the
+  // chord's level (chord_level/CHRD), wavetable (wave_c/WAV3), folder/saturator
+  // (chord_drive/chord_fold via CHSAT/CHFLD), and the Breath stream's lvl_c, so
+  // both intervals breathe in sync (the chord is one object). See the CINT2
+  // branch in the audio path (osc_mix.h).
+  float chord2_cents; // 0.f .. ChordVoice::kMaxCents (1900), edit CINT2
+  // JIT: random phase jitter on A/B. The knob maps 0..1023 -> 0..kJitMaxCycles
+  // (peak phase deviation, in cycles). The audio path adds (white()-0.5)*jit
+  // to each voice's phasor increment, so the carrier "smears" into a dense
+  // partial. At 0 (default) the jitter is off and the stock sound is unchanged.
+  float jit_cycles;   // 0.f .. kJitMaxCycles, edit JIT (peak phase deviation)
+  // RMOD: A*B ring-mod parallel voice. The knob maps 0..1023 -> 0..1 (mix
+  // depth). The audio path computes (wav_a * wav_b) * ring_mix and adds it to
+  // the final mix (parallel branch, like the chord). At 0 (default) the
+  // ring-mod is off and the stock sound is unchanged.
+  float ring_mix;     // 0.f .. 1.f, edit RMOD (A*B ring-mod level)
+  // FM1/FM2 (FM_A/FM_B): phase modulation of A by B and vice versa. The knob
+  // maps 0..1023 -> 0..kFmMaxCents (peak phase deviation, in cycles, after the
+  // 0.5 normalization and the kFmCurveExp curve). RW-gated like XFM (the
+  // sidebands "breathe" with the random walk). At 0 (default) or RATE=0 the
+  // FM is off and the stock sound is unchanged.
+  float fm_a;         // 0.f .. kFmMaxCents, edit FM1 (STATIC phase-FM on A by B)
+  float fm_b;         // 0.f .. kFmMaxCents, edit FM2 (STATIC phase-FM on B by A)
+  // RFM1/RFM2 (RFM_A/RFM_B): random-walk DEPTH on the FM index (the
+  // "откуда гулять" knob, like RDRV on SATU or RWAV on WAV1). The audio path
+  // adds (rw_[0].dev * rw_amt * rfm * kFmMaxCents) to the static fm_a/fm_b
+  // index, so the FM "breathes" with the random walk on top of the static
+  // sidebands. Gated by the shared RATE ceiling (rw_amt). At rfm=0 (default)
+  // the FM is purely static (no wandering); at fm=0 & rfm>0 & RATE>0 it is
+  // purely "breathing".
+  float rfm_a;        // 0.f .. 1.f, edit RFMA (random-walk depth on FM A)
+  float rfm_b;        // 0.f .. 1.f, edit RFMB (random-walk depth on FM B)
 
   void reset()
   {
@@ -161,6 +194,20 @@ struct OscParamsData
       // and no fold as the main voice.
       chord_drive = 1.0f; // default: gentle drive (same as SATU)
       chord_fold = 0.f;   // default: chord wavefolder off (same as FOLD)
+      // ---- Enrichment defaults (CINT2 / JIT / RMOD / FM1 / FM2) ----
+      // CINT2 defaults to a major sixth (950 c): with the default CINT=700 c
+      // (fifth) and CINT2=950 c (sixth) the stock drone gains a gentle major-
+      // sixth "sparkle" on top of the fifth. The user can turn it off by
+      // setting CINT2 to 0 (unison) or CHRD to 0 (silences the whole chord).
+      // JIT / RMOD / FM1 / FM2 all default to 0 (off), so the enrichment
+      // voices are silent at the factory preset.
+      chord2_cents = 950.f; // default: major sixth (~950 c)
+      jit_cycles   = 0.f;   // default: jitter off
+      ring_mix     = 0.f;   // default: ring-mod off
+      fm_a         = 0.f;   // default: static phase-FM off (A)
+      fm_b         = 0.f;   // default: static phase-FM off (B)
+      rfm_a        = 0.f;   // default: FM-A walk off (pure static FM)
+      rfm_b        = 0.f;   // default: FM-B walk off (pure static FM)
   }
 
   OscParamsData() { reset(); }

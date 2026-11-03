@@ -37,7 +37,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "RWAV", "RDRV", "RFLD",
       "XFM1", "XFM2", "FCUT", "RESO", "RWFC",
       "RVLL", "RVLS", "RVLS",
-      "SATC", "FLDC"};
+      "SATC", "FLDC",
+      "INT2", "JIT", "RMOD", "FM1", "FM2", "RFMA", "RFMB"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -60,7 +61,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // pulling a fasterpowf into the K-rate display path.
 
   // CINT (chord interval): display cents (0..1900), not a name.
-  if (k == CHRD_INT)
+  // CINT2 (second chord interval) uses the same format.
+  if (k == CHRD_INT || k == CINT2)
   {
     int ci = (int)(param_10bit_to_f32(raw) * ChordVoice::kMaxCents + 0.5f);
     // format as "NNNc" (e.g. "700c", "1900c")
@@ -86,6 +88,18 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   if (k == XFM_A || k == XFM_B)
   {
     int xc = (int)(param_10bit_to_f32(raw) * kXfmMaxCents + 0.5f);
+    int n = 0;
+    if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
+    buf[n++] = (char)('0' + xc % 10);
+    buf[n++] = 'c';
+    buf[n] = '\0';
+    return buf;
+  }
+  // FM_A / FM_B (phase-FM depth): "Nc" (0..kFmMaxCents, <= 2 digits). Same
+  // format as XFM; the max is kFmMaxCents (0.4) so the value is 0..0.
+  if (k == FM_A || k == FM_B)
+  {
+    int xc = (int)(param_10bit_to_f32(raw) * kFmMaxCents + 0.5f);
     int n = 0;
     if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
     buf[n++] = (char)('0' + xc % 10);
