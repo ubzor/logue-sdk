@@ -307,6 +307,8 @@ public:
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
     prev_wav_a_ = 0.f; // cross-FM lookback cache: start at 0 (first sample is a no-op)
     prev_wav_b_ = 0.f;
+    xfm_smooth_a_ = 0.f; // cross-FM index LPF state (no FM on the first sample)
+    xfm_smooth_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
     eg_.reset();
@@ -338,6 +340,8 @@ public:
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
     prev_wav_a_ = 0.f; // cross-FM lookback cache
     prev_wav_b_ = 0.f;
+    xfm_smooth_a_ = 0.f; // cross-FM index LPF state
+    xfm_smooth_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
     eg_.reset();
@@ -555,6 +559,13 @@ private:
   // Zeroed on init / reset so the first sample's cross-FM is a no-op.
   float prev_wav_a_ = 0.f;
   float prev_wav_b_ = 0.f;
+  // One-pole low-pass state for the cross-FM modulation INDEX (see the XFM
+  // branch in the phasor update and osc_constants.h kXfmSmoothAlpha). Smooths
+  // the fast sign-flips of the modulating wavetable so the upper (harsh) FM
+  // sidebands are tamed while the slow "breathing" is kept. Zeroed on init /
+  // reset so the first sample's FM is a no-op (the index is 0 when XFM=0).
+  float xfm_smooth_a_ = 0.f;
+  float xfm_smooth_b_ = 0.f;
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
   // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
   // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its

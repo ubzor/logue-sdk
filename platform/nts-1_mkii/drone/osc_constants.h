@@ -53,6 +53,18 @@
   // region of the banks; the knob sweeps 0..10 linearly from the raw value
   // (1023 -> 10.0).
   static constexpr float    kXfmMaxCents = 0.8f;        // full cross-FM index (0..0.4 cycles)
+  // One-pole low-pass coefficient (per sample) for the cross-FM modulation
+  // INDEX. A small alpha (~0.02 @48 kHz => ~0.3 ms time constant) rounds off
+  // the fast sign-flips of the wavetable output that feed the FM index, so the
+  // upper (harsh) sidebands are tamed while the slow "breathing" FM is kept.
+  // Applied to the index itself (not the audio output), so the carrier is not
+  // blurred. When XFM = 0 the index is 0 and the filter is a no-op.
+  static constexpr float    kXfmSmoothAlpha = 0.02f;
+  // Cross-FM depth curve: the raw 0..1 knob value is raised to this power
+  // before scaling, so the lower part of the knob gives a very subtle
+  // breathing and the harsh "noise-like" sidebands only appear near the top
+  // of the range (quadratic = 2). Keep 1 for the stock linear feel.
+  static constexpr float    kXfmCurveExp = 2.0f;
 
 // ---- Sub-octave sine (low-end body) ------------------------------------------
 // The sub voice is a fixed sine one octave below the base note (w0/2). It is
