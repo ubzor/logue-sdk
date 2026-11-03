@@ -102,8 +102,10 @@ public:
     FOLD,           // pre-drive wavefolder depth (0..100%, default 0% = off)
     WAV1,           // oscillator A wavetable (0..90 across banks A-F)
     WAV2,           // oscillator B wavetable (0..90 across banks A-F)
+    WAV3,           // oscillator C (chord voice) wavetable (0..90 across banks A-F)
     CHORD,          // third (chord) oscillator level (0..100%, default 0% = off)
     CHRD_INT,       // chord interval (0..1900 cents, continuous)
+    MAIN,           // main (A+B mixed) voice level (0..100%, default 100% = full)
     RW_WAV,         // random-walk depth on wavetable morph (0..100%, default 0% = off)
     RW_DRV,         // random-walk depth on saturator drive (0..100%, default 0% = off)
     RW_FLD,         // random-walk depth on wavefolder depth (0..100%, default 0% = off)
@@ -112,26 +114,41 @@ public:
     FCUT,           // internal SVF cutoff + dry/wet (log 80 Hz..12 kHz, 0% = raw, 100% = LPF)
     RES,            // internal SVF resonance Q (0..100% -> 0.5..2.5, default 0% = 0.5)
     RW_FC,          // random-walk depth on SVF cutoff (0..100%, default 0% = off)
+    RW_LVL,         // breath: random-walk depth on the four voice LEVELS (0..100%, default 0% = off)
+    RW_LSP,         // breath stream period (0..100% -> 0.1 s..10 s, log, default 50%)
+    RW_LSM,         // breath stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
+    // ---- Chord voice's OWN drive/fold (independent of the A+B SATU/FOLD) ----
+    // The chord has its own wavefolder + saturator pass (see the CHORD branch in
+    // process()). CHSAT is its drive (0..3.0, like SATU) and CHFLD is its
+    // fold depth (0..1, like FOLD). ASYM stays SHARED with the A+B voice.
+    // Appended at the END (after RW_LSM) so the existing edit indices
+    // (DETUNE..RW_LSM = 0..29) are not renumbered.
+    CHSAT,          // chord saturator drive (0..3.0, default = SATU default)
+    CHFLD,          // chord wavefolder depth (0..1, default = FOLD default = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..RW_FC).
-  static constexpr uint8_t kEditParamCount = 25; // DETUNE..RW_FC
-  // The first editable enum value. The UI (header.c PARAM slot, 0..24) expects
-  // this order (select_ index -> parameter), 25 parameters total:
+  // Number of editable DSP parameters (DETUNE..RW_LSM).
+  static constexpr uint8_t kEditParamCount = 32; // DETUNE..CHFLD
+  // The first editable enum value. The UI (header.c PARAM slot, 0..31) expects
+  // this order (select_ index -> parameter), 32 parameters total:
   //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
   //   2 SPD1            3 SMT1            (Tone stream period / smooth)
   //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
   //   6 SPD3            7 SMT3            (Density stream period / smooth)
   //   8 SUB1            9 SUB2            10 SATU           11 ASYM
-  //   12 FOLD           13 WAV1           14 WAV2           15 CHRD (CHORD)
-  //   16 CINT (CHRD_INT) 17 RW_WAV        18 RW_DRV         19 RW_FLD
-  //   20 XFM_A (cross-FM on A)  21 XFM_B (cross-FM on B)
-  //   22 FCUT (SVF cutoff + dry/wet)  23 RES (SVF resonance Q)
-  //   24 RWFC (RW_FC: random-walk depth on SVF cutoff)
+  //   12 FOLD           13 WAV1           14 WAV2           15 WAV3
+  //   16 CHRD (CHORD)   17 CINT (CHRD_INT) 18 MAIN (main A+B voice level)
+  //   19 RW_WAV         20 RW_DRV         21 RW_FLD
+  //   22 XFM_A (cross-FM on A)  23 XFM_B (cross-FM on B)
+  //   24 FCUT (SVF cutoff + dry/wet)  25 RES (SVF resonance Q)
+  //   26 RWFC (RW_FC: random-walk depth on SVF cutoff)
+  //   27 RW_LVL (RW_LVL: breath depth on voice levels)
+  //   28 RW_LSP (RW_LSP: breath stream period)  29 RW_LSM (RW_LSM: breath smooth)
+  //   30 CHSAT (chord's own saturator drive)  31 CHFLD (chord's own fold depth)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 25 = (RW_FC - DETUNE + 1); select_ 0..24 -> DETUNE..RW_FC.
+  // kEditParamCount = 32 = (CHFLD - DETUNE + 1); select_ 0..31 -> DETUNE..CHFLD.
   static constexpr uint8_t kEditParamFirst = DETUNE;
 
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -202,14 +219,15 @@ public:
   // re-selecting a previously used parameter restores its value instead of
   // resetting it to the default.
 
-  // Raw 10-bit values (0..1023) of the 25 editable parameters, cached so the
+  // Raw 10-bit values (0..1023) of the 30 editable parameters, cached so the
   // selector can recall them. Defaults match the DSP defaults in
   // OscParamsData::reset() (osc_params.h):
   // DETUNE 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511, SPD3 511,
   // SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0, WAV1 0, WAV2 128,
-  // CHORD 205, CINT 377, RW_WAV 0, RW_DRV 0, RW_FLD 0, XFM_A 0, XFM_B 0,
-  // FCUT 921 (~90%), RES 0, RWFC 0.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0, 0};
+  // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
+  // RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
+  // (breath off), RW_LSP 511, RW_LSM 511.
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -306,13 +324,29 @@ public:
   //  live in OscParams, see osc_params.h.)
 
   // ---- Audio-path mix constants ----
-  // Final-mix gains. Worst-case peaks: |y*kMixOsc|<0.5,
-  // |sub*kMixSub|<0.4, |sub2*kMixSub2|<0.3 (branches rarely peak together,
-  // and the final hard-clip guards the sum).
+  // Final-mix gains. Worst-case peaks (see the budget comment in process()):
+  //   A+B saturator out * kMixOsc < 0.5
+  //   CHORD saturator out * kMixChordDirect < 0.6
+  //   SUB1 * kMixSub < 0.5
+  //   SUB2 * kMixSub2 < 0.4
+  // The branches rarely peak together, and the final hard-clip guards the sum.
+  // SUB1/SUB2 were raised from 0.4/0.3 (the basses were reading too quiet
+  // against the driven A+B voice); CHORD (kMixChordDirect) is ~0.8 so the
+  // chord saturator output lands near the A+B level instead of the old ~0.05.
   static constexpr float kMixOsc  = 0.5f;
-  static constexpr float kMixSub  = 0.4f;
-  static constexpr float kMixSub2 = 0.3f;
+  static constexpr float kMixSub  = 0.5f;
+  static constexpr float kMixSub2 = 0.4f;
   // (The saturator drive limit lives in Saturator::kDriveLimit, see osc_saturator.h.)
+  //
+  // CHORD is mixed in parallel with the A+B saturator output so the MAIN knob
+  // can duck A+B without silencing it. The chord runs through its OWN
+  // wavefolder + saturator pass (Saturator::fold / Saturator::saturate with
+  // the SAME SATU/ASYM/FOLD knobs — the chord inherits the unit's drive
+  // character) before being scaled by this constant. The saturator output is
+  // bounded in (-1, 1) and typically ~0.5-0.76 RMS-ish, so 0.8 gives a chord
+  // peak of ~0.4-0.6 — comparable to A+B (kMixOsc=0.5 over two voices) and
+  // far louder than the old double-normalized path. Tune by ear (0.5..1.0).
+  static constexpr float kMixChordDirect = 0.8f;
 
   // ---- Chord voice (CHORD / CHRD_INT edit params) --------------------------
   // The third oscillator runs at a continuous interval above the base
@@ -321,10 +355,10 @@ public:
   // ChordVoice (osc_chord.h): the audio path is one multiply
   // (w0 * 2^(cents/1200) via Taylor) plus one wavetable lookup.
   //
-  // The CHORD knob (0..100%) sets the voice level. The per-voice gain is
-  // normalized: gain = ChordVoice::kMixChord * lvl / (1 + lvl). At lvl=0 the
-  // voice is silent (regression-safe). At lvl=1 (full knob) it reaches
-  // kMixChord with no increase in the main mix's peak.
+  // The CHORD knob (0..100%) sets the voice level with a LINEAR gain
+  // (chord_gain = p.chord_level). At lvl=0 the voice is silent. The voice is
+  // shaped by its own folder+saturator pass and scaled by kMixChordDirect in
+  // the final mix, so at lvl=1 (full knob) it reaches near the A+B level.
 
   // ---- Sample-rate / reference-frequency helpers ----
   // getSampleRate() (Processor base) returns 48000.f for all logue products;
@@ -431,9 +465,19 @@ public:
       waves_.update(w0_);
       break;
 
+    case WAV3:
+      // Osc C (chord voice) wavetable index, 0..kWavesTotal-1. Gives the chord
+      // voice its own timbre (independent of osc A / B). Re-resolve the
+      // pitch-shifted morph position (same as WAV1/WAV2 — it is shared across
+      // all three voices and depends only on the base pitch, not the index).
+      params_.wave_c = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
+      waves_.update(w0_);
+      break;
+
     case CHORD:
-      // 0..1023 -> 0..1 chord-voice level. The per-voice gain is applied in
-      // process() as ChordVoice::kMixChord * lvl / (1 + lvl) — see osc_chord.h.
+      // 0..1023 -> 0..1 chord-voice level (LINEAR). Applied in process() as
+      // chord_gain = p.chord_level, then shaped by the chord's own
+      // folder+saturator and scaled by kMixChordDirect. See osc_chord.h.
       params_.chord_level = param_10bit_to_f32(value);
       break;
 
@@ -447,6 +491,31 @@ public:
         params_.chord_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
         chord_.update(w0_, params_.chord_cents);
       }
+      break;
+
+    case MAIN:
+      // 0..1023 -> 0..1 level of the "main" voice (the A+B mixed output that
+      // passes through the folder/saturator/SVF chain). The per-sample multiply
+      // (y_filt * kMixOsc * main_level) is applied in the audio path; here we
+      // only store the 0..1 gain. At 100% (default) the gain is 1.0, so the
+      // stock sound is unchanged (regression-safe).
+      params_.main_level = param_10bit_to_f32(value);
+      break;
+
+    case CHSAT:
+      // 0..1023 -> 0..kSatuMax drive level for the CHORD voice's OWN saturator
+      // (independent of the A+B SATU knob). Same scaling as SATU. Applied in
+      // the CHORD branch of process() via Saturator::saturate(chord_fold,
+      // chord_drive, p.asym). Default (341) = same gentle drive as SATU.
+      params_.chord_drive = param_10bit_to_f32(value) * kSatuMax;
+      break;
+
+    case CHFLD:
+      // 0..1023 -> 0..1 wavefolder depth for the CHORD voice's OWN folder
+      // (independent of the A+B FOLD knob). Same scaling as FOLD. Applied in
+      // the CHORD branch of process() via Saturator::fold(chord_in,
+      // chord_fold). Default (0) = off.
+      params_.chord_fold = param_10bit_to_f32(value);
       break;
 
     case RW_WAV:
@@ -513,6 +582,30 @@ public:
       params_.rw_fc = param_10bit_to_f32(value);
       break;
 
+    case RW_LVL:
+      // 0..1023 -> 0..1 breath depth on the four voice levels (RW_LVL knob).
+      // The Osc scales each voice by (1 + rw_lvl * dev), where dev is the
+      // Breath stream's (rw_[3]) per-channel deviation. At RW_LVL = 0 the
+      // levels are static (regression-safe: identical to the pre-breath
+      // sound). The actual (1 + rw_lvl * dev) multiply happens in the audio
+      // path; here we only store the 0..1 depth gate.
+      params_.rw_lvl = param_10bit_to_f32(value);
+      break;
+
+    case RW_LSP:
+      // 0..1023 -> 0..1 breath stream period (RW_LSP knob, log 0.1 s .. 10 s).
+      // Recompute the Breath stream (rw_[3])'s interval/tracking (K-rate).
+      params_.rw_lsp = param_10bit_to_f32(value);
+      rw_[3].setup(params_.rw_lsp, params_.rw_amount, params_.rw_lsm);
+      break;
+
+    case RW_LSM:
+      // 0..1023 -> 0..1 breath stream time constant (RW_LSM knob, log
+      // 10 ms .. 1.5 s). Recompute the Breath stream's tracking (K-rate).
+      params_.rw_lsm = param_10bit_to_f32(value);
+      rw_[3].setup(params_.rw_lsp, params_.rw_amount, params_.rw_lsm);
+      break;
+
     default:
       break;
     }
@@ -563,9 +656,13 @@ public:
     static const char *const names[kEditParamCount] = {
         "DETU", "RATE",
         "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
-        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
+        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "WAV3",
+        "CHRD", "CINT",
+        "MAIN",
         "RWAV", "RDRV", "RFLD",
-        "XFM", "XFM2", "FCUT", "RES", "RWFC"};
+        "XFM1", "XFM2", "FCUT", "RESO", "RWFC",
+        "RVLL", "RVLS", "RVLS",
+        "SATC", "FLDC"};
     const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
     const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
     if (is_param_sel)
@@ -666,18 +763,20 @@ public:
     }
 
     int v;
-    if (k == WAV1 || k == WAV2)
+    if (k == WAV1 || k == WAV2 || k == WAV3)
       v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
     else if (k == ASYM)
       v = (int)((raw * 200) / kRawMax) - 100;
     else if (k == DETUNE)
       v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
-    else if (k == SATU)
-      v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300
+    else if (k == SATU || k == CHSAT)
+      v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (CHSAT = chord's own drive)
     else
       v = (int)((raw * 100) / kRawMax);
 
-    const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE && k != CHRD_INT);
+    // CHFLD formats as 0..100% (the default branch), so it is NOT in this
+    // no-percent list. CHSAT, like SATU, shows a bare 0..300 number.
+    const bool percent = (k != WAV1 && k != WAV2 && k != WAV3 && k != SATU && k != CHSAT && k != DETUNE && k != CHRD_INT);
     int n = 0;
     if (v < 0)
       buf[n++] = '-';
@@ -902,12 +1001,18 @@ public:
     const float sub2_level = p.sub2_level;
 
     // ---- Chord voice gain (precomputed once per block) ----
-    // Normalized gain: ChordVoice::kMixChord * lvl / (1 + lvl). At lvl=0 the
-    // voice is silent (regression-safe: identical to the 2-osc sound). At
-    // lvl=1 (full knob) it reaches kMixChord. See osc_chord.h for details.
-    const float chord_gain = (p.chord_level > 0.f)
-        ? (ChordVoice::kMixChord * p.chord_level / (1.f + p.chord_level))
-        : 0.f;
+    // Linear gain: chord_gain = p.chord_level (0..1), like SUB1/SUB2. At lvl=0
+    // the voice is silent. At lvl=1 (CHRD=100%) the voice reaches full
+    // amplitude and is then shaped by its own folder+saturator (see the CHORD
+    // branch in the final mix) before being scaled by kMixChordDirect.
+    //
+    // (Previously this used the normalized kMixChord*lvl/(1+lvl) form so the
+    // chord could not push the shared A+B saturator into clipping — that
+    // constraint no longer applies now that the chord has its OWN saturator
+    // pass, and the old double-normalization was the root cause of the chord
+    // reading far too quiet. See osc_chord.h for the kMixChord constant, now
+    // unused by the audio path.)
+    const float chord_gain = p.chord_level;
 
     const bool rw_active = p.rw_amount > 0.f;
     // A and B run at the base note ± the static DETU knob (symmetric ±c/2,
@@ -919,16 +1024,24 @@ public:
 
     // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
     // offset is added per-sample below. waves_.wave_shift_ is recomputed on
-    // setParameter(WAV1/WAV2) / setPitch(); wave_a / wave_b are the knobs.
+    // setParameter(WAV1/WAV2/WAV3) / setPitch(); wave_a / wave_b / wave_c are
+    // the knobs (the chord voice now has its own table, see WAV3).
     const float wave_base_a = p.wave_a + waves_.wave_shift_;
     const float wave_base_b = p.wave_b + waves_.wave_shift_;
+    const float wave_base_c = p.wave_c + waves_.wave_shift_;
     if (rw_active)
     {
       // Recompute each stream's interval / tracking from its own SPDx/SMTx
       // (setup() is cheap and caches; the shared rw_amount ceiling is passed
       // but only used for max_dev, which does not affect the period/tracking).
-      for (uint8_t i = 0; i < kRwStreamCount; i++)
+      // The first three streams are addressed by p.rw_rate[i] / p.rw_smooth[i]
+      // (SPD1..3 / SMT1..3, 3-element arrays). The fourth stream (Breath, i=3)
+      // has its OWN knobs (RW_LSP / RW_LSM -> p.rw_lsp / p.rw_lsm), set at
+      // K-rate in apply_edit_param — so it is set up separately below, NOT in
+      // this loop (which would read out-of-bounds rw_rate[3] / rw_smooth[3]).
+      for (uint8_t i = 0; i < 3; i++)
         rw_[i].setup(p.rw_rate[i], p.rw_amount, p.rw_smooth[i]);
+      rw_[3].setup(p.rw_lsp, p.rw_amount, p.rw_lsm); // Breath stream (RW_LSP/RW_LSM)
       // Initialize each stream's targets to its current deviations on first
       // activation (avoids a visible jump when the RATE knob crosses 0).
       for (uint8_t i = 0; i < kRwStreamCount; i++)
@@ -1020,6 +1133,35 @@ public:
       // global RATE AMT depth, consistent with the detune/morph/drive walks.
       // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
       const float rw_fold_mod = rw_fld_active ? rw_[2].dev_b * p.rw_fld * rw_amt : 0.f;
+
+      // ---- Breath stream (rw_[3]): voice-level wandering -------------------
+      // The fourth stream drives the four voice LEVELS (A / B / chord / sub)
+      // so they slowly "breathe" in and out of prominence. Its four channels
+      // (dev_a/b/c/d) wander independently (each with its own period), so the
+      // four voices trade the floor at different times — the heart of a drone.
+      // The per-voice level factor is (1 + rw_lvl * rw_amt * dev), clamped to
+      // [0, 1]: at RW_LVL = 0 (default) all factors are 1.0 (static levels,
+      // regression-safe: identical to the pre-breath sound); at RW_LVL = 100%
+      // & RATE = 100% a voice can swing a full 0..100% of its base level.
+      // SUB2 (the f/4 low-end anchor) is intentionally NOT breathed: it stays
+      // static so the low end never "flutters".
+      float lvl_a = 1.f;
+      float lvl_b = 1.f;
+      float lvl_c = 1.f;
+      float lvl_sub = 1.f;
+      if (rw_active && p.rw_lvl > 0.f)
+      {
+        rw_[3].advance(p.rw_amount, osc_white);
+        const float swing = p.rw_lvl * rw_amt; // 0..1 normalized depth
+        lvl_a   = 1.f + swing * rw_[3].dev_a;
+        lvl_b   = 1.f + swing * rw_[3].dev_b;
+        lvl_c   = 1.f + swing * rw_[3].dev_c;
+        lvl_sub = 1.f + swing * rw_[3].dev_d;
+        if (lvl_a < 0.f) lvl_a = 0.f; else if (lvl_a > 1.f) lvl_a = 1.f;
+        if (lvl_b < 0.f) lvl_b = 0.f; else if (lvl_b > 1.f) lvl_b = 1.f;
+        if (lvl_c < 0.f) lvl_c = 0.f; else if (lvl_c > 1.f) lvl_c = 1.f;
+        if (lvl_sub < 0.f) lvl_sub = 0.f; else if (lvl_sub > 1.f) lvl_sub = 1.f;
+      }
 
       // phasor update (plus optional classic cross-FM phase modulation)
       // Classic FM: each osc's phase is modulated by the OTHER osc's
@@ -1139,7 +1281,7 @@ public:
       // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
       // wavetable lookup. See osc_chord.h for the interval table.
       const float wav_c = (chord_active && chord_gain > 0.f)
-          ? WaveTable::resolve_wave(wave_base_a + lfo_morph, chord_.phasor)
+          ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord_.phasor)
           : 0.f;
 
       // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
@@ -1151,15 +1293,17 @@ public:
       // See osc_sub2.h for the DSP details (sine -> soft saturator -> LPF -> gate).
       const float sub2 = sub2_.process(phasor_sub2_, w0, sub2_level);
 
-      // mix both voices equally, then run through the pre-drive wavefolder
-      // (FOLD knob) and the asymmetric soft-clip saturator (SATU/ASYM knobs).
-      // See osc_saturator.h for the DSP details.
-      // The chord voice (wav_c * chord_gain) is added to the mix before the
-      // folder/saturator — it shares the same timbre chain so it stays
-      // cohesive with the main voice. The normalized gain (kMixChord * lvl
-      // / (1 + lvl)) keeps the saturator's peak budget unchanged from the
-      // 2-osc case.
-      const float mix = kMixOsc * (wav_a + wav_b + wav_c * chord_gain);
+      // mix the two main voices (A+B) equally, then run through the pre-drive
+      // wavefolder (FOLD knob) and the asymmetric soft-clip saturator
+      // (SATU/ASYM knobs). See osc_saturator.h for the DSP details.
+      //
+      // The chord voice is NOT in this mix: it is mixed in parallel in the
+      // final mix below, through its OWN folder+saturator pass (same SATU/ASYM/
+      // FOLD knobs), so the MAIN level knob can duck only the A+B main tone —
+      // MAIN=0 silences A+B while CHORD (and the subs) keep sounding. Because
+      // the chord has its own drive, it keeps the unit's timbre "color" (the
+      // old double-normalized bypass path read far too quiet and "dry").
+      const float mix = kMixOsc * (wav_a * lvl_a + wav_b * lvl_b);
       // (The static DETU knob is applied per-voice above, via w0_a / w0_b —
       //  not post-mix: A and B are detuned in opposite directions around the
       //  base note, producing a per-voice phase drift that sounds ~4x
@@ -1227,18 +1371,45 @@ public:
       // scale output to a musical level (saturator max output is ~0.76)
       // and apply the A-H-R envelope level.
       //
-      // Sub-octave sine is mixed in parallel with the saturator (it bypasses
-      // the soft-clip on purpose: low-frequency sine through tanh would be
-      // heavily attenuated). Per-branch gains are chosen so the worst-case
-      // peak stays below 0.9:
-      //   |y * 0.5f|    < 0.5  (saturator output bounded in (-1, 1))
-      //   |sub * 0.4f|  < 0.4  (sine bounded in [-1, 1])
-      //   |sub2*0.3f|  < 0.3  (LPF'd, gated voice bounded in (-1, 1))
-      //   |sum|         < 1.2 (worst case, but branches rarely peak together)
-      // At the default SUB1 = 50%, the sub branch is at 0.2 amplitude; SUB2
-      // defaults to 0 (off) so the stock sound is unchanged. A hard clip
-      // prevents digital overflow when all branches peak simultaneously.
-      float raw = (y_filt * kMixOsc + sub * p.sub_level * kMixSub + sub2 * sub2_level * kMixSub2) * eg_.env;
+      // Four parallel branches:
+      //   - y_filt (A+B through folder/saturator/SVF) * main_level  -> MAIN knob
+      //   - the CHORD voice — runs through its OWN folder+saturator pass (same
+      //     SATU/ASYM/FOLD knobs) so it keeps the unit's drive "color", and is
+      //     mixed in parallel so the MAIN knob ducks only A+B. Scaled by
+      //     kMixChordDirect so it lands near the A+B level (not the old ~0.05).
+      //   - sub (sub-octave sine) and sub2 (f/4) — low end, bypass soft-clip.
+      // Per-branch worst-case peaks (saturator outputs bounded in (-1, 1)):
+      //   |y_filt * 0.5f|    < 0.5  (A+B through saturator)
+      //   |chord_sat * 0.8f| < 0.8  (chord through its own saturator)
+      //   |sub * 0.5f|       < 0.5  (sine bounded in [-1, 1])
+      //   |sub2 * 0.4f|      < 0.4  (LPF'd, gated voice bounded in (-1, 1))
+      //   |sum|              < 2.2  (worst case, branches rarely peak together;
+      //                               the hard clip below guards digital overflow)
+      // At the default SUB1 = 50%, the sub branch is at 0.25 amplitude; SUB2
+      // defaults to 0 (off). A hard clip prevents digital overflow when all
+      // branches peak simultaneously.
+      //
+      // CHORD through its OWN folder + saturator (stateless — same functions
+      // as the A+B path, but driven by the chord's OWN knobs CHSAT/CHFLD, so
+      // the chord's drive/fold are independent of the A+B SATU/FOLD).
+      // chord_gain is linear (p.chord_level, 0..1); lvl_c is the per-sample
+      // LFO level modulation. ASYM is SHARED (p.asym, same as A+B) per design.
+      //
+      // The chord's drive/fold are clamped exactly like the A+B path (no
+      // random-walk modulation — RW_DRV/RW_FLD affect only the A+B voice).
+      float chord_drive_clamped = p.chord_drive;
+      if (chord_drive_clamped < 0.f) chord_drive_clamped = 0.f;
+      else if (chord_drive_clamped > kSatuMax) chord_drive_clamped = kSatuMax;
+      float chord_fold_clamped = p.chord_fold;
+      if (chord_fold_clamped < 0.f) chord_fold_clamped = 0.f;
+      else if (chord_fold_clamped > 1.f) chord_fold_clamped = 1.f;
+      const float chord_in   = wav_c * chord_gain * lvl_c;
+      const float chord_fold = Saturator::fold(chord_in, chord_fold_clamped);
+      const float chord_sat  = Saturator::saturate(chord_fold, chord_drive_clamped, p.asym);
+      float raw = (y_filt * kMixOsc * p.main_level
+                 + chord_sat * kMixChordDirect
+                 + sub * p.sub_level * lvl_sub * kMixSub
+                 + sub2 * sub2_level * kMixSub2) * eg_.env;
       if (raw > 1.f)
         raw = 1.f;
       else if (raw < -1.f)
@@ -1262,12 +1433,16 @@ private:
   // Chord voice (third oscillator at selectable interval). See osc_chord.h.
   ChordVoice chord_;
 
-  // Three independent random-walk streams (dual channel each). See
+  // Four independent random-walk streams (dual channel each). See
   // osc_random_walk.h. Index 0 = Tone (detune + cross-FM), 1 = Timbre
-  // (wavetable morph + SVF cutoff), 2 = Density (drive + wavefolder). Each
-  // stream wanders with independent random targets on its own (randomly-drawn)
-  // period, so the streams are not phase-locked to each other.
-  static constexpr uint8_t kRwStreamCount = 3;
+  // (wavetable morph + SVF cutoff), 2 = Density (drive + wavefolder), 3 =
+  // Breath (the four voice LEVELS: A / B / chord / sub wander in prominence).
+  // Each stream wanders with independent random targets on its own
+  // (randomly-drawn) period, so the streams are not phase-locked to each
+  // other. (The Breath stream uses all four of its channels — A/B/C/D — to
+  // give the four voices independent wandering; the other three streams use
+  // only the A/B pair, which keep their shared-counter behavior.)
+  static constexpr uint8_t kRwStreamCount = 4;
   RandomWalk rw_[kRwStreamCount];
 
   // Internal 12 dB/oct state-variable filter (post-saturator, pre-sub-mix).

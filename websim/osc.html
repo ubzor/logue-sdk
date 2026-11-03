@@ -94,8 +94,8 @@
             <span class="w-16 text-sm font-medium shrink-0">Octave</span>
             <div class="octave-join drop-shadow" title="Current octave shift of the whole keyboard range">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-2" aria-label="-2" title="Down two octaves (A0..D2)">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-1" aria-label="-1" title="Down one octave (A1..D3)">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="0" aria-label="0" title="Base range (A2..D4)" checked>
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-1" aria-label="-1" title="Down one octave (A1..D3)" checked>
+              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="0" aria-label="0" title="Base range (A2..D4)">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="1" aria-label="+1" title="Up one octave (A3..D5)">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="2" aria-label="+2" title="Up two octaves (A4..D6)">
             </div>
@@ -145,7 +145,7 @@
          g2, g3 -> col 1; g4, g5 -> col 2) so the heights balance. -->
     <div class="card card-border shadow-none w-full">
       <div class="card-body flex-col items-stretch gap-1 pt-6">
-        <div id="Parameters" class="grid grid-cols-3 gap-x-4 gap-y-6 items-stretch">
+        <div id="Parameters" class="grid grid-cols-3 gap-x-10 gap-y-6 items-stretch">
           <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
           <!-- Sits as the first full-width row of the Parameters card
                (col-span-3), above the 3 parameter columns. The buttons are
@@ -155,13 +155,13 @@
           <div class="col-span-3 flex items-center gap-2">
             <div class="flex flex-wrap gap-2" id="Presets"></div>
           </div>
-          <!-- Col 0 (TIMBRE + ANCHORS) and col 2 (TEXTURE + TIMBRE FILTER) are
-               the two shorter columns; items-stretch on the grid makes each
-               column fill the grid's full height, and justify-between pushes
-               the TOP group (TIMBRE / TEXTURE) to the top edge and the BOTTOM
-               group (ANCHORS / TIMBRE FILTER) to the bottom edge, so the two
-               bottom blocks sit flush with the card's bottom border regardless
-               of how tall the middle column (PITCH + WANDER) is. -->
+          <!-- The grid's items-stretch makes every column fill the full row
+               height. col 0 and col 2 (3 and 2 blocks) use justify-between so
+               their TOP block sits at the top edge and their BOTTOM block at
+               the bottom edge. col 1 (PITCH + WANDER) is top-aligned, and
+               WANDER carries mt-auto so it is pushed to the bottom edge too —
+               the three columns' bottom blocks all sit flush with the card's
+               bottom border regardless of the middle column's height. -->
           <div id="ParamCol0" class="flex flex-col justify-between gap-2"></div>
           <div id="ParamCol1" class="flex flex-col gap-2"></div>
           <div id="ParamCol2" class="flex flex-col justify-between gap-2"></div>
@@ -195,45 +195,71 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      const EDIT_PARAM_COUNT = 25;
+      const EDIT_PARAM_COUNT = 32;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DETU, 1 RATE (shared depth ceiling),
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
       // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
       // 6 SPD3, 7 SMT3 (Density stream period / smooth),
       // 8 SUB1, 9 SUB2, 10 SATU, 11 ASYM, 12 FOLD, 13 WAV1, 14 WAV2,
-      // 15 CHRD, 16 CINT, 17 RWAV, 18 RDRV, 19 RFLD,
-      // 20 XFM, 21 XFM2, 22 FCUT, 23 RES, 24 RWFC.
+      // 15 WAV3 (chord-voice wavetable),
+      // 16 CHRD, 17 CINT,
+      // 18 MAIN (main A+B mixed voice level, 0..100%, default 100%),
+      // 19 RWAV, 20 RDRV, 21 RFLD,
+      // 22 XFM, 23 XFM2, 24 FCUT, 25 RES, 26 RWFC,
+      // 27 RVLL (RW_LVL, breath depth), 28 RVLS (RW_LSP, breath period),
+      // 29 RVLSM (RW_LSM, breath smooth),
+      // 30 CHSAT (chord's own saturator drive, 0..300),
+      // 31 CHFLD (chord's own wavefolder depth, 0..100%).
       const EDIT_PARAM_NAMES = [
-        "DETU", "RATE",
-        "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
-        "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "CHRD", "CINT",
-        "RWAV", "RDRV", "RFLD",
-        "XFM", "XFM2", "FCUT", "RES", "RWFC",
+        "Detune", "Rate",
+        "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
+        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave A", "Wave B", "Wave C",
+        "Chord", "Interval",
+        "Main",
+        "Morph Wander", "Drive Wander", "Fold Wander",
+        "Cross-FM A", "Cross-FM B", "Cutoff", "Resonance", "Cutoff Wander",
+        "Breath Depth", "Breath Rate", "Breath Smooth",
+        "Chord Drive", "Chord Fold",
       ];
 
-      // Semantic groups of the 25 edit parameters (UI-only; the DSP enum order
-      // in osc.h is untouched). Each group becomes one titled block in the
-      // 3-column Parameters layout. Items are edit_ indices (select_ order).
-      // Group -> column: g0, g1 -> col 0; g2, g3 -> col 1; g4, g5 -> col 2.
-      // Column heights (rows): 3+4=7 | 3+8=11 | 5+5=10 -> balanced.
-      //   TIMBRE        WAV1 WAV2 RWAV          - wavetables A/B + morph wander
-      //   ANCHORS       SUB1 SUB2 CHRD CINT     - 3 anchor voices (f/2, f/4, chord)
-      //   PITCH         DETU XFM XFM2           - A/B detune + cross-FM (Tone stream)
-      //   WANDER        RATE SPD1..SMT3         - depth ceiling + 3 stream periods/smooth
+      // Semantic groups of the 29 edit parameters (UI-only; the DSP enum order
+      // in osc.h is untouched). 3-column Parameters layout; each group becomes
+      // one titled block. Items are edit_ indices (select_ order).
+      // Each group has an explicit `col` (0/1/2) so the layout loop places it
+      // as a true column BLOCK (not a round-robin):
+      //   col 0: TIMBRE, TIMBRE FILTER, BREATH
+      //   col 1: PITCH, WANDER
+      //   col 2: ANCHORS, TEXTURE
+      //   TIMBRE        WAV1 WAV2 WAV3 RWAV       - wavetables A/B/C + morph wander
+      //   TIMBRE FILTER FCUT RES RWFC            - internal SVF + cutoff wander
+      //   BREATH        RVLL RVLS RVLSM          - voice-level wandering (4th stream)
+      //   PITCH         DETU XFM XFM2            - A/B detune + cross-FM (Tone stream)
+      //   WANDER        RATE SPD1..SMT3          - depth ceiling + 3 stream periods/smooth
+      //   ANCHORS       SUB1 SUB2 CHRD CINT MAIN - anchor voices (f/2, f/4, chord) + main A+B fader
       //   TEXTURE       SATU ASYM FOLD RDRV RFLD - saturation stack + drive/fold wander
-      //   TIMBRE FILTER FCUT RES RWFC           - internal SVF + cutoff wander
       const PARAM_GROUPS = [
-        { title: "TIMBRE",        items: [13, 14, 17] },
-        { title: "ANCHORS",       items: [8, 9, 15, 16] },
-        { title: "PITCH",         items: [0, 20, 21] },
-        { title: "WANDER",        items: [1, 2, 3, 4, 5, 6, 7] },
-        { title: "TEXTURE",       items: [10, 11, 12, 18, 19] },
-        { title: "TIMBRE FILTER", items: [22, 23, 24] },
+        // ---- Column 0 ----
+        { title: "TIMBRE",        col: 0, items: [13, 14, 15, 19] },
+        { title: "TIMBRE FILTER", col: 0, items: [24, 25, 26] },
+        { title: "BREATH",        col: 0, items: [27, 28, 29] },
+        // ---- Column 1 ----
+        { title: "PITCH",         col: 1, items: [0, 22, 23] },
+        // mt-auto: WANDER is the bottom block of col 1, so push it to the
+        // column's bottom edge (see the layout loop for the mechanism).
+        { title: "WANDER",        col: 1, className: "mt-auto", items: [1, 2, 3, 4, 5, 6, 7] },
+        // ---- Column 2 ----
+        { title: "ANCHORS",       col: 2, items: [8, 9, 16, 17, 18] },
+        // TEXTURE: the A+B saturation stack (SATU/ASYM/FOLD) + their wander
+        // (RDRV/RFLD), plus the CHORD voice's OWN drive/fold (CHSAT/CHFLD) so
+        // the chord's drive can be set independently of the main voice.
+        { title: "TEXTURE",       col: 2, items: [10, 11, 12, 20, 21, 30, 31] },
       ];
 
-      // Format the raw 10-bit value (0..1023) of one of the 25 editable
-      // parameters for display (idx = select_ index 0..24):
+      // Format the raw 10-bit value (0..1023) of one of the 30 editable
+      // parameters for display. NOTE: idx is the edit_ index, and because
+      // PARAM_SEL=0 / PARAM_VAL=1 are explicit, DETUNE=2 — so the edit indices
+      // are OFFSET BY 2 from the enum's sequential order. Mapping:
       //   0: DETU  - static detune of the A+B+C sum (+/-10 cents)
       //   1: RATE  - shared random-walk depth ceiling for all 3 streams (0..100%)
       //   2..7: SPD1..SMT3 - per-stream period / time constant (0..100%, log)
@@ -244,19 +270,24 @@
       //  12: FOLD  - pre-drive wavefolder depth (0..100%)
       //  13: WAV1  - osc A wavetable (0..90)
       //  14: WAV2  - osc B wavetable (0..90)
-      //  15: CHRD  - chord-voice level (0..100%)
-      //  16: CINT  - chord interval (0..1900 cents, continuous)
-      //  17: RWAV  - random-walk depth on wavetable morph (0..100%)
-      //  18: RDRV  - random-walk depth on saturator drive (0..100%)
-      //  19: RFLD  - random-walk depth on wavefolder depth (0..100%)
-      //  20: XFM   - cross-FM depth on osc A (0..15 c)
-      //  21: XFM2  - cross-FM depth on osc B (0..15 c)
-      //  22: FCUT  - SVF cutoff + dry/wet (80 Hz .. 12 kHz, log)
-      //  23: RES   - SVF resonance Q (0.5 .. 2.5)
-      //  24: RWFC  - random-walk depth on SVF cutoff (0..100%)
+      //  15: WAV3  - osc C (chord) wavetable (0..90)
+      //  16: CHRD  - chord-voice level (0..100%)
+      //  17: CINT  - chord interval (0..1900 cents, continuous)
+      //  18: MAIN  - main (A+B mixed) voice level (0..100%, default 100%)
+      //  19: RWAV  - random-walk depth on wavetable morph (0..100%)
+      //  20: RDRV  - random-walk depth on saturator drive (0..100%)
+      //  21: RFLD  - random-walk depth on wavefolder depth (0..100%)
+      //  22: XFM   - cross-FM depth on osc A (0..15 c)
+      //  23: XFM2  - cross-FM depth on osc B (0..15 c)
+      //  24: FCUT  - SVF cutoff + dry/wet (80 Hz .. 12 kHz, log)
+      //  25: RES   - SVF resonance Q (0.5 .. 2.5)
+      //  26: RWFC  - random-walk depth on SVF cutoff (0..100%)
+      //  27: RVLL  - breath depth on voice levels (0..100%)
+      //  28: RVLS  - breath stream period (0..100%)
+      //  29: RVLSM - breath stream time constant (0..100%)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
-        //   WAV1/WAV2 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
+        //   WAV1/WAV2/WAV3 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
         //   ASYM      -> -100..+100% (raw*200/1023 - 100)
         //   DETU      -> +/-10 cents, centered on the raw MIDPOINT (511),
         //                 NOT 1023: (raw-511)*10/511. Full knob (1023) reads +10.
@@ -267,7 +298,7 @@
         //   FCUT      -> Hz / kHz (log-mapped 80 Hz .. 12 kHz)
         //   RES       -> Q (0.5 .. 2.5)
         //   others    -> 0..100%
-        if (idx === 13 || idx === 14)
+        if (idx === 13 || idx === 14 || idx === 15)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
         if (idx === 11) {
           const pct = Math.round((raw * 200) / 1023) - 100;
@@ -277,33 +308,35 @@
           const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 10)
-          return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100
-        if (idx === 16) {
-          // CINT: 0..1900 cents (continuous interval)
+        if (idx === 10 || idx === 30)
+          return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU / CHSAT)
+        if (idx === 17) {
+          // CINT (edit idx 17): 0..1900 cents (continuous interval)
           return Math.round((raw / 1023) * 1900) + "c";
         }
-        if (idx === 20 || idx === 21) {
-          // XFM / XFM2: cross-FM index, 0..kXfmMaxCents/2 cycles (0..0.4 c at
-          // kXfmMaxCents=0.8, mirrors the constant in osc.h). Displayed in
-          // "cents" for readability (1 c = 0.01 cycle of phase deviation).
+        if (idx === 22 || idx === 23) {
+          // XFM / XFM2 (edit 22/23): cross-FM index, 0..kXfmMaxCents/2 cycles
+          // (0..0.4 c at kXfmMaxCents=0.8, mirrors the constant in osc.h).
+          // Displayed in "cents" for readability (1 c = 0.01 cycle of phase).
           return ((raw / 1023) * 4).toFixed(1) + "c";
         }
-        if (idx === 22) {
-          // FCUT: SVF cutoff (log-mapped 80 Hz .. 12 kHz). Display Hz or kHz.
+        if (idx === 24) {
+          // FCUT (edit 24): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.
           // Mirrors Svf::cutoffHz: fc = 80 * (12000/80)^(raw/1023).
           const knob = raw / 1023;
           const fc = 80 * Math.pow(12000 / 80, knob);
           if (fc >= 1000) return (fc / 1000).toFixed(1) + "k";
           return Math.round(fc) + "H";
         }
-        if (idx === 23) {
+        if (idx === 25) {
           // RES: SVF resonance Q (0.5 .. 2.5)
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
-        // idx 1..7 (RATE, SPD1..SMT3), 8..9 (SUB1/SUB2), 12 (FOLD),
-        // 15 (CHRD), 17..19 (RWAV/RDRV/RFLD), 24 (RWFC): 0..100%
+        // Every other index formats as 0..100%: 1..7 (RATE, SPD1..SMT3),
+        // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
+        // 19..21 (RWAV/RDRV/RFLD), 26 (RWFC). (CINT at 17 -> cents, XFM at
+        // 22/23 -> cents, FCUT at 24 -> Hz, RES at 25 -> Q, all above.)
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -321,7 +354,7 @@
 
         let label = document.createElement("label");
         label.textContent = EDIT_PARAM_NAMES[index];
-        label.className = "w-14 text-sm font-medium shrink-0";
+        label.className = "w-32 text-sm font-medium shrink-0 truncate";
         container.appendChild(label);
 
         let input = document.createElement("input");
@@ -426,7 +459,11 @@
       // Notes containing '#' are rendered as black keys. setKeyOctave()
       // (Z/X below) works as an octave shift (-2..+2) applied to the whole
       // range, relabeling the keys (A2..D4 -> A3..D5 etc.).
-      let octaveShift = 0;
+      let octaveShift = -1;
+      // The keyboard starts one octave below the base A2..D4 range (A1..D3).
+      // setOctaveShift() must be called explicitly after construction: the
+      // radios' change listeners fire only on user interaction, and the
+      // library itself applies no shift until told to.
       let keyboard = new QwertyHancock({
         id: "keyboard",
         // No width: the container is w-full (see #keyboard in the markup,
@@ -511,6 +548,10 @@
       octaveRadios.forEach((r) => {
         r.addEventListener("change", () => setOctaveShift(parseInt(r.value, 10), "radio"));
       });
+      // Apply the initial shift (keyboard starts at -1, i.e. A1..D3) to the
+      // just-built keyboard: relabels the keys and syncs with the checked
+      // radio in the markup (see the value="-1" checked attribute above).
+      setOctaveShift(octaveShift, "radio");
 
       // Z/X shift the whole range by one octave.
       // Uses keyCode (physical key position) so it works on any keyboard
@@ -647,9 +688,9 @@
       }
 
       // Build the 3-column Parameters layout: each PARAM_GROUPS entry becomes
-      // a titled block inside its assigned column (g0, g1 -> col 0; g2, g3 ->
-      // col 1; g4, g5 -> col 2). All 25 sliders are created exactly once, in
-      // their select_ (edit_) index order; the per-slider global ids
+      // a titled block inside its assigned column (col set per group, see
+      // PARAM_GROUPS). All 30 sliders are created exactly once, in their
+      // select_ (edit_) index order; the per-slider global ids
       // ("editparam_<i>") let the preset bank address them by index.
       {
         const paramColumns = [
@@ -658,13 +699,27 @@
           document.getElementById("ParamCol2"),
         ];
         for (let g = 0; g < PARAM_GROUPS.length; ++g) {
-          const col = paramColumns[Math.floor(g / 2)];
+          // Each group carries an explicit `col` (0/1/2) so the layout is a
+          // true column BLOCK, not a round-robin:
+          //   col 0: TIMBRE, TIMBRE FILTER, BREATH
+          //   col 1: PITCH, WANDER
+          //   col 2: ANCHORS, TEXTURE
+          const col = paramColumns[PARAM_GROUPS[g].col];
           // Wrap each group's heading + sliders in one flex column so that the
           // column-level justify-between (on the shorter col 0 / col 2) treats
           // the whole group as a single item: heading stays glued to its
           // sliders, and the group as a block is pushed to its column edge.
           const group = document.createElement("div");
-          group.className = "flex flex-col gap-2";
+          // WANDER is the bottom block of col 1. col 1 is top-aligned (plain
+          // flex-col), so without a hook it would sit just under PITCH, leaving
+          // a gap at the card's bottom edge. `mt-auto` (margin-top: auto) is
+          // the idiomatic way to push a single flex item to the bottom of a
+          // full-height flex column (the column is stretched to the grid's full
+          // height by items-stretch). If col 1 ends up being the tallest column
+          // the auto margin collapses to 0, so it degrades gracefully.
+          group.className = (PARAM_GROUPS[g].className
+            ? PARAM_GROUPS[g].className + " "
+            : "") + "flex flex-col gap-2";
           const heading = document.createElement("div");
           heading.className = "text-xs uppercase tracking-wide opacity-60 mt-1";
           heading.textContent = PARAM_GROUPS[g].title;
@@ -678,14 +733,14 @@
 
       // ---- Preset bank -------------------------------------------------------
       // One-click parameter banks (simulator-only, like the BPM slider). A
-      // preset is a full 25-parameter raw array in EDIT_PARAM_NAMES order.
+      // preset is a full 30-parameter raw array in EDIT_PARAM_NAMES order.
       // Applying one MUST be paced: the DSP's direct edit channel
       // (simEditRequest) has a SINGLE pending slot, and the audio worklet
       // consumes at most one request per block (~128 samples @ 44.1 kHz ≈ 2.9
-      // ms). A synchronous burst of 25 setEditParam calls would let each write
-      // overwrite the previous one before the worklet reads it, dropping ~24
+      // ms). A synchronous burst of 30 setEditParam calls would let each write
+      // overwrite the previous one before the worklet reads it, dropping ~29
       // parameters. So we spread the writes ~8 ms apart (3 audio blocks of
-      // headroom each) and let each one be consumed. Total apply time ≈ 200 ms
+      // headroom each) and let each one be consumed. Total apply time ≈ 240 ms
       // (a short, smooth morph from the previous sound).
       // Two banks only: Random (randomize the wandering streams) and Reset
       // (always restore the factory defaults, osc.h edit_value_ initializers).
@@ -694,11 +749,13 @@
       // Factory defaults = the edit_value_ initializers in osc.h (kEditParamFirst
       // order): DETU 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
       // SPD3 511, SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0,
-      // WAV1 0, WAV2 128, CHRD 205, CINT 377, RWAV 0, RDRV 0, RFLD 0, XFM 0,
-      // XFM2 0, FCUT 921, RES 0, RWFC 0.
-      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 205, 377, 0, 0, 0, 0, 0, 921, 0, 0];
+      // WAV1 0, WAV2 128, WAV3 0, CHRD 205, CINT 377, MAIN 1023 (full),
+      // RWAV 0, RDRV 0, RFLD 0, XFM 0, XFM2 0, FCUT 921, RES 0, RWFC 0,
+      // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
+      // CHFLD 0 (chord fold off, = FOLD default).
+      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0];
 
-      // Full randomization of all 25 parameters. "Safe" (walk) parameters get
+      // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
       // audition-friendly windows so Random always yields a playable sound
       // (no clipping, no mud, no dissonance, no resonance spikes). The raw
@@ -714,30 +771,34 @@
         // --- Full-range (walk / timbre) parameters ---------------------------
         // SPD1..3 / SMT1..3: stream period / time constant (0.1 s..10 s log,
         // 10 ms..1.5 s log). Any value is musically safe.
-        for (const n of ["SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3"])
+        for (const n of ["Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth"])
           raws[I(n)] = r1023();
         // RWAV / RDRV / RFLD / RWFC: per-stream random-walk depths (0..100%).
         // Full range — they only scale the wander, never the base sound.
-        for (const n of ["RWAV", "RDRV", "RFLD", "RWFC"])
+        for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
           raws[I(n)] = r1023();
-        // WAV1 / WAV2: wavetable index (0..kWavesTotal-1 = 0..90). Any table is
-        // a valid (if different) timbre; the full 91-table span is safe.
-        // The DSP (osc.h:416) does  param_10bit_to_f32(raw) * (kWavesTotal-1)
+        // WAV1 / WAV2 / WAV3: wavetable index (0..kWavesTotal-1 = 0..90). Any
+        // table is a valid (if different) timbre; the full 91-table span is
+        // safe. The DSP (osc.h) does  param_10bit_to_f32(raw) * (kWavesTotal-1)
         // i.e. raw/1023 * 90, so the raw value must be in 0..1023, NOT 0..90.
         // Generate the target table index (0..90) then map to raw 0..1023 so
         // the slider (range 0..1023) actually moves across its full span and
-        // formatParamValue(13/14, raw) recovers the original index.
+        // formatParamValue(13/14/15, raw) recovers the original index.
+        // WAV3 (the chord voice) is randomized independently so Random can
+        // produce a genuinely different chord timbre, not a copy of WAV1.
         {
           const wav1Index = Math.floor(Math.random() * 91);
           const wav2Index = Math.floor(Math.random() * 91);
-          raws[I("WAV1")] = Math.round(wav1Index * (1023 / 90));
-          raws[I("WAV2")] = Math.round(wav2Index * (1023 / 90));
+          const wav3Index = Math.floor(Math.random() * 91);
+          raws[I("Wave A")] = Math.round(wav1Index * (1023 / 90));
+          raws[I("Wave B")] = Math.round(wav2Index * (1023 / 90));
+          raws[I("Wave C")] = Math.round(wav3Index * (1023 / 90));
         }
 
         // --- Constrained (critical) parameters -------------------------------
         // DETU: static A/B detune, +/-kDetuneMaxCents (10 c) centered on 511.
         // Window +/-5 c (raw 256..767) — a clear beat without going out of tune.
-        raws[I("DETU")] = rRange(256, 767);
+        raws[I("Detune")] = rRange(256, 767);
         // RATE: shared walk depth ceiling (0..100%, quadratic). It scales
         // EVERY wandering stream (detune, morph, drive, fold, cutoff, XFM),
         // so it is the single loudest "chaos" lever in the unit. Random over
@@ -747,41 +808,68 @@
         // depths tends to clip / howl (the old 20..100% window was the source
         // of the "overwhelming" random presets). 50% keeps the drone
         // breathing without going nuclear.
-        raws[I("RATE")] = rRange(204, 511);
+        raws[I("Rate")] = rRange(204, 511);
         // SUB1: sub-octave (f/2) sine, mixed at 0.4. 15..80% — body without mud.
-        raws[I("SUB1")] = rRange(153, 818);
+        raws[I("Sub 1")] = rRange(153, 818);
         // SUB2: second sub (f/4), LPF'd + gated, mixed at 0.3. 0..45% — light
         // low-end, never the f/4 "mud" zone.
-        raws[I("SUB2")] = rRange(0, 460);
+        raws[I("Sub 2")] = rRange(0, 460);
         // SATU: saturator drive, 0..kSatuMax (3.0) => display 0..300. Window
         // 40..240 (drive 0.4..2.4) — audible drive, no near-clip.
-        raws[I("SATU")] = rRange(136, 819);
+        raws[I("Drive")] = rRange(136, 819);
         // ASYM: asymmetric saturator, -100..+100% centered on 511. Window
         // +/-50% (raw 256..767) — moderate asymmetry.
-        raws[I("ASYM")] = rRange(256, 767);
+        raws[I("Asym")] = rRange(256, 767);
         // FOLD: pre-drive wavefolder depth (0..1, multiplicative). 0..60%
         // (raw 0..613) — metallic character possible, no "metal mush".
-        raws[I("FOLD")] = rRange(0, 613);
+        raws[I("Fold")] = rRange(0, 613);
         // CHRD: chord-voice level (0..100%). 0..60% — presence without masking.
-        raws[I("CHRD")] = rRange(0, 613);
+        raws[I("Chord")] = rRange(0, 613);
         // CINT: chord interval in cents (0..1900). Randomized over a DISCRETE
         // set of consonant / musically-usable intervals so the chord voice is
         // always "in key" (never a random dissonant gap).
         const CINT_SET = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
-        raws[I("CINT")] = Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900);
+        raws[I("Interval")] = Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900);
+        // MAIN: main (A+B) voice level (0..100%). Window 55..100%
+        // (raw 563..1023) — the main voice stays clearly present (never fully
+        // ducked, which would leave only subs/chord and sound "hollow"), but
+        // can be dialed down a few dB so the subs/chord have more room.
+        raws[I("Main")] = rRange(563, 1023);
         // XFM / XFM2: cross-FM index, 0..kXfmMaxCents/2 cycles (0..0.4 c at
         // kXfmMaxCents=0.8). Window 0..0.2 c (raw 0..511) — a very gentle
         // sideband shimmer (the classic-FM path is frequency-independent,
         // so 0.2 c reads the same across the keyboard).
-        raws[I("XFM")] = rRange(0, 511);
-        raws[I("XFM2")] = rRange(0, 511);
+        raws[I("Cross-FM A")] = rRange(0, 511);
+        raws[I("Cross-FM B")] = rRange(0, 511);
         // FCUT: SVF cutoff, log 80 Hz..12 kHz. Window 1 kHz..11 kHz
         // (raw 740..1023) — keeps the filter in its working band, never
         // "in a box" (low) or fully open (high, where the walk does nothing).
-        raws[I("FCUT")] = rRange(740, 1023);
+        raws[I("Cutoff")] = rRange(740, 1023);
         // RES: SVF resonance Q, 0.5..2.5. Window 0.5..1.8 (raw 0..669) —
         // gentle peak, no ringy spike.
-        raws[I("RES")] = rRange(0, 669);
+        raws[I("Resonance")] = rRange(0, 669);
+        // RVLL: breath depth on the four voice levels (0..100%). Window
+        // 20..80% (raw 204..818) — audible voice-trading without any voice
+        // fully vanishing (a full 0% would silence a voice, which reads as a
+        // glitch, not a "breath"). The depth is still gated by RATE (the
+        // shared walk ceiling), so the effective breathing is gentler than the
+        // raw window suggests.
+        raws[I("Breath Depth")] = rRange(204, 818);
+        // RVLS: breath stream period (0.1 s..10 s, log). Full range — a slow
+        // breath (10 s) or a lively one (0.1 s) are both musically usable.
+        raws[I("Breath Rate")] = r1023();
+        // RVLSM: breath stream time constant (10 ms..1.5 s, log). Full range.
+        raws[I("Breath Smooth")] = r1023();
+        // CHSAT: chord's own saturator drive (0..300). Window 0..60% (raw
+        // 0..613) — a gentle-to-moderate drive on the chord voice, independent
+        // of the A+B SATU knob. The upper bound keeps the chord from clipping
+        // the final mix when the main voice is also driven.
+        raws[I("Chord Drive")] = rRange(0, 613);
+        // CHFLD: chord's own wavefolder depth (0..100%). Window 0..50%
+        // (raw 0..511) — a light metallic edge on the chord, never a full
+        // triangle fold (which would alias harshly at the chord's higher
+        // partials). 0 keeps the chord clean.
+        raws[I("Chord Fold")] = rRange(0, 511);
         return raws;
       }
 

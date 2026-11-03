@@ -85,13 +85,19 @@ struct RandomWalk
   // point of use, so the same walk state can drive any parameter. max_dev is
   // the normalized depth ceiling (= rw_amount, 0..1); the actual scale is the
   // Osc's business (see RandomWalk::scale applied in Osc::process).
-  float dev_a;       // current normalized deviation [-1, +1], osc A
-  float dev_b;       // current normalized deviation [-1, +1], osc B
-  float target_a;    // normalized random target [-1, +1], osc A
-  float target_b;    // normalized random target [-1, +1], osc B
+  float dev_a;       // current normalized deviation [-1, +1], channel A
+  float dev_b;       // current normalized deviation [-1, +1], channel B
+  float dev_c;       // current normalized deviation [-1, +1], channel C
+  float dev_d;       // current normalized deviation [-1, +1], channel D
+  float target_a;    // normalized random target [-1, +1], channel A
+  float target_b;    // normalized random target [-1, +1], channel B
+  float target_c;    // normalized random target [-1, +1], channel C
+  float target_d;    // normalized random target [-1, +1], channel D
   float max_dev;     // normalized depth ceiling (0..1), = rw_amount
   float k;           // tracking coefficient (per sample), recomputed on setup()
-  uint32_t counter;  // samples elapsed since the last target regeneration
+  uint32_t counter;  // samples elapsed since the last A/B target regeneration
+  uint32_t counter_c; // samples elapsed since the last C target regeneration
+  uint32_t counter_d; // samples elapsed since the last D target regeneration
   uint32_t mean_interval; // MEAN target-update gap in samples (from SPEE, log
                           // mapped 0.1 s .. 10 s). Each new target's actual gap
                           // is drawn from an exponential distribution with this
@@ -103,6 +109,8 @@ struct RandomWalk
                           // The first gap (right after reset/setup) is the
                           // mean itself, so note-on does not jump to a random
                           // gap.
+  uint32_t next_interval_c; // gap for the NEXT C target (independent cadence)
+  uint32_t next_interval_d; // gap for the NEXT D target (independent cadence)
   // Cached RATE SPD / RATE SMTH values (0..1). setup() recomputes k/mean_interval
   // only when these change (K-rate, not per-block), avoiding 2 fasterpowf
   // calls per block in Osc::process when the walk is active.
@@ -147,6 +155,8 @@ struct RandomWalk
       // Snap the upcoming gap back to the mean so a knob change is not
       // "stuck" in a long random tail from the previous period.
       next_interval = mean_interval;
+      next_interval_c = mean_interval; // C channel: independent cadence
+      next_interval_d = mean_interval; // D channel: independent cadence
     }
   }
 
@@ -194,10 +204,14 @@ struct RandomWalk
       return; // walk disabled
 
     // Update the targets on the current (randomly-drawn) gap, then draw the
-    // next gap. Both A and B share one counter/interval, so their targets are
+    // next gap. A and B share one counter/interval, so their targets are
     // regenerated together (the deviations themselves are independent —
     // target_a/target_b are separate white() draws — giving the asymmetric
-    // chorus behavior described in the class comment).
+    // chorus behavior described in the class comment). C and D each have their
+    // OWN counter and exponentially-drawn gap, so they wander independently
+    // (used by the "Breath" stream to modulate the four voice levels at
+    // different times). All four channels track their targets with the same
+    // per-sample coefficient k.
     if (++counter >= next_interval)
     {
       counter = 0;
@@ -205,10 +219,24 @@ struct RandomWalk
       target_b = white();
       draw_next_interval(white);
     }
+    if (++counter_c >= next_interval_c)
+    {
+      counter_c = 0;
+      target_c = white();
+      draw_next_interval(white);
+    }
+    if (++counter_d >= next_interval_d)
+    {
+      counter_d = 0;
+      target_d = white();
+      draw_next_interval(white);
+    }
 
     // Smoothly track the targets: dev += (target - dev) * k
     dev_a += (target_a - dev_a) * k;
     dev_b += (target_b - dev_b) * k;
+    dev_c += (target_c - dev_c) * k;
+    dev_d += (target_d - dev_d) * k;
 
     // Safety clamps to the normalized range (should rarely trigger)
     if (dev_a > 1.f)
@@ -219,6 +247,14 @@ struct RandomWalk
       dev_b = 1.f;
     else if (dev_b < -1.f)
       dev_b = -1.f;
+    if (dev_c > 1.f)
+      dev_c = 1.f;
+    else if (dev_c < -1.f)
+      dev_c = -1.f;
+    if (dev_d > 1.f)
+      dev_d = 1.f;
+    else if (dev_d < -1.f)
+      dev_d = -1.f;
   }
 
   // Reset the random-walk state (center the walk, zero the targets).
@@ -226,14 +262,22 @@ struct RandomWalk
   {
     dev_a = 0.f;
     dev_b = 0.f;
+    dev_c = 0.f;
+    dev_d = 0.f;
     target_a = 0.f;
     target_b = 0.f;
+    target_c = 0.f;
+    target_d = 0.f;
     counter = 0;
+    counter_c = 0;
+    counter_d = 0;
     cached_rate = -1.f;
     cached_smooth = -1.f;
     // The next gap starts as the (last-computed) mean so the first target
     // regeneration is deterministic after a reset. If setup() has never run
     // (mean_interval = 0), clamp to 1 to avoid an immediate re-draw.
     next_interval = (mean_interval > 0U) ? mean_interval : 1U;
+    next_interval_c = next_interval;
+    next_interval_d = next_interval;
   }
 };

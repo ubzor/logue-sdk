@@ -32,6 +32,10 @@ npx vite build
 # $SIM_DIR so the served simulator has them even when `make wasm` below is
 # skipped (drone.html up to date). Without this step a stale check or a
 # partial make-wasm run leaves sim/ without the CSS/JS -> 404 in the browser.
+# Ensure $SIM_DIR exists first: after `make clean` the whole sim/ directory is
+# removed, and `make wasm` (which normally creates it via the em++ link step)
+# runs *after* this copy, so a plain `cp` would fail on the missing target dir.
+mkdir -p "$SIM_DIR"
 cp -p "$SANDBOX_DIR/sim/flyon.css" "$SIM_DIR/flyon.css"
 cp -p "$SANDBOX_DIR/sim/flyon.js"  "$SIM_DIR/flyon.js"
 echo ""
@@ -73,19 +77,34 @@ echo "============================================"
 # page is cross-origin isolated, which requires the COOP/COEP response headers
 # below. Plain `python3 -m http.server` does not send them, so we use a tiny
 # custom handler instead.
-cd "$SIM_DIR"
+#
+# Do NOT `cd "$SIM_DIR"` before exec: if the server runs while `make clean`
+# removes (and `make wasm` recreates) $SIM_DIR, the process's cwd becomes
+# invalid and the Python runtime can stall on os.getcwd(). Instead, pin the
+# cwd to $SCRIPT_DIR (stable — never removed by make) and pass $SIM_DIR to the
+# handler as its served directory (see COIHandler.__init__ below).
+cd "$SCRIPT_DIR"
 PORT="${1:-8000}"
 BIND="${2:-0.0.0.0}"
 echo "Headers:   COOP/COEP enabled (for SharedArrayBuffer)"
 echo ""
-exec python3 - "$PORT" "$BIND" <<'PYEOF'
+exec python3 - "$PORT" "$BIND" "$SIM_DIR" <<'PYEOF'
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 port = int(sys.argv[1])
 bind = sys.argv[2]
+directory = sys.argv[3]
 
 class COIHandler(SimpleHTTPRequestHandler):
+    # Pin the served directory explicitly so the handler does not fall back to
+    # os.getcwd() (the base __init__ does that when `directory` is not passed,
+    # and a stale/removed cwd — e.g. after `make clean` + `make wasm` while the
+    # server is running — would crash every request with FileNotFoundError).
+    # Pass `directory` to super().__init__ so the base class uses it instead of
+    # calling os.getcwd() itself.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=directory, **kwargs)
     # Enable cross-origin isolation so SharedArrayBuffer is available.
     def end_headers(self):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")

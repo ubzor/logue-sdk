@@ -25,10 +25,12 @@
  *  does NOT apply — the chord voice is a stable "anchor", not a beating
  *  voice.
  *
- *  Level (CHORD knob, 0..100%) is applied by the Osc with normalized gain:
- *    gain = kMixChord * lvl / (1 + lvl)
- *  so turning up the chord voice does not push the main 2-osc mix into
- *  the saturator's clipping region.
+ *  Level (CHORD knob, 0..100%) is applied by the Osc with a LINEAR gain
+ *    gain = p.chord_level (0..1)
+ *  then shaped by the chord's OWN folder+saturator pass (driven by the
+ *  chord's own CHSAT/CHFLD knobs — independent of the A+B SATU/FOLD; ASYM is
+ *  shared) and scaled by Osc::kMixChordDirect in the final mix (the chord is
+ *  mixed in parallel with the A+B output so the MAIN knob ducks only A+B).
  *
  *  The interval is recomputed at K-rate (setParameter(CINT) / setPitch)
  *  using a 6th-order Taylor series for 2^(cents/1200) (see osc_detune.h
@@ -47,10 +49,12 @@ struct ChordVoice
   // 0% = 0 cents (unison), 100% = 1900 cents.
   static constexpr float kMaxCents = 1900.f;
 
-  // Full-knob gain ceiling. The Osc applies:
-  //   chord_gain = kMixChord * lvl / (1 + lvl)
-  // so at lvl=1 (100%) the voice reaches kMixChord, and the main 2-osc
-  // mix is never pushed into the saturator's clipping region.
+  // (Historical) Full-knob gain ceiling from when the chord shared the A+B
+  // saturator: chord_gain was kMixChord * lvl / (1 + lvl), so the chord could
+  // not push the shared mix into clipping. That path is gone — the chord now
+  // has its OWN saturator and uses a LINEAR gain (chord_gain = p.chord_level),
+  // scaled by Osc::kMixChordDirect in the final mix. This constant is no longer
+  // used by the audio path; kept only so external references don't break.
   static constexpr float kMixChord = 0.3f;
 
   // ---- State (per-sample, owned by the Osc) ----
