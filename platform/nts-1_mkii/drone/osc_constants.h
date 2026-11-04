@@ -29,75 +29,43 @@
 // defining `class Osc`). osc.h #includes this file, then pulls the constants
 // into the class scope with `using namespace osc_consts;`.
 
-// ---- Cross-modulation (classic dual-FM, the "FM synth" flavor) --------------
-// Cross-FM is a SEPARATE mechanism from the random walk: where the walk
-// wanders (slow, drifting targets over 0.1..10 s), cross-FM is a STATIC
-// modulation -- osc B's wavetable output (wav_b) is multiplied by the XFM
-// knob and fed into osc A's PHASOR (and symmetrically A into B for XFM2).
-// Because the modulator oscillates at the audio frequency, this produces the
-// characteristic FM harmonic sidebands (a classic dual-FM pair) rather than a
-// slow beat. The depth is in wavetable INDEX units (not cents): wav_a is
-// already a position across the 91-table bank, so adding
-// (XFM_A * wav_b) directly modulates that position by up to
-// kXfmMaxCents * 1.0 (wav_b is bounded in [-1, 1]).
-//   XFM1 (XFM_A) -> B modulates A's phasor
-//   XFM2 (XFM_B) -> A modulates B's phasor
-// At both = 0 (default) the classic FM is OFF and the sound is unchanged.
-// The modulation is applied in Osc::process() using the PREVIOUS sample's
-// wav_b (a one-sample lookback), which keeps the phasor integration stable
-// (no feedback of the current sample) and adds one sample of phase --
-// inaudible at audio rates.
-  // Maximum cross-FM index shift at 100% knob (wav_b is in [-1, 1], so the
-  // phasor is modulated by +/-kXfmMaxCents tables). 10 tables is a gentle,
-  // clearly-audible sideband spread without going into the dense aliasing
-  // region of the banks; the knob sweeps 0..10 linearly from the raw value
-  // (1023 -> 10.0).
-  static constexpr float    kXfmMaxCents = 0.8f;        // full cross-FM index (0..0.4 cycles)
-  // One-pole low-pass coefficient (per sample) for the cross-FM modulation
-  // INDEX. A small alpha (~0.02 @48 kHz => ~0.3 ms time constant) rounds off
-  // the fast sign-flips of the wavetable output that feed the FM index, so the
-  // upper (harsh) sidebands are tamed while the slow "breathing" FM is kept.
-  // Applied to the index itself (not the audio output), so the carrier is not
-  // blurred. When XFM = 0 the index is 0 and the filter is a no-op.
-  static constexpr float    kXfmSmoothAlpha = 0.02f;
-  // Cross-FM depth curve: the raw 0..1 knob value is raised to this power
-  // before scaling, so the lower part of the knob gives a very subtle
-  // breathing and the harsh "noise-like" sidebands only appear near the top
-  // of the range (quadratic = 2). Keep 1 for the stock linear feel.
-  static constexpr float    kXfmCurveExp = 2.0f;
-
-// ---- Phase-FM (FM1 / FM2): classic phase modulation, distinct from XFM -----
-// XFM modulates the WAVETABLE TABLE INDEX (a slow "breathing" morph through
-// the 91-table bank). FM1/FM2 modulate the CARRIER PHASOR directly: the
+// ---- Phase-FM (FM1 / FM2): classic phase modulation --------------------------
+// FM1/FM2 modulate the CARRIER PHASOR directly: the
 // modulator's wavetable output (prev_wav_b_ for FM1, prev_wav_a_ for FM2) is
-// multiplied by 0.5 and the depth (RW-gated, like XFM) and added to the
+// multiplied by 0.5 and the depth (static part) and added to the
 // carrier's per-sample phase increment. This produces the classic FM harmonic
-// sidebands (a Bessel-expanded partial set) rather than a table morph. The
+// sidebands (a Bessel-expanded partial set). The
 // depth is in CYCLES (peak phase deviation = kFmMaxCents / 2 at 100% knob,
 // after the 0.5 normalization and the kFmCurveExp curve), so the sideband
-// spread is frequency-independent (no low-end "howl"). Gated by the shared
-// random-walk depth (rw_amount) so the sidebands "ring" and "fade" with the
-// walk — the most drone-like FM behavior. At FM=0 or RATE=0 the FM is off and
-// the stock sound is unchanged.
+// spread is frequency-independent (no low-end "howl"). The static FM index is
+// NOT gated by RATE — turning FM on gives constant sidebands immediately.
+// RFM_A/RFM_B add a random-walk "breathing" on top (RATE-gated). At FM=0 the
+// FM is off and the stock sound is unchanged.
   // Maximum phase-FM index (peak phase deviation in cycles, before the 0.5
-  // normalization) at 100% knob. kFmMaxCents / 2 = 0.2 cycles (20% of the
-  // carrier) is a clearly-audible FM "color" without going into the dense
-  // aliasing region; the knob sweeps 0..kFmMaxCents quadratically from raw.
-  static constexpr float    kFmMaxCents   = 0.4f;        // full FM index (0..0.2 cycles)
+  // normalization) at 100% knob. kFmMaxCents / 2 = 0.05 cycles (5% of the
+  // carrier) is a clearly-audible FM "color" without going into the harsh
+  // "screech/whistle" region that a full index (>0.1 cycle) produces. The
+  // knob sweeps 0..kFmMaxCents through the kFmCurveExp (quadratic) depth
+  // curve, so the low end is a near-silent "breathing" that opens up smoothly
+  // near the top.
+  static constexpr float    kFmMaxCents   = 0.1f;        // full FM index (0..0.05 cycles)
   // One-pole low-pass coefficient (per sample) for the FM modulation INDEX.
-  // Reuses the XFM value (0.02 @48 kHz => ~0.3 ms) — the same "tame the fast
-  // sign-flips, keep the slow breathing" rationale applies.
-  static constexpr float    kFmSmoothAlpha = kXfmSmoothAlpha; // 0.02
-  // Phase-FM depth curve: same quadratic as XFM (kFmCurveExp) so the lower
+  // A small alpha (~0.02 @48 kHz => ~0.3 ms time constant) rounds off the
+  // fast sign-flips of the wavetable output that feed the FM index, so the
+  // upper (harsh) sidebands are tamed while the slow "breathing" FM is kept.
+  // Applied to the index itself (not the audio output), so the carrier is not
+  // blurred. When FM = 0 the index is 0 and the filter is a no-op.
+  static constexpr float    kFmSmoothAlpha = 0.02f;
+  // Phase-FM depth curve: quadratic so the lower
   // part of the knob is a very subtle "breathing" and the harsh sidebands
   // only open up near the top.
-  static constexpr float    kFmCurveExp    = kXfmCurveExp;  // 2.0
+  static constexpr float    kFmCurveExp    = 2.0f;
 
 // ---- Phase jitter (JIT): random phase wobble on A/B -------------------------
 // The JIT knob adds a per-sample random offset (white() - 0.5) * jit to each
 // voice's phasor increment, "smearing" the carrier into a dense set of
 // partials (the carrier's harmonics spread into a quasi-noise band). The
-// effect is frequency-DEPENDENT (unlike XFM/FM, which are cycles-based and
+// effect is frequency-DEPENDENT (unlike FM, which is cycles-based and
 // frequency-independent): at low notes the jitter is inaudible (a 0.005-cycle
 // wobble on a 50 Hz carrier is a 0.25 Hz wobble, below audibility), while at
 // high notes it becomes an audible "spread". This is the desired drone

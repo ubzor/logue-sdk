@@ -153,18 +153,6 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.rw_fld = param_10bit_to_f32(value);
       break;
 
-    // ---- Cross-modulation (XFM_A / XFM_B): classic dual-FM ----
-    // B modulates A's phasor by (XFM_A * wav_b); A modulates B's phasor by
-    // (XFM_B * wav_a). The depth is in wavetable-index units (0..kXfmMaxCents);
-    // the modulation itself is applied in process() using a one-sample
-    // lookback of the modulator's wavetable output.
-    case XFM_A:
-      params_.xfm_a = param_10bit_to_f32(value) * kXfmMaxCents;
-      break;
-    case XFM_B:
-      params_.xfm_b = param_10bit_to_f32(value) * kXfmMaxCents;
-      break;
-
     // ---- Internal SVF (FCUT cutoff + dry/wet, RES resonance) ----
     // The cutoff knob maps 0..1023 -> a LOG frequency 80 Hz..12 kHz AND a
     // linear dry/wet 0..1 (0% = raw signal, 100% = full LPF). At the default
@@ -255,21 +243,23 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       break;
 
     // ---- Enrichment: phase-FM (FM_A / FM_B = STATIC index, RFM_A/B = walk) ----
-    // Classic phase modulation of A by B (FM_A) and B by A (FM_B), distinct
-    // from XFM (which modulates the wavetable TABLE index, not the phasor).
-    // FM_A/FM_B are the STATIC index: the knob maps 0..1023 -> 0..kFmMaxCents
-    // (peak phase deviation, cycles, before the 0.5 normalization). Unlike the
-    // old RW-gated version, the static index is NOT gated by RATE — turning FM
-    // on gives constant sidebands immediately (a classic FM index), no walk
-    // required. RFM_A/RFM_B (0..1) are the random-walk DEPTH on that index:
-    // the audio path adds (rw_[0].dev * rw_amt * rfm * kFmMaxCents) so the FM
-    // "breathes" with the walk on top of the static sidebands (gated by RATE,
-    // like every other walk). At fm=0 & rfm=0 the FM is fully off.
+    // Classic phase modulation of A by B (FM_A) and B by A (FM_B).
+    // FM_A/FM_B are the STATIC index. The knob stores the RAW normalized
+    // depth (0..1023 -> 0..1); the audio path (osc_mix.h) maps it through the
+    // kFmCurveExp (quadratic) depth curve -> 0..kFmMaxCents and the 0.5
+    // normalization to the peak index in cycles (see the fm_a_curve/fm_b_curve
+    // lines). Unlike the old RW-gated version, the static index is NOT gated
+    // by RATE — turning FM on gives constant sidebands immediately (a classic
+    // FM index), no walk required. RFM_A/RFM_B (0..1) are the random-walk
+    // DEPTH on that index: the audio path adds (rw_[0].dev * rw_amt * rfm *
+    // kFmMaxCents) so the FM "breathes" with the walk on top of the static
+    // sidebands (gated by RATE, like every other walk). At fm=0 & rfm=0 the FM
+    // is fully off.
     case FM_A:
-      params_.fm_a = param_10bit_to_f32(value) * kFmMaxCents;
+      params_.fm_a = param_10bit_to_f32(value); // raw 0..1 depth (curve in the audio path)
       break;
     case FM_B:
-      params_.fm_b = param_10bit_to_f32(value) * kFmMaxCents;
+      params_.fm_b = param_10bit_to_f32(value); // raw 0..1 depth (curve in the audio path)
       break;
     case RFM_A:
       params_.rfm_a = param_10bit_to_f32(value);

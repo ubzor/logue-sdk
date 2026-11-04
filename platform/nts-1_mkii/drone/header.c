@@ -29,7 +29,7 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..40. The display
+        // A knob (PARAM, slot 0): parameter selector, 0..38. The display
         // shows the name of the selected parameter via unit_get_param_str_value().
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
@@ -56,24 +56,22 @@ const __unit_header unit_header_t unit_header = {
         //   19: RWAV - random-walk depth on wavetable morph (0..100%), default 0 (off)
         //   20: RDRV - random-walk depth on saturator drive (0..100%), default 0 (off)
         //   21: RFLD - random-walk depth on wavefolder depth (0..100%), default 0 (off)
-        //   22: XFM1 - cross-FM depth on osc A (B modulates A, 0..15 c), default 0 (off)
-        //   23: XFM2 - cross-FM depth on osc B (A modulates B, 0..15 c), default 0 (off)
-        //   24: FCUT - internal SVF cutoff + dry/wet (80 Hz..12 kHz, 0% = raw), default 921
-        //   25: RESO - internal SVF resonance Q (0.5..2.5), default 0 (0.5)
-        //   26: RWFC - random-walk depth on SVF cutoff (0..100%), default 0 (off)
-        //   27: RVLL - breath (voice-level wander) depth (0..100%), default 0 (off)
-        //   28: RVLS - breath stream period (log), default 511
-        //   29: RVLS - breath stream time constant (log), default 511
-        //   30: SATC - chord-voice saturator drive (0..300), default 341
-        //   31: FLDC - chord-voice wavefolder depth (0..100%), default 0 (off)
-        //   32: INT2 - second chord interval (0..1900 c, continuous), default 511 (~950 c, M6)
-        //   33: JIT  - random phase jitter on A/B (0..100% -> 0..0.5% cycle peak), default 0 (off)
-        //   34: RMOD - A*B ring-mod parallel voice (0..100%), default 0 (off)
-        //   35: FM1  - STATIC phase-FM on osc A by B (0..100% -> 0..0.2 c peak), default 0 (off)
-        //   36: FM2  - STATIC phase-FM on osc B by A (0..100% -> 0..0.2 c peak), default 0 (off)
-        //   37: RFMA - random-walk depth on FM A index (0..100%, RATE-gated), default 0 (pure static)
-        //   38: RFMB - random-walk depth on FM B index (0..100%, RATE-gated), default 0 (pure static)
-        {0, 40, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        //   22: FCUT - internal SVF cutoff + dry/wet (80 Hz..12 kHz, 0% = raw), default 921
+        //   23: RESO - internal SVF resonance Q (0.5..2.5), default 0 (0.5)
+        //   24: RWFC - random-walk depth on SVF cutoff (0..100%), default 0 (off)
+        //   25: RVLL - breath (voice-level wander) depth (0..100%), default 0 (off)
+        //   26: RVLS - breath stream period (log), default 511
+        //   27: RVLS - breath stream time constant (log), default 511
+        //   28: SATC - chord-voice saturator drive (0..300), default 341
+        //   29: FLDC - chord-voice wavefolder depth (0..100%), default 0 (off)
+        //   30: INT2 - second chord interval (0..1900 c, continuous), default 511 (~950 c, M6)
+        //   31: JIT  - random phase jitter on A/B (0..100% -> 0..0.5% cycle peak), default 0 (off)
+        //   32: RMOD - A*B ring-mod parallel voice (0..100%), default 0 (off)
+        //   33: FM1  - STATIC phase-FM on osc A by B (0..100% -> 0..0.2 c peak), default 0 (off)
+        //   34: FM2  - STATIC phase-FM on osc B by A (0..100% -> 0..0.2 c peak), default 0 (off)
+        //   35: RFMA - random-walk depth on FM A index (0..100%, RATE-gated), default 0 (pure static)
+        //   36: RFMB - random-walk depth on FM B index (0..100%, RATE-gated), default 0 (pure static)
+        {0, 38, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -92,8 +90,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..40. Identical to slot 0.
-        {0, 40, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..38. Identical to slot 0.
+        {0, 38, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

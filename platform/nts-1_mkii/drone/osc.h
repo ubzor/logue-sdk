@@ -27,7 +27,8 @@
  *  soft-clip saturator (SATU/ASYM), a third "chord" voice (CHRD/CINT) with its
  *  own drive/fold (CHSAT/CHFLD), sub-octave (SUB1) and sub-2 (SUB2) voices, an
  *  internal 12 dB/oct SVF (FCUT/RESO), and four independent random-walk streams
- *  (Tone/Timbre/Density/Breath) plus classic cross-FM (XFM1/XFM2). No dynamic
+ *  (Tone/Timbre/Density/Breath) plus static phase-FM (FM1/FM2) and their
+ *  random-walk breathing (RFMA/RFMB). No dynamic
  *  allocation: all state lives in members of this class.
  *
  */
@@ -88,8 +89,6 @@ public:
     RW_WAV,         // random-walk depth on wavetable morph (0..100%, default 0% = off)
     RW_DRV,         // random-walk depth on saturator drive (0..100%, default 0% = off)
     RW_FLD,         // random-walk depth on wavefolder depth (0..100%, default 0% = off)
-    XFM_A,          // cross-FM depth on osc A (B modulates A's phase, 0..30 c, default 0 = off)
-    XFM_B,          // cross-FM depth on osc B (A modulates B's phase, 0..30 c, default 0 = off)
     FCUT,           // internal SVF cutoff + dry/wet (log 80 Hz..12 kHz, 0% = raw, 100% = LPF)
     RES,            // internal SVF resonance Q (0..100% -> 0.5..2.5, default 0% = 0.5)
     RW_FC,          // random-walk depth on SVF cutoff (0..100%, default 0% = off)
@@ -111,8 +110,8 @@ public:
     CINT2,          // second chord-voice interval (0..1900 cents, continuous; shares CHRD level + CHSAT/CHFLD)
     JIT,            // random phase jitter on A/B (0..100% -> 0..kJitMaxCycles peak, default 0 = off)
     RMOD,           // A*B ring-mod parallel voice (0..100%, default 0 = off)
-    FM_A,           // STATIC phase-FM index on osc A (B modulates A), 0..100% -> 0..kFmMaxCents/2 cycles (no RATE needed)
-    FM_B,           // STATIC phase-FM index on osc B (A modulates B), 0..100% -> 0..kFmMaxCents/2 cycles (no RATE needed)
+    FM_A,           // STATIC phase-FM on osc A (B modulates A): raw 0..1 depth, quadratic curve -> 0..kFmMaxCents/2 cycles (no RATE needed)
+    FM_B,           // STATIC phase-FM on osc B (A modulates B): raw 0..1 depth, quadratic curve -> 0..kFmMaxCents/2 cycles (no RATE needed)
     // RFM_A / RFM_B: random-walk DEPTH on the FM index (the "откуда гулять" knob,
     // like RDRV on SATU or RWAV on WAV1). The walk deviation (rw_[0]) scales
     // RFM and is gated by the shared RATE ceiling, so RFM adds a "breathing"
@@ -123,10 +122,10 @@ public:
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..FM_B).
-  static constexpr uint8_t kEditParamCount = 41; // DETUNE..RFM_B
-  // The first editable enum value. The UI (header.c PARAM slot, 0..36) expects
-  // this order (select_ index -> parameter), 37 parameters total:
+  // Number of editable DSP parameters (DETUNE..RFM_B).
+  static constexpr uint8_t kEditParamCount = 39; // DETUNE..RFM_B
+  // The first editable enum value. The UI (header.c PARAM slot, 0..38) expects
+  // this order (select_ index -> parameter), 39 parameters total:
   //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
   //   2 SPD1            3 SMT1            (Tone stream period / smooth)
   //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
@@ -135,21 +134,20 @@ public:
   //   12 FOLD           13 WAV1           14 WAV2           15 WAV3
   //   16 CHRD (CHORD)   17 CINT (CHRD_INT) 18 MAIN (main A+B voice level)
   //   19 RW_WAV         20 RW_DRV         21 RW_FLD
-  //   22 XFM_A (cross-FM on A)  23 XFM_B (cross-FM on B)
-  //   24 FCUT (SVF cutoff + dry/wet)  25 RES (SVF resonance Q)
-  //   26 RWFC (RW_FC: random-walk depth on SVF cutoff)
-  //   27 RW_LVL (RW_LVL: breath depth on voice levels)
-  //   28 RW_LSP (RW_LSP: breath stream period)  29 RW_LSM (RW_LSM: breath smooth)
-  //   30 CHSAT (chord's own saturator drive)  31 CHFLD (chord's own fold depth)
-  //   32 CINT2 (second chord interval, 0..1900 c)
-  //   33 JIT (random phase jitter on A/B)
-  //   34 RMOD (A*B ring-mod parallel voice)
-  //   35 FM1 (FM_A: STATIC phase-FM on A by B)
-  //   36 FM2 (FM_B: STATIC phase-FM on B by A)
-  //   37 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)
-  //   38 RFMB (RFM_B: random-walk depth on FM B, RATE-gated)
+  //   22 FCUT (SVF cutoff + dry/wet)  23 RES (SVF resonance Q)
+  //   24 RWFC (RW_FC: random-walk depth on SVF cutoff)
+  //   25 RW_LVL (RW_LVL: breath depth on voice levels)
+  //   26 RW_LSP (RW_LSP: breath stream period)  27 RW_LSM (RW_LSM: breath smooth)
+  //   28 CHSAT (chord's own saturator drive)  29 CHFLD (chord's own fold depth)
+  //   30 CINT2 (second chord interval, 0..1900 c)
+  //   31 JIT (random phase jitter on A/B)
+  //   32 RMOD (A*B ring-mod parallel voice)
+  //   33 FM1 (FM_A: STATIC phase-FM on A by B)
+  //   34 FM2 (FM_B: STATIC phase-FM on B by A)
+  //   35 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)
+  //   36 RFMB (RFM_B: random-walk depth on FM B, RATE-gated)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 41 = (RFM_B - DETUNE + 1); select_ 0..40 -> DETUNE..RFM_B.
+  // kEditParamCount = 39 = (RFM_B - DETUNE + 1); select_ 0..38 -> DETUNE..RFM_B.
   static constexpr uint8_t kEditParamFirst = DETUNE;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
@@ -159,9 +157,9 @@ public:
   // re-selecting a parameter restores its last value. Defaults match the
   // DSP defaults in OscParamsData::reset() (osc_params.h).
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
-  // RW_FLD 0, XFM_A 0, XFM_B 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
+  // RW_FLD 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -331,10 +329,8 @@ public:
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // each stream starts centered, AMT=0 (off)
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
-    prev_wav_a_ = 0.f; // cross-FM lookback cache: start at 0 (first sample is a no-op)
+    prev_wav_a_ = 0.f; // FM lookback cache: start at 0 (first sample is a no-op)
     prev_wav_b_ = 0.f;
-    xfm_smooth_a_ = 0.f; // cross-FM index LPF state (no FM on the first sample)
-    xfm_smooth_b_ = 0.f;
     fm_smooth_a_ = 0.f; // phase-FM index LPF state (no FM on the first sample)
     fm_smooth_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
@@ -367,10 +363,8 @@ public:
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
-    prev_wav_a_ = 0.f; // cross-FM lookback cache
+    prev_wav_a_ = 0.f; // FM lookback cache
     prev_wav_b_ = 0.f;
-    xfm_smooth_a_ = 0.f; // cross-FM index LPF state
-    xfm_smooth_b_ = 0.f;
     fm_smooth_a_ = 0.f; // phase-FM index LPF state
     fm_smooth_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
@@ -592,23 +586,17 @@ private:
   // Unlike sub-1 it carries no fixed detune: it is a stable "anchor" in the
   // low end, not a beating voice.
   float phasor_sub2_; // second sub phasor (advances at w0/4, no detune)
-  // Previous-sample wavetable outputs, cached for the next sample's cross-FM
-  // modulation (one-sample lookback, see the XFM branch in the phasor update).
-  // Zeroed on init / reset so the first sample's cross-FM is a no-op.
+  // Previous-sample wavetable outputs, cached for the next sample's FM
+  // modulation (one-sample lookback, see the FM branch in the phasor update).
+  // Zeroed on init / reset so the first sample's FM is a no-op.
   float prev_wav_a_ = 0.f;
   float prev_wav_b_ = 0.f;
-  // One-pole low-pass state for the cross-FM modulation INDEX (see the XFM
-  // branch in the phasor update and osc_constants.h kXfmSmoothAlpha). Smooths
-  // the fast sign-flips of the modulating wavetable so the upper (harsh) FM
-  // sidebands are tamed while the slow "breathing" is kept. Zeroed on init /
-  // reset so the first sample's FM is a no-op (the index is 0 when XFM=0).
-  float xfm_smooth_a_ = 0.f;
-  float xfm_smooth_b_ = 0.f;
   // One-pole low-pass state for the PHASE-FM modulation INDEX (see the FM
   // branch in the phasor update, osc_mix.h, and osc_constants.h kFmSmoothAlpha).
-  // Same mechanism as xfm_smooth_* but for the FM1/FM2 knobs (phase modulation,
-  // distinct from XFM's wavetable-table modulation). Zeroed on init / reset so
-  // the first sample's FM is a no-op (the index is 0 when FM=0 / walk off).
+  // Smooths the fast sign-flips of the modulating wavetable so the upper
+  // (harsh) FM sidebands are tamed while the slow "breathing" is kept. Zeroed
+  // on init / reset so the first sample's FM is a no-op (the index is 0 when
+  // FM=0 / walk off).
   float fm_smooth_a_ = 0.f;
   float fm_smooth_b_ = 0.f;
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------

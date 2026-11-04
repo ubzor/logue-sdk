@@ -35,7 +35,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "CHRD", "CINT",
       "MAIN",
       "RWAV", "RDRV", "RFLD",
-      "XFM1", "XFM2", "FCUT", "RESO", "RWFC",
+      "FCUT", "RESO", "RWFC",
       "RVLL", "RVLS", "RVLS",
       "SATC", "FLDC",
       "INT2", "JIT", "RMOD", "FM1", "FM2", "RFMA", "RFMB"};
@@ -82,24 +82,15 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     return buf;
   }
 
-  // XFM_A / XFM_B (cross-FM depth): "Nc" (0..kXfmMaxCents, <= 2 digits).
-  // No printf in the image (the codebase hand-rolls formatting), so write the
-  // at-most-2-digit value directly.
-  if (k == XFM_A || k == XFM_B)
-  {
-    int xc = (int)(param_10bit_to_f32(raw) * kXfmMaxCents + 0.5f);
-    int n = 0;
-    if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
-    buf[n++] = (char)('0' + xc % 10);
-    buf[n++] = 'c';
-    buf[n] = '\0';
-    return buf;
-  }
-  // FM_A / FM_B (phase-FM depth): "Nc" (0..kFmMaxCents, <= 2 digits). Same
-  // format as XFM; the max is kFmMaxCents (0.4) so the value is 0..0.
+  // FM_A / FM_B (phase-FM depth): "Nc" (0..kFmMaxCents, <= 2 digits).
+  // Shows the ACTUAL depth after the quadratic kFmCurveExp
+  // curve (the audio path applies powf(raw, kFmCurveExp) * kFmMaxCents), so
+  // the display never overstates what the knob is doing: low knob -> "0c",
+  // full knob -> "0c" (kFmMaxCents = 0.1 < 1 cent, so it reads 0). This is
+  // intentional: FM is a subtle timbre knob, not a loud index.
   if (k == FM_A || k == FM_B)
   {
-    int xc = (int)(param_10bit_to_f32(raw) * kFmMaxCents + 0.5f);
+    int xc = (int)(powf(param_10bit_to_f32(raw), kFmCurveExp) * kFmMaxCents + 0.5f);
     int n = 0;
     if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
     buf[n++] = (char)('0' + xc % 10);

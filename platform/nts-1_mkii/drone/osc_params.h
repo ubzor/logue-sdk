@@ -46,7 +46,7 @@ struct OscParamsData
   // independent random targets on independent (randomly-drawn) periods, so the
   // streams are NOT phase-locked to each other — each "lives its own life".
   // See osc.h for which DSP target each stream drives:
-  //   [0] Tone    -> detune A/B + cross-FM (XFM_A / XFM_B)
+  //   [0] Tone    -> detune A/B + FM (FM_A / FM_B + RFM_A / RFM_B)
   //   [1] Timbre  -> wavetable morph (RW_WAV) + SVF cutoff (RWFC)
   //   [2] Density -> saturator drive (RW_DRV) + wavefolder depth (RW_FLD)
   float rw_rate[3];   // 0.f .. 1.f, edit SPD1..3: stream period (0.1 s .. 10 s, log)
@@ -81,9 +81,6 @@ struct OscParamsData
   float rw_wav;       // 0.f .. 1.f, edit: random-walk depth on wavetable morph (RW_WAV)
   float rw_drv;       // 0.f .. 1.f, edit: random-walk depth on saturator drive (RW_DRV)
   float rw_fld;       // 0.f .. 1.f, edit: random-walk depth on wavefolder depth (RW_FLD)
-  // ---- Cross-FM (XFM): phase modulation of A by B and vice versa --------
-  float xfm_a;        // 0.f .. 1.f, edit: XFM depth on osc A (A is modulated by B)
-  float xfm_b;        // 0.f .. 1.f, edit: XFM depth on osc B (B is modulated by A)
   // ---- Internal SVF (FCUT / RES): 12 dB/oct low-pass after the saturator --
   float svf_cut;      // 0.f .. 1.f, edit: FCUT knob (log-mapped 80 Hz .. 12 kHz)
   float svf_res;      // 0.f .. 1.f, edit: RES knob (linear 0.5 .. 2.5 Q)
@@ -132,12 +129,13 @@ struct OscParamsData
   // ring-mod is off and the stock sound is unchanged.
   float ring_mix;     // 0.f .. 1.f, edit RMOD (A*B ring-mod level)
   // FM1/FM2 (FM_A/FM_B): phase modulation of A by B and vice versa. The knob
-  // maps 0..1023 -> 0..kFmMaxCents (peak phase deviation, in cycles, after the
-  // 0.5 normalization and the kFmCurveExp curve). RW-gated like XFM (the
-  // sidebands "breathe" with the random walk). At 0 (default) or RATE=0 the
-  // FM is off and the stock sound is unchanged.
-  float fm_a;         // 0.f .. kFmMaxCents, edit FM1 (STATIC phase-FM on A by B)
-  float fm_b;         // 0.f .. kFmMaxCents, edit FM2 (STATIC phase-FM on B by A)
+  // stores the RAW normalized depth (0..1023 -> 0..1); the audio path maps it
+  // through the kFmCurveExp (quadratic) curve -> 0..kFmMaxCents (peak phase
+  // deviation, in cycles, before the 0.5 normalization). So the low end is a
+  // near-silent "breathing" and the sidebands open up smoothly near the top.
+  // At 0 (default) the FM is off and the stock sound is unchanged.
+  float fm_a;         // 0.f .. 1.f raw depth (curve in the audio path), edit FM1 (STATIC phase-FM on A by B)
+  float fm_b;         // 0.f .. 1.f raw depth (curve in the audio path), edit FM2 (STATIC phase-FM on B by A)
   // RFM1/RFM2 (RFM_A/RFM_B): random-walk DEPTH on the FM index (the
   // "откуда гулять" knob, like RDRV on SATU or RWAV on WAV1). The audio path
   // adds (rw_[0].dev * rw_amt * rfm * kFmMaxCents) to the static fm_a/fm_b
@@ -177,8 +175,6 @@ struct OscParamsData
     rw_fld = 0.f;       // default: walk off for fold depth (was 0.5: dead knob at stock RATE=0,
                         // and the multiplexer bug made it sound like a phantom LFO before the
                         // direct-channel fix. 0 keeps the stock sound bit-identical.)
-     xfm_a = 0.f;        // default: cross-FM off (A not modulated by B)
-     xfm_b = 0.f;        // default: cross-FM off (B not modulated by A)
      svf_cut = 0.9f;     // default: SVF near full-open (~9 kHz); with svf_wet = 0 the
                         // LPF is transparent, so the stock sound is preserved.
      svf_res = 0.f;      // default: Q = 0.5 (over-damped, no resonance peak)

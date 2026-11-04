@@ -149,39 +149,27 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
   const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
   const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
-  // Cross-FM (classic FM): osc A's phase is modulated by B's wavetable
-  // output (XFM_A knob) and osc B's by A's (XFM_B knob). The modulation
-  // index is in CYCLES (peak phase deviation = kXfmMaxCents / 2 at 100%
-  // knob), NOT an amplitude-scaled wavetable — this is what makes the
-  // sideband spread predictable and frequency-independent (no low-end
-  // "howl" when the drone sits at 50-200 Hz). The peak phase deviation
-  // is kXfmMaxCents/2 = 0.04 cycles (4% of the carrier frequency) at
-  // full knob — a subtle "breathing" shimmer, not a strong FM spread.
-  // Gated by the shared random-
-  // walk depth (rw_amount) so the sidebands "ring" and "fade" with the
-  // walk. When rw_amount == 0 (walk off) or the XFM knob is 0, the
-  // per-sample modulation below is a no-op (regression-safe: identical to
-  // the stock 2-osc sound). See the XFM branch in the phasor update.
-  const bool xfm_a_active = rw_active && p.xfm_a > 0.f;
-  const bool xfm_b_active = rw_active && p.xfm_b > 0.f;
-  // Per-sample precomputed FM depth: the raw 0..1 knob value raised to
-  // kXfmCurveExp (quadratic by default) so the lower part of the knob is a
-  // very subtle breathing and the harsh sidebands only open up near the top,
-  // then scaled by kXfmMaxCents to cycles. Precomputed once per block (the
-  // knob is L-rate) instead of inside the loop. At 0 the curve is 0.
-  const float xfm_a_curve = powf(p.xfm_a, kXfmCurveExp) * kXfmMaxCents;
-  const float xfm_b_curve = powf(p.xfm_b, kXfmCurveExp) * kXfmMaxCents;
   // ---- Phase-FM (FM1/FM2 = STATIC index + RFM walk): per-block cache ----
   // FM_A / FM_B are the STATIC FM index (peak phase deviation, cycles, after
   // the 0.5 normalization): the knob value (already 0..kFmMaxCents) times 0.5.
-  // Unlike XFM (pure walk) the static index is NOT gated by RATE — turning FM
-  // on gives constant sidebands immediately. RFM_A / RFM_B add a random-walk
+  // The static index is NOT gated by RATE — turning FM on gives constant
+  // sidebands immediately. RFM_A / RFM_B add a random-walk
   // "breathing" on top: the walk depth (dev * rw_amt * rfm) is gated by RATE,
   // like every other walk. Precomputed once per block (knobs are L-rate); the
   // per-sample raw index (prev_wav * 0.5 * eff_index) is in the loop below.
   // At fm=0 & rfm=0 the FM is fully off (regression-safe).
-  const float fm_a_static = p.fm_a * 0.5f;  // static peak index (cycles)
-  const float fm_b_static = p.fm_b * 0.5f;  // static peak index (cycles)
+  //
+  // The knob stores the RAW normalized depth (p.fm_a/p.fm_b are 0..1, see
+  // apply_edit_param) and the audio path maps it through the kFmCurveExp
+  // (quadratic) depth curve -> 0..kFmMaxCents, then the 0.5 normalization to
+  // the peak index in cycles. The low end of the knob is a near-silent
+  // "breathing" (curve ~ x^2 is tiny) and the harsh sidebands only open up
+  // near the top, so the FM is a smooth, usable timbre knob instead of
+  // "slight turn = screech".
+  const float fm_a_curve  = powf(p.fm_a, kFmCurveExp) * kFmMaxCents; // 0..kFmMaxCents
+  const float fm_b_curve  = powf(p.fm_b, kFmCurveExp) * kFmMaxCents;
+  const float fm_a_static = fm_a_curve * 0.5f;  // static peak index (cycles)
+  const float fm_b_static = fm_b_curve * 0.5f;  // static peak index (cycles)
   const bool fm_a_wander = rw_active && p.rfm_a > 0.f;  // walk on FM A (RATE-gated)
   const bool fm_b_wander = rw_active && p.rfm_b > 0.f;  // walk on FM B (RATE-gated)
   const float fm_a_wander_depth = p.rfm_a * kFmMaxCents * 0.5f;  // walk peak (cycles)
@@ -288,26 +276,19 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       if (lvl_sub < 0.f) lvl_sub = 0.f; else if (lvl_sub > 1.f) lvl_sub = 1.f;
     }
 
-    // phasor update (plus optional classic cross-FM phase modulation)
-    // Classic FM: each osc's phase is modulated by the OTHER osc's
+    // phasor update (plus optional phase-FM and JIT)
+    // FM: each osc's phase is modulated by the OTHER osc's
     // wavetable output, scaled by a CYCLES-based index. The modulation
     // index (peak phase deviation, in cycles) is
-    //   (other_wavetable_out * 0.5) * depth
-    // where depth = rw_.dev_other * rw_amt * (XFM knob 0..1)^kXfmCurveExp *
-    // kXfmMaxCents (precomputed as xfm_a_curve / xfm_b_curve above). The wavetable
-    // output is in [-1, +1]; multiplying by 0.5 normalizes it to a peak
-    // of 0.5 cycles at the XFM knob's full scale, so the index is bounded
-    // to +/-kXfmMaxCents/2 cycles (e.g. +/-0.04 cycles at kXfmMaxCents=0.8).
-    // The raw index is then passed through a one-pole low-pass
-    // (kXfmSmoothAlpha) that softens the fast part of the modulation without
-    // touching the carrier itself.
-    // This is frequency-INDEPENDENT: the same XFM knob position gives the
-    // same sideband spread on a 50 Hz drone and on a 2 kHz note (no more
-    // low-end "howl" when the wavetable is dense — the old (1/2pi)-scaled
-    // version produced an index of up to 159% of the base phase step at
-    // low notes, which was the source of the harsh wobble/whine).
-    // Gated by rw_amt so the sidebands breathe with the walk. At XFM=0 or
-    // rw_amt=0 this adds 0. (The wavetable values are read AFTER the
+    //   (other_wavetable_out) * eff_index
+    // where eff_index = static (fm_a_static) + walk (dev * rw_amt * wander_depth).
+    // The wavetable output is in [-1, +1]; the index is bounded to
+    // +/-kFmMaxCents/2 cycles. The raw index is then passed through a
+    // one-pole low-pass (kFmSmoothAlpha) that softens the fast part of
+    // the modulation without touching the carrier itself.
+    // This is frequency-INDEPENDENT: the same FM knob position gives the
+    // same sideband spread on a 50 Hz drone and on a 2 kHz note.
+    // At fm=0 & rfm=0 this adds 0. (The wavetable values are read AFTER the
     // phasor wrap below, so the modulated phasor and the wavetable sample
     // are from the same instant.)
     //
@@ -318,27 +299,6 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // We use the cached previous wavetable values (prev_wav_a_ / prev_wav_b_)
     // updated at the end of each iteration.
     {
-      // Raw (unfiltered) FM index, in cycles. The knob depth now goes through
-      // the kXfmCurveExp curve (xfm_a_curve / xfm_b_curve, precomputed above)
-      // instead of the linear p.xfm_a * kXfmMaxCents, so the lower part of the
-      // knob is a gentle breathing. The modulating wavetable output
-      // (prev_wav_b_/a_) is the fast part and is NOT smoothed here — only the
-      // resulting INDEX is low-passed below.
-      const float xfm_a_raw = xfm_a_active
-          ? (prev_wav_b_ * 0.5f *
-             (rw_[0].dev_b * rw_amt * xfm_a_curve))
-          : 0.f;
-      const float xfm_b_raw = xfm_b_active
-          ? (prev_wav_a_ * 0.5f *
-             (rw_[0].dev_a * rw_amt * xfm_b_curve))
-          : 0.f;
-      // One-pole low-pass on the FM index (see osc_constants.h kXfmSmoothAlpha).
-      // It tames the fast sign-flips of the wavetable output so the upper
-      // (harsh) sidebands soften while the slow breathing survives. When the
-      // raw index is 0 (XFM off / walk off) this relaxes to 0, so the stock
-      // sound is unchanged. The state lives in xfm_smooth_a_/b_.
-      xfm_smooth_a_ += kXfmSmoothAlpha * (xfm_a_raw - xfm_smooth_a_);
-      xfm_smooth_b_ += kXfmSmoothAlpha * (xfm_b_raw - xfm_smooth_b_);
       // ---- Phase-FM (FM1/FM2): static index + RFM walk "breathing" ----
       // eff_index = static (fm_a_static) + walk (dev * rw_amt * wander_depth).
       // The static part is ALWAYS present (no RATE gate) — turning FM on gives
@@ -348,7 +308,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // already folded into the static/wander depths above, so here we
       // multiply by the full prev_wav in [-1,1] to get the per-sample index).
       // One-pole (kFmSmoothAlpha) tames the fast sign-flips; the state lives in
-      // fm_smooth_a_/b_ (separate from xfm_smooth_*). At fm=0 & rfm=0 the
+      // fm_smooth_a_/b_. At fm=0 & rfm=0 the
       // eff_index is 0 and the LPF relaxes to 0 (regression-safe).
       const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
       const float fm_b_wander = fm_b_wander ? (rw_[0].dev_a * rw_amt * fm_b_wander_depth) : 0.f;
@@ -365,13 +325,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // Each voice draws its OWN white() so A and B are not phase-locked.
       const float jit_a = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
       const float jit_b = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
-      // Combined per-sample phase increment: base detuned w0 + XFM (table
-      // morph, smoothed) + FM (phase mod, smoothed) + JIT (random wobble).
-      // The floorf wrap below (modular, x - floorf(x)) handles the signed
-      // XFM/FM/JIT offsets, so the phasor stays in [0, 1) for any finite
-      // input (no negative-LUT-UB, see the wrap comment below).
-      phasor_a_ += w0_a + xfm_smooth_a_ + fm_smooth_a_ + jit_a;
-      phasor_b_ += w0_b + xfm_smooth_b_ + fm_smooth_b_ + jit_b;
+      // Combined per-sample phase increment: base detuned w0 + FM (phase mod,
+      // smoothed) + JIT (random wobble). The floorf wrap below (modular,
+      // x - floorf(x)) handles the signed FM/JIT offsets, so the phasor stays
+      // in [0, 1) for any finite input (no negative-LUT-UB, see the wrap
+      // comment below).
+      phasor_a_ += w0_a + fm_smooth_a_ + jit_a;
+      phasor_b_ += w0_b + fm_smooth_b_ + jit_b;
     }
     // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
     // No random-walk modulation — the chord voice is a stable "anchor"
@@ -404,21 +364,21 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // Use a modular floor (x - floorf(x)) instead of a single subtract.
     // The single-subtract form (if (p >= 1) p -= 1) only handles the
     // case where the per-sample increment is in (0, 1) and the phasor
-    // starts in [0, 1). Cross-FM (XFM_A / XFM_B) adds a signed per-sample
-    // phase offset of up to +/-kXfmMaxCents/2 cycles (see the XFM branch
-    // above: prev_wav * 0.5 * dev * rw_amt * xfm * kXfmMaxCents), so when the previous
-    // sample's wavetable output has the opposite sign to the random-walk
-    // deviation the combined increment (w0_a + xfm_a_idx) can be NEGATIVE,
+    // starts in [0, 1). FM (FM_A / FM_B) adds a signed per-sample
+    // phase offset of up to +/-kFmMaxCents/2 cycles (see the FM branch
+    // above: prev_wav * eff_index), so when the previous
+    // sample's wavetable output has the opposite sign to the index
+    // the combined increment (w0_a + fm_a_idx) can be NEGATIVE,
     // pushing phasor_a_ below 0. The single subtract never corrects a
     // negative phasor, so it would feed a value < 0 into osc_wave_scanf()
     // whose `(uint32_t)x` cast is undefined behavior for negative floats
     // (out-of-bounds LUT read -> garbage/NaN -> NaN-lock in the SVF /
-    // cross-FM feedback loop). floorf normalizes to [0, 1) for ANY finite
+    // FM feedback loop). floorf normalizes to [0, 1) for ANY finite
     // input (positive, negative, or > 1), so the LUT is always queried
     // with a valid phase. Cost: one floorf per phasor per sample (4 total);
     // floorf is a single VFP instruction on FPv4 (ARM) and SSE (x86), and
     // is a no-op when the phasor is already in [0, 1) (the common case at
-    // XFM = 0), so the stock sound is bit-identical.
+    // FM = 0), so the stock sound is bit-identical.
     phasor_a_   -= floorf(phasor_a_);
     phasor_b_   -= floorf(phasor_b_);
     phasor_sub_ -= floorf(phasor_sub_);
@@ -446,9 +406,9 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables;
     const float wav_a = WaveTable::resolve_wave(wav_a_pos, phasor_a_);
     const float wav_b = WaveTable::resolve_wave(wav_b_pos, phasor_b_);
-    // Cache this sample's wavetable outputs for the NEXT sample's cross-FM
-    // modulation (one-sample lookback, see the XFM branch in the phasor
-    // update above). When cross-FM is off these writes are the only cost.
+    // Cache this sample's wavetable outputs for the NEXT sample's FM
+    // modulation (one-sample lookback, see the FM branch in the phasor
+    // update above). When FM is off these writes are the only cost.
     prev_wav_a_ = wav_a;
     prev_wav_b_ = wav_b;
 
