@@ -560,7 +560,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     const float chord_in   = (wav_c + wav_c2) * chord_gain * lvl_c;
     const float chord_fold = Saturator::fold(chord_in, chord_fold_clamped);
     const float chord_sat  = Saturator::saturate(chord_fold, chord_drive_clamped, p.asym);
-    // ---- RMOD: A*B ring-mod parallel voice (like the chord, NOT in A+B) ----
+    // ---- RMOD: A*B ring-mod DERIVED voice (NOT in A+B, but ducks with it) ----
     // (wav_a * wav_b) * ring_mix is a spectral "difference" (the two
     // wavetables' partials shifted by +/- each other's frequencies) — it
     // adds metallic "ring" / "beating" without disturbing the A+B
@@ -568,7 +568,16 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // full-level metallic "ring" on top of the intact A+B tone, instead of
     // replacing it (which is what an in-A+B mix would do). At ring_mix = 0
     // (default) the branch is 0 (regression-safe).
-    const float ring_out = rmod_active ? (wav_a * wav_b) * p.ring_mix : 0.f;
+    //
+    // Unlike the chord, RMOD is a DERIVED voice of A+B (it is literally
+    // wav_a * wav_b), so it is ducked by the MAIN level knob: at MAIN=0 the
+    // whole main-voice cluster (A+B + its FM/FM-JIT/RMOD byproducts) goes
+    // silent together. This was a bug — MAIN only scaled y_filt, so
+    // MAIN=0 + RMOD>0 still produced an audible metallic tone out of a
+    // "muted" voice. (FM A / FM B themselves modulate the A/B phasors, not
+    // levels: they reshape wav_a/wav_b and hence the ring spectrum, but
+    // cannot raise its amplitude — |wav_a * wav_b| <= 1 always.)
+    const float ring_out = rmod_active ? (wav_a * wav_b) * p.ring_mix * p.main_level : 0.f;
     float raw = (y_filt * kMixOsc * p.main_level
                + chord_sat * kMixChordDirect
                + sub * p.sub_level * lvl_sub * kMixSub

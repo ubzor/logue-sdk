@@ -123,10 +123,11 @@ struct OscParamsData
   // to each voice's phasor increment, so the carrier "smears" into a dense
   // partial. At 0 (default) the jitter is off and the stock sound is unchanged.
   float jit_cycles;   // 0.f .. kJitMaxCycles, edit JIT (peak phase deviation)
-  // RMOD: A*B ring-mod parallel voice. The knob maps 0..1023 -> 0..1 (mix
-  // depth). The audio path computes (wav_a * wav_b) * ring_mix and adds it to
-  // the final mix (parallel branch, like the chord). At 0 (default) the
-  // ring-mod is off and the stock sound is unchanged.
+  // RMOD: A*B ring-mod derived voice (parallel, MAIN-ducked). The knob maps
+  // 0..1023 -> 0..1 (mix depth). The audio path computes (wav_a * wav_b) *
+  // ring_mix * main_level and adds it to the final mix (parallel branch: not
+  // in the A+B saturator chain, but ducked by MAIN like A+B itself). At 0
+  // (default) the ring-mod is off and the stock sound is unchanged.
   float ring_mix;     // 0.f .. 1.f, edit RMOD (A*B ring-mod level)
   // FM1/FM2 (FM_A/FM_B): phase modulation of A by B and vice versa. The knob
   // stores the RAW normalized depth (0..1023 -> 0..1); the audio path maps it

@@ -234,10 +234,12 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.jit_cycles = param_10bit_to_f32(value) * kJitMaxCycles;
       break;
 
-    // ---- Enrichment: A*B ring-mod parallel voice (RMOD) ----
+    // ---- Enrichment: A*B ring-mod derived voice (RMOD, MAIN-ducked) ----
     // The knob maps 0..1023 -> 0..1 (mix depth). The audio path computes
-    // (wav_a * wav_b) * ring_mix and adds it to the final mix as a parallel
-    // branch (like the chord). At 0 the ring-mod is off (regression-safe).
+    // (wav_a * wav_b) * ring_mix * main_level and adds it to the final mix as
+    // a parallel branch (not in the A+B saturator chain, but ducked by MAIN:
+    // MAIN=0 silences the whole main-voice cluster at once). At 0 the
+    // ring-mod is off (regression-safe).
     case RMOD:
       params_.ring_mix = param_10bit_to_f32(value);
       break;

@@ -109,7 +109,7 @@ public:
     // in osc_param_apply.h / osc_mix.h for the DSP details.
     CINT2,          // second chord-voice interval (0..1900 cents, continuous; shares CHRD level + CHSAT/CHFLD)
     JIT,            // random phase jitter on A/B (0..100% -> 0..kJitMaxCycles peak, default 0 = off)
-    RMOD,           // A*B ring-mod parallel voice (0..100%, default 0 = off)
+    RMOD,           // A*B ring-mod derived voice, ducked by MAIN (0..100%, default 0 = off)
     FM_A,           // STATIC phase-FM on osc A (B modulates A): raw 0..1 depth, quadratic curve -> 0..kFmMaxCents/2 cycles (no RATE needed)
     FM_B,           // STATIC phase-FM on osc B (A modulates B): raw 0..1 depth, quadratic curve -> 0..kFmMaxCents/2 cycles (no RATE needed)
     // RFM_A / RFM_B: random-walk DEPTH on the FM index (the "откуда гулять" knob,
@@ -141,7 +141,7 @@ public:
   //   28 CHSAT (chord's own saturator drive)  29 CHFLD (chord's own fold depth)
   //   30 CINT2 (second chord interval, 0..1900 c)
   //   31 JIT (random phase jitter on A/B)
-  //   32 RMOD (A*B ring-mod parallel voice)
+  //   32 RMOD (A*B ring-mod derived voice, MAIN-ducked)
   //   33 FM1 (FM_A: STATIC phase-FM on A by B)
   //   34 FM2 (FM_B: STATIC phase-FM on B by A)
   //   35 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)

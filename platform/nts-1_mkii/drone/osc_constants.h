@@ -77,7 +77,7 @@
   // "spread"), at 50 Hz a +/-0.25 Hz wobble (inaudible, stays clean).
   static constexpr float    kJitMaxCycles = 0.005f;
 
-// ---- Ring-mod (RMOD): A*B parallel voice ------------------------------------
+// ---- Ring-mod (RMOD): A*B derived voice (parallel, MAIN-ducked) -------------
 // The RMOD knob computes (wav_a * wav_b) * ring_mix and adds it to the final
 // mix as a PARALLEL branch (like the chord), NOT inserted into the A+B
 // saturator chain. Rationale: A*B is a spectral "difference" (the sum of the
@@ -87,6 +87,15 @@
 // vanish (A*B has no fundamental, only sidebands), which is not a drone.
 // As a parallel voice, RMOD=100% adds a full-level metallic "ring" on top of
 // the intact A+B tone.
+//
+// However, unlike the chord (an independent voice), RMOD is a DERIVED voice
+// of A+B — it is literally the product of the two main wavetable outputs — so
+// it is also scaled by the MAIN level knob (p.main_level, see the final mix
+// in osc_mix.h): MAIN=0 silences the whole main-voice cluster (A+B + its
+// FM/JIT/RMOD byproducts) at once. Before this, MAIN only ducked y_filt and
+// RMOD>0 kept the metallic tone audible even with the "muted" main voice —
+// the reported bug. FM A / FM B do not raise RMOD's amplitude: they modulate
+// the A/B phasors (shape), so they only reshape the ring spectrum.
   // Ring-mod parallel-voice scale. |wav_a * wav_b| <= 1, so the branch peak
   // is kMixRing * ring_mix (<= kMixRing). 0.5 matches kMixOsc so a full RMOD
   // sits near the A+B level (not louder, not quieter).
