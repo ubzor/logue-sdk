@@ -240,10 +240,11 @@
       // one titled block. Items are edit_ indices (select_ order).
       // Each group has an explicit `col` (0/1/2) so the layout loop places it
       // as a true column BLOCK (not a round-robin):
-      //   col 0: MAIN — A+B voice (static params)
+      //   col 0: MAIN + BREATH — A+B voice (static params) + voice-level wander
       //   col 1: WANDER (global) + WANDER TGT (targets)
       //   col 2: CHORD + SUBS + FILTER
       //   MAIN        MAIN WAV1 WAV2 DETU SATU ASYM FOLD FM1 FM2 JIT RMOD
+      //   BREATH      RVLL RVLS RVLSM (voice-level wander, 4th stream)
       //   WANDER      RATE SPD1 SMT1 SPD2 SMT2 SPD3 SMT3
       //   WANDER TGT  RWAV RWFC RDRV RFLD RFMA RFMB
       //   CHORD       WAV3 CHRD CINT CINT2 CHSAT CHFLD
@@ -252,6 +253,7 @@
       const PARAM_GROUPS = [
         // ---- Column 0 ----
         { title: "MAIN",       col: 0, items: [18, 13, 14, 0, 10, 11, 12, 33, 34, 31, 32] },
+        { title: "BREATH",   col: 0, items: [25, 26, 27] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, className: "mt-auto", items: [19, 24, 20, 21, 35, 36] },
