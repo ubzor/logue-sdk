@@ -15,8 +15,8 @@
  *    * the web simulator's "Rnd" control (wasm.cc rndRequest() -> process() ->
  *      Osc::randomizeAll() on the audio-worklet thread).
  *  Both therefore produce bit-identical random windows (and the same
- *  osc_white() LCG source), so the simulator's "Rnd" and the device's "Rnd"
- *  re-roll the same distribution.
+ *  osc_rand() Park-Miller-Carta source, see rnd_int below), so the simulator's
+ *  "Rnd" and the device's "Rnd" re-roll the same distribution.
  *
  *  The raw windows below are the exact port of the web simulator's randomRaw()
  *  (websim/osc.html): "safe" (walk / timbre) parameters get the full 0..1023
@@ -43,17 +43,25 @@
 //      initializer into _GLOBAL__sub_I (extra .init code + .rodata); a
 //      constexpr is folded into the two use sites with zero storage/initializer.
 //
-// rnd_int(count) -> 0..count-1, uniform, from one osc_white() sample.
-//   osc_white() is the Park-Miller-Carta LCG mapped to [-1,1] with step 2/2^31
-//   (both the ARM runtime and the wasm.cc stub use exactly this). So the raw
-//   PMC state s in [0, 2^31) is uniform over 2^31 values; (s mod count) is
-//   uniform over 0..count-1 for every count used here (<= 1024), with at most a
-//   1/2^17 bias -- far below audible. Pure integer math: no float round-trip,
+// rnd_int(count) -> 0..count-1, uniform, from one osc_rand() sample.
+//   osc_rand() is the platform's Park-Miller-Carta LCG exposed as a raw
+//   uint32 in [0, 0x7FFFFFFF] (see osc_api.h "Random integer, Generated with
+//   Park-Miller-Carta"). It is uniform over 2^31 values, so (s mod count) is
+//   uniform over 0..count-1 for every count used here (<= 1024), with at most
+//   a 1/2^17 bias -- far below audible. Pure integer math: no float round-trip,
 //   no libm.
+//
+//   IMPORTANT: this must use osc_rand(), NOT osc_white(). osc_white() returns
+//   a FLOAT in [-1, 1] (a Gaussian on the device runtime, a uniform LCG in the
+//   wasm.cc sim stub) and (int32_t)truncation of it is 0 for ~99% of samples
+//   (|x| < 1), which made rnd_int() return 0 every time and Rnd re-roll the
+//   same fixed preset on hardware. osc_rand() carries the full 31-bit state,
+//   so the distribution is correct on both the device and the simulator
+//   (the sim stub mirrors the same PMC sequence, see wasm.cc).
 inline int32_t Osc::rnd_int(uint32_t count) const
 {
-  const int32_t s = (int32_t)osc_white(); // [-1, 0x7FFFFFFF]
-  return ((s < 0) ? (-s) : (s)) % count;  // [0, count-1]
+  const uint32_t s = osc_rand(); // [0, 0x7FFFFFFF]
+  return (int32_t)(s % count);   // [0, count-1]
 }
 
 // Discrete consonant chord intervals (cents) CINT / CINT2 are randomized over.

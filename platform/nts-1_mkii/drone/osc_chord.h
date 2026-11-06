@@ -67,12 +67,14 @@ struct ChordVoice
 
   // ---- Setup (K-rate: called from setPitch / setParameter(CINT)) ----
   // Recompute the phase increment from the base w0 and the interval in cents.
-  // Uses Detune::factor() (4th-order Taylor, < 0.03 cent error over +/-100c;
-  // at 1900c the error is ~0.5 cent — inaudible for a drone chord voice).
+  // Uses Detune::pow2f() (exact 2^x, libm-free) so the interval is correct
+  // across the FULL 0..1900 cent range: the old 4th-order Taylor (factor())
+  // only converges near 0 cents and was off by ~307 cents at 1900 c, which
+  // made the upper end of the CINT / CINT2 knobs sound a minor sixth flat.
   void update(float base_w0, float cents_val)
   {
     cents = (cents_val < 0.f) ? 0.f : (cents_val > kMaxCents) ? kMaxCents : cents_val;
-    w0 = base_w0 * Detune::factor(cents);
+    w0 = base_w0 * Detune::pow2f(cents * Detune::kCentsToX);
   }
 
   // ---- Audio path (called once per sample from Osc::process) ----

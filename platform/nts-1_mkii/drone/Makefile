@@ -260,7 +260,7 @@ $(BUILDDIR)/$(PRODUCT): | $(OBJS) $(OUTFILES)
 #
 # ALLOWED_UND: the symbols the firmware is expected to provide. Add a new one
 # here ONLY when the firmware genuinely provides it.
-ALLOWED_UND := osc_white wavesA wavesB wavesC wavesD wavesE wavesF \
+ALLOWED_UND := osc_white osc_rand wavesA wavesB wavesC wavesD wavesE wavesF \
                wt_sine_lut_f midi_to_hz_lut_f
 READELF := $(GCC_BIN_PATH)/$(GCC_TARGET)readelf
 

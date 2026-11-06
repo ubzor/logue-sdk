@@ -42,10 +42,13 @@ float fx_get_bpmf(void)
   return BPM_WASM;
 }
 
-// ---- Web-sim stub for the platform noise API --------------------------------
-// On ARM, osc_white() is provided by the runtime (osc_api.h extern). In the
-// web simulator there is no runtime, so we provide a lightweight white-noise
-// source based on the Park-Miller-Carta LCG (matching websim/dsp/osc_api.cpp).
+// ---- Web-sim stubs for the platform noise API --------------------------------
+// On ARM, osc_white() / osc_rand() are provided by the runtime (osc_api.h
+// extern). In the web simulator there is no runtime, so we provide lightweight
+// noise sources based on the Park-Miller-Carta LCG (matching
+// websim/dsp/osc_api.cpp). osc_white() maps the PMC state to a uniform float
+// in [-1, 1]; osc_rand() returns the raw PMC state so rnd_int() (see
+// osc_randomize.h) gets the full 31-bit value on both device and sim.
 namespace {
 uint32_t s_pmc_state = 83647U; // Park-Miller-Carta seed (matches websim DEFAULT_SEED)
 inline uint32_t pmc_rand(uint32_t s)
@@ -67,6 +70,15 @@ extern "C" float osc_white(void)
   // (not 0xFFFFFFFF) to center the distribution on zero.
   s_pmc_state = pmc_rand(s_pmc_state);
   return static_cast<float>(s_pmc_state) * (2.0f / 2147483647.0f) - 1.0f;
+}
+
+extern "C" uint32_t osc_rand(void)
+{
+  // Raw Park-Miller-Carta state in [1, 0x7FFFFFFF] (the firmware's osc_rand()
+  // has the same range). This is what Osc::rnd_int() consumes for the Rnd
+  // re-roll, so the simulator re-rolls bit-identical values to the device.
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return s_pmc_state;
 }
 
 struct AudioWorkletParameter
