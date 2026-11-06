@@ -143,6 +143,26 @@
   // (kMixRing for the RMOD parallel voice is defined in the RMOD block above,
   // next to kJitMaxCycles / kFm*, so the enrichment constants stay together.)
 
+// ---- Output normalization (post-EG, pre-out) ----------------------------------
+// The per-branch kMix* gains above are a PEAK BUDGET (they keep the worst-case
+// sum under the final limiter), NOT a loudness target: with every knob at
+// default the summed peak lands around 0.35-0.5, i.e. roughly -12 dBFS --
+// clearly quieter than the platform's reference oscillators (which apply a
+// ~+3 dB pre-tanh gain and read near 0 dBFS). kOutDrive is the makeup gain
+// that lifts the whole mix back to a comparable level, and kOutSat feeds that
+// lifted sum into the SAME tanh soft-clip the reference units use (see
+// platform/nts-1_mkii/waves/osc.h: sig *= 1.4125375446227544f; fastertanh2f).
+// tanh(1.4125 * x) ~= 10^(0.5/20) * x in its near-linear region, so the two
+// constants compose into a single effective output gain of ~10^(13/20)
+// (2.512, +8 dB) while the tanh rolls off smoothly above it instead of the
+// old hard clip (no square-wave edge when all five branches peak together).
+// Tune kOutDrive (not the kMix* budget) if A/B against other oscillators
+// still reads too quiet / too loud.
+  // Makeup gain for the whole mix (2.512 ~= 10^(8/20) = +8 dB).
+  static constexpr float    kOutDrive = 2.512f;
+  // Pre-tanh drive (same constant the reference waves unit uses).
+  static constexpr float    kOutSat   = 1.4125375446227544f;
+
 // ---- Pitch / frequency constants ---------------------------------------------
   // Platform sample rate (NTS-1 mkII: 48 kHz). Hard-coded: the Processor base
   // class is a forward-declared abstract interface (processor.h) in this build

@@ -639,16 +639,23 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // levels: they reshape wav_a/wav_b and hence the ring spectrum, but
     // cannot raise its amplitude — |wav_a * wav_b| <= 1 always.)
     const float ring_out = rmod_active ? (wav_a * wav_b) * p.ring_mix * p.main_level : 0.f;
-    float raw = (y_filt * kMixOsc * p.main_level
-               + chord_sat * kMixChordDirect
-               + sub * p.sub_level * lvl_sub * kMixSub
-               + sub2 * sub2_level * kMixSub2
-               + ring_out * kMixRing) * eg_.env;
-    if (raw > 1.f)
-      raw = 1.f;
-    else if (raw < -1.f)
-      raw = -1.f;
-    out[0] = raw;
+    // Final output: the summed mix is lifted by the makeup gain kOutDrive
+    // (~+8 dB) and passed through the SAME tanh soft-clip the reference
+    // oscillators use (kOutSat = 1.4125, see platform/nts-1_mkii/waves/osc.h).
+    // This replaces the old hard clip, which both read ~-12 dBFS too quiet
+    // (the kMix* budget is a peak guard, not a loudness target) and produced
+    // a square-wave edge when all five branches peaked together. The tanh
+    // rolls off smoothly above the near-linear region (effective total gain
+    // kOutDrive * kOutSat ~= +13 dB in the linear band, saturating to 1),
+    // keeping the digital overflow guard while matching the platform's
+    // reference loudness. See the kOutDrive / kOutSat comments in
+    // osc_constants.h (tune kOutDrive there, not the kMix* budget).
+    const float raw = (y_filt * kMixOsc * p.main_level
+                     + chord_sat * kMixChordDirect
+                     + sub * p.sub_level * lvl_sub * kMixSub
+                     + sub2 * sub2_level * kMixSub2
+                     + ring_out * kMixRing) * eg_.env * kOutDrive;
+    out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
   }
 }
 
