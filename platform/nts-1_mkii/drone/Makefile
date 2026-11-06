@@ -250,7 +250,37 @@ $(BUILDDIR)/$(PRODUCT): | $(OBJS) $(OUTFILES)
 	@cp -a $(BUILDDIR)/$(PROJECT).elf $(BUILDDIR)/$(PRODUCT)
 	@$(STRIP) $(BUILDDIR)/$(PRODUCT)
 
-install: $(BUILDDIR)/$(PRODUCT)
+# ---- Undefined-symbol (UND) guard ------------------------------------------
+# The NTS-1 mkII runtime resolves a unit's undefined dynamic symbols by name at
+# load time and only knows the unit_* API + the firmware LUTs. Any OTHER
+# undefined symbol (e.g. a stray libm powf/floorf/expf) makes the device reject
+# the unit with "ELF: unresolved symbol". This guard lists the UND symbols in
+# the built artifact and fails the build if any appear outside the allowed set,
+# so a regression is caught at build time instead of on the device.
+#
+# ALLOWED_UND: the symbols the firmware is expected to provide. Add a new one
+# here ONLY when the firmware genuinely provides it.
+ALLOWED_UND := osc_white wavesA wavesB wavesC wavesD wavesE wavesF \
+               wt_sine_lut_f midi_to_hz_lut_f
+READELF := $(GCC_BIN_PATH)/$(GCC_TARGET)readelf
+
+check-und: $(BUILDDIR)/$(PRODUCT)
+	@echo Checking undefined dynamic symbols in $(BUILDDIR)/$(PRODUCT)
+	@UND=$$($(READELF) --dyn-syms $(BUILDDIR)/$(PRODUCT) 2>/dev/null | awk '/ UND / {print $$8}' | grep -v '^$$' | sort -u); \
+	BAD=""; \
+	for s in $$UND; do \
+	  case " $(ALLOWED_UND) " in *" $$s "*) ;; *) BAD="$$BAD $$s";; esac; \
+	done; \
+	if [ -n "$$BAD" ]; then \
+	  echo "ERROR: unexpected undefined symbols (the device will fail to load this unit):" >&2; \
+	  for b in $$BAD; do echo "  - $$b" >&2; done; \
+	  echo "Replace the call with an inlined fast equivalent (see config.mk) or" >&2; \
+	  echo "add the symbol to ALLOWED_UND in the Makefile if the firmware provides it." >&2; \
+	  exit 1; \
+	fi; \
+	echo "OK: only firmware-provided symbols are undefined ($$(echo $$UND | tr '\n' ' '))"
+
+install: check-und $(BUILDDIR)/$(PRODUCT)
 	@echo Deploying to $(INSTALLDIR)/$(PRODUCT)
 	@mv $(BUILDDIR)/$(PRODUCT) $(INSTALLDIR)/$(PRODUCT)
 	@echo Done

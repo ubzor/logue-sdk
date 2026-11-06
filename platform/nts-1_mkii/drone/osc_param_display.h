@@ -90,7 +90,10 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // intentional: FM is a subtle timbre knob, not a loud index.
   if (k == FM_A || k == FM_B)
   {
-    int xc = (int)(powf(param_10bit_to_f32(raw), kFmCurveExp) * kFmMaxCents + 0.5f);
+    // kFmCurveExp == 2.0f -> quadratic curve is x^2 (no libm powf: it would
+    // show up as an unresolved dynamic symbol on the device).
+    const float fx = param_10bit_to_f32(raw);
+    int xc = (int)((fx * fx) * kFmMaxCents + 0.5f);
     int n = 0;
     if (xc >= 10) buf[n++] = (char)('0' + xc / 10);
     buf[n++] = (char)('0' + xc % 10);

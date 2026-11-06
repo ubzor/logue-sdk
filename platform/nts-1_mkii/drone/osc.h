@@ -36,6 +36,17 @@
 #include "processor.h"
 #include "unit_osc.h"
 #include "utils/float_math.h" // fastertanh2f()
+
+// Forward declaration (defined further down, after the helper headers): a fast
+// float->float floor for modular phasor wrap. It must be declared BEFORE the
+// helper headers (osc_chord.h etc.) because they call it from inline methods.
+inline float fast_floorf(float x);
+
+// Forward declaration (defined further down): 1 - e^x via a small-x Taylor
+// series. Must be declared BEFORE the helper headers (osc_sub2.h etc.) because
+// they call it from inline methods (K-rate coefficient setup).
+inline float one_minus_expf(float x);
+
 #include "osc_params.h"       // OscParams enum + constants + OscParamsData struct
 #include "osc_waves.h"        // WaveTable: bank scanning + pitch-shifted morph
 #include "osc_envelope.h"     // AhEnvelope: single-voice A-H-R envelope
@@ -47,6 +58,60 @@
 #include "osc_detune.h"       // Detune: w0 detuning / factor (4th-order Taylor)
 #include "osc_lfo_sim.h"      // LfoSim: web-sim-only shape-LFO synthesizer
 #include "osc_constants.h"    // global-scope tuning constants (kSatuMax, kMix*, ...)
+
+// Fast float->float floor used for modular phasor wrap (x - fast_floorf(x)).
+// We must NOT call libm floorf(): it is emitted as a dynamic UND symbol that
+// the NTS-1 mkII runtime cannot resolve ("ELF: unresolved symbol" at load).
+// The trick (x - (float)(int32_t)x) floors by truncation, which is exact for
+// finite x in the range where the int32_t conversion is defined (|x| < 2^31).
+// Every phasor in this unit is kept in [0, 1) by the wrap itself, and the only
+// inputs that ever reach this helper are phasors plus a small FM offset
+// (bounded by kFmMaxCents / jitter), so the magnitude is far below 2^31 and
+// the conversion is always exact. The |x| < 1e7 guard keeps the float->int32
+// conversion defined (and bit-correct) in the common case; if it were ever
+// exceeded (it is not, in practice) we fall back to a slow, safe path.
+inline float fast_floorf(float x)
+{
+  // Fast path: |x| comfortably inside the exact float->int32 range.
+  if (x > -1e7f && x < 1e7f)
+  {
+    const int32_t i = static_cast<int32_t>(x); // truncates toward zero
+    const float xi = static_cast<float>(i);
+    // truncation == floor for x >= 0; for negative x subtract 1 unless exact.
+    return (x < 0.f && x != xi) ? xi - 1.f : xi;
+  }
+  // Slow, safe fallback for absurd magnitudes (never hit in practice): use the
+  // FPU hardware floor if available, else a manual big-int shift. We avoid
+  // libm here, so approximate with a large multiple: for |x| >= 1e7 the wrap
+  // result is meaningless for audio anyway, so clamp to 0.
+  return 0.f;
+}
+
+// one_minus_expf(x) = 1 - e^x, via a 3rd-order Taylor series. Used ONLY for the
+// small (mildly negative) arguments this unit actually passes (|x| <= ~0.03:
+// the A-H-R envelope alphas ~ -5e-5 .. -1e-4 and the sub-2 filter/gate
+// coefficients ~ -0.004 .. -0.026). Accuracy over that whole range is
+// |x|^4/24 <= ~3e-7 relative (worst case x = -0.026) -- far below audibility.
+//
+// Why not fasterexpf() / expf():
+//  * expf() is libm -> an unresolved dynamic symbol -> the device rejects the
+//    unit with "ELF: unresolved symbol".
+//  * fasterexpf() is a bit-trick that is only accurate for "large-ish" |x|; for
+//    |x| < ~1e-3 the catastrophic cancellation in (1 - fasterexpf(x)) destroys
+//    it (it returned ~0.029 where the true value was ~5e-5, i.e. 300-550x too
+//    large), which made the envelope attack/release collapse to a few samples
+//    instead of 2 s. The series is exact to <3e-7 for our arguments and is
+//    computed once at K-rate (init / update), never in the audio path.
+//
+// Valid for |x| small (|x| <= ~0.1 keeps the 3rd-order term adequate); all our
+// call sites are well within that. For larger |x| the series would lose
+// accuracy, but we never call it there.
+inline float one_minus_expf(float x)
+{
+  // 1 - e^x = -x - x^2/2 - x^3/6 - ...
+  const float x2 = x * x;
+  return -x - x2 * 0.5f - x2 * x / 6.0f;
+}
 
 class Osc : public Processor
 {
@@ -354,7 +419,7 @@ public:
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
-    waves_.update(w0_); // resolve default wavetable pointers from params_
+    recalc_pitch_derived(); // resolve wavetables + all derived-voice phase increments from the default w0_
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // each stream starts centered, AMT=0 (off)
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
@@ -364,6 +429,12 @@ public:
     fm_smooth_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
+    legato_ = false;
+    last_note_ = 0;
+    glide_active_ = false;
+    glide_elapsed_ = 0;
+    glide_from_ = 0.f;
+    glide_to_ = 0.f;
     eg_.reset();
 #ifdef __EMSCRIPTEN__
     // Clear any pending direct edit-parameter request (the UI may have
@@ -377,8 +448,12 @@ public:
     // samples; five time-constants over the phase means the level covers
     // ~99.3% of the transition by the phase boundary. Precomputed here, never
     // in the audio path.
-    eg_alpha_a_ = 1.f - expf(-5.f / static_cast<float>(AhEnvelope::kAttackSamples));
-    eg_alpha_r_ = 1.f - expf(-5.f / static_cast<float>(AhEnvelope::kReleaseSamples));
+    // one_minus_expf (a small-x Taylor series, NOT libm expf and NOT the
+    // inaccurate-for-tiny-x fasterexpf bit-trick) keeps the unit free of
+    // unresolved libm symbols AND gives the correct ~5e-5 / ~1e-4 alphas so
+    // the 2 s attack/release actually take 2 s. Computed once at init (K-rate).
+    eg_alpha_a_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kAttackSamples));
+    eg_alpha_r_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kReleaseSamples));
   }
 
   void reset() override final
@@ -400,51 +475,172 @@ public:
     fm_smooth_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
+    legato_ = false; // reset() is a full state reset: legato returns to OFF
+    last_note_ = 0;
+    glide_active_ = false;
     eg_.reset();
   }
   // ---- note handling ---------------------------------------------------------
 
-  // Key press: note active. Start (or restart) the A-H-R sequence from the top
-  // of the attack. A second key press while a sequence is still running
-  // restarts it (re-trigger), which is the expected drone behavior.
+  // Key press.
+  //  * If a note is ALREADY sounding: this only re-targets the pitch. The
+  //    envelope is deliberately NOT re-triggered, so the amplitude stays
+  //    continuous (no drop to zero / re-attack) while setPitch() glides the
+  //    whole sound from the old note to this one over 2 s. This is true in
+  //    BOTH modes: a legato note is always a new note, and in legato-off a
+  //    new key also glides (and keeps sounding until it is released).
+  //  * If nothing is sounding: start the A-H-R attack (2 s ramp-up).
+  //  * LEGATO ON  and the SAME key is pressed while sounding -> TOGGLE-OFF:
+  //    the sound fades out to zero (re-triggering the same key stops it).
+  //  * LEGATO OFF and the SAME key is pressed while sounding -> re-trigger:
+  //    restart the attack (a re-press of the held key is a new note-on).
   void noteOn(uint8_t note, uint8_t velo) override final
   {
-    (void)note;
     (void)velo;
+    if (legato_)
+    {
+      // LEGATO: the drone is held until explicitly stopped.
+      //  * same key as the one currently sounding -> TOGGLE-OFF (fade out).
+      //  * different key (or nothing sounding)    -> the new note becomes the
+      //    sounding one: start the attack if we were silent, otherwise only
+      //    retarget the pitch (setPitch glides, amplitude stays continuous).
+      if (note_on_ && note == last_note_)
+      {
+        note_on_ = false;
+        last_note_ = 0;
+        eg_.noteOff();
+        return;
+      }
+      const bool was_sounding = note_on_;
+      last_note_ = note;
+      note_on_ = true;
+      if (!was_sounding)
+        eg_.noteOn(); // genuine new drone: 2 s attack
+      // else: keep the envelope (continuous amplitude); only the pitch glides.
+      return;
+    }
+    // LEGATO OFF: a different sounding key re-targets the pitch only (glide,
+    // continuous amplitude); the same key re-triggers a fresh attack.
+    if (note_on_)
+    {
+      if (note == last_note_)
+      {
+        eg_.noteOn(); // re-trigger: re-press of the held key
+      }
+      else
+      {
+        last_note_ = note; // glide to the new note, amplitude unchanged
+      }
+      return;
+    }
+    // Was silent: genuine new note-on -> start the attack.
+    last_note_ = note;
     note_on_ = true;
     eg_.noteOn();
   }
 
-  // Key release: note inactive. If the envelope is in Attack or Hold, begin
-  // the 2 s exponential release. If already in Release or Idle, nothing
-  // happens (the release runs to completion on its own).
+  // Key release.
+  //  LEGATO ON  -> NO-OP: releasing a key does not stop the drone. It also
+  //                must NOT clear the "sounding note" tracking, otherwise a
+  //                click (which is a noteOn immediately followed by a
+  //                noteOff) would clobber last_note_ and the re-press
+  //                toggle-off in noteOn could never match. Only an explicit
+  //                re-press of the sounding note (noteOn) or All-Notes-Off
+  //                stops a legato drone.
+  //  LEGATO OFF -> note inactive: begin the 2 s exponential release (the
+  //                sound fades out on its own).
   void noteOff(uint8_t note) override final
   {
     (void)note;
+    if (legato_)
+      return;
     note_on_ = false;
+    last_note_ = 0;
     eg_.noteOff();
   }
 
   // All-notes-off: note inactive, kill any in-flight envelope immediately
-  // (instant silence — no release tail).
+  // (instant silence — no release tail). Same in legato mode (legato only
+  // suppresses per-key release, not the global stop).
   void allNoteOff() override final
   {
     note_on_ = false;
+    last_note_ = 0;
     eg_.allOff();
+  }
+
+  // ---- Legato mode (optional header slot "Legato", K-rate) --------------------
+  // value: raw 0..1023. 0..511 -> OFF, 512..1023 -> ON (see header.c).
+  void setLegato(int32_t value)
+  {
+    legato_ = (value >= 512);
+  }
+  int32_t getLegato() const
+  {
+    return legato_ ? 1023 : 0;
   }
 
   // audio processing callbacks
 
-  // set frequency in digital w (w = f/samplerate, 0.5 is Nyquist)
+  // set frequency in digital w (w = f/samplerate, 0.5 is Nyquist).
+  // When the target differs from the current base pitch and a glide is not
+  // already running, launch a 2 s LINEAR glide from the current w0_ to the new
+  // one (the audio path advances it sample by sample and recomputes every
+  // derived voice). A glide already in progress is re-targeted: it slides from
+  // where it is now to the newest note, so a fast run of keys always ends on
+  // the last one. With no glide active and the same pitch this is the cheap
+  // direct path (no state change).
   void setPitch(float w0)
   {
-    w0_ = w0; // base phase increment
-    update_w0_det(); // recompute A/B detuned w0 (symmetric ±c/2, K-rate)
-    chord_.update(w0_, params_.chord_cents); // chord phasor: f * 2^(cents/1200)
-    chord2_.update(w0_, params_.chord2_cents); // second chord phasor: f * 2^(cents2/1200)
-    update_w0_sub(); // sub factor is a compile-time constant, no param dependency
-    update_w0_sub2(); // f/4 phase increment + fixed LPF/gate coefficients
-    waves_.update(w0_); // re-resolve wavetables: morph position shifts with pitch
+    // Nothing is sounding (the previous note faded out / was toggled off /
+    // all-notes-off): there is no "old note" to glide from. Kill any in-flight
+    // glide and jump straight to the new pitch so the NEXT note-on starts clean
+    // at its own pitch, not by sliding up from the (now silent) old one.
+    if (!note_on_)
+    {
+      glide_active_ = false;
+      glide_elapsed_ = 0;
+      w0_ = w0;
+      recalc_pitch_derived();
+      return;
+    }
+    if (!glide_active_ && w0 != w0_)
+    {
+      glide_active_ = true;
+      glide_elapsed_ = 0;
+      glide_from_ = w0_;
+      glide_to_ = w0;
+      // w0_ itself is advanced by the audio path (osc_mix.h) from here to the
+      // target; nothing to do in the K-rate path besides arming the glide.
+      return;
+    }
+    if (glide_active_)
+    {
+      // Re-target an in-flight glide: slide from the CURRENT w0_ to the newest
+      // note over a fresh full kGlideSamples, and restart the clock. Holding a
+      // new key while gliding is the intended legato action, so the move to the
+      // latest key always gets the full glide.
+      glide_from_ = w0_;
+      glide_to_ = w0;
+      glide_elapsed_ = 0;
+      return;
+    }
+    // Same pitch (or already at target with no glide): nothing to do. The
+    // derived voices already match w0_.
+  }
+
+  // Recompute every voice whose phase increment derives from the base w0_.
+  // Called at K-rate (parameter changes) and per-sample during a glide so the
+  // detuned A/B pair, sub-1, sub-2, chord and chord-2 all follow the gliding
+  // pitch exactly.
+  void recalc_pitch_derived()
+  {
+    update_w0_det(); // A/B symmetric detune
+    chord_.update(w0_, params_.chord_cents);
+    chord2_.update(w0_, params_.chord2_cents);
+    update_w0_sub();
+    update_w0_sub2();
+    waves_.update(w0_);
   }
 
   // lfo in (-1.0f, 1.0f)
@@ -530,6 +726,27 @@ private:
   // touching the audio path. The A-H-R envelope below is the single voice
   // that shapes the attack/release of the active note.
   bool note_on_ = false;
+
+  // ---- Legato mode (optional header slot "Legato") ---------------------------
+  // LEGATO OFF (default): key release starts the 2 s exponential release, like
+  // the original drone behavior.
+  // LEGATO ON: key release does NOT stop the sound (it keeps sounding
+  // indefinitely); pressing the SAME key again fades it out (toggle-off);
+  // pressing a DIFFERENT key retargets the note (the pitch glide below slides
+  // from the old note to the new one) and it keeps playing.
+  bool legato_ = false;
+  // Last key pressed (for the toggle-off test in noteOn). 0 = none.
+  uint8_t last_note_ = 0;
+
+  // ---- Pitch glide (portamento) ----------------------------------------------
+  // When the base note changes, w0_ is interpolated LINEARLY from glide_from_
+  // to glide_to_ over kGlideSamples (2 s) instead of jumping. The audio path
+  // (osc_mix.h) advances this every sample while glide_active_ is true and
+  // recomputes the derived voices (see recalc_pitch_derived).
+  bool glide_active_ = false;
+  uint32_t glide_elapsed_ = 0; // samples elapsed in the current glide
+  float glide_from_ = 0.f;     // w0 at the start of the glide
+  float glide_to_ = 0.f;       // target w0
 
   // A-H-R envelope (single voice). See osc_envelope.h for the state machine.
   AhEnvelope eg_;

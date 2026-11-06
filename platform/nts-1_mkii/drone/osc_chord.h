@@ -41,7 +41,10 @@
  */
 
 #include "osc_detune.h" // Detune::factor() — 2^(cents/1200) Taylor
-#include <math.h>       // floorf() — modular phasor wrap in advance()
+// fast_floorf() (modular phasor wrap in advance()) is declared in osc.h; this
+// header is always #included from osc.h after fast_floorf is defined, so no
+// <math.h> is needed here (we must avoid libm floorf to stay free of unresolved
+// dynamic symbols — see fast_floorf in osc.h).
 
 struct ChordVoice
 {
@@ -81,13 +84,13 @@ struct ChordVoice
     if (cents <= 0.f)
       return false;
     phasor += w0;
-    // Modular wrap (x - floorf(x)) instead of a single subtract: keeps the
+    // Modular wrap (x - fast_floorf(x)) instead of a single subtract: keeps the
     // phasor in [0, 1) for ANY finite input. The chord voice is not
     // cross-FM-modulated today (w0 is always in (0, 1)), so this is a no-op
     // in practice — but it makes the invariant explicit and future-proof
     // against any future modulation that could push the phasor outside
     // [0, 1) (mirroring the main-voice phasor wrap in osc.h).
-    phasor -= floorf(phasor);
+    phasor -= fast_floorf(phasor);
     return true;
   }
 

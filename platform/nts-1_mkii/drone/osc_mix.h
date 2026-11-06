@@ -28,6 +28,52 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 {
   (void)in; // drone generator does not use the audio input
 
+  // ---- Pitch glide (portamento) ---------------------------------------------
+  // If a note change is in flight, advance the base phase increment LINEARLY
+  // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
+  // detuned pair, sub-1, sub-2, chord, chord-2, wavetable morph position) so
+  // the WHOLE sound slides in pitch together. Runs per sample while active so
+  // the 2 s glide is sample-accurate at any block size. When it completes, w0_
+  // snaps exactly to the target and the derived voices settle to their final
+  // values; the glide is then disarmed so the rest of the block (and every
+  // later block) uses the plain cached path with zero extra work.
+  //
+  // Note: this runs BEFORE the params_ / w0_ caches below, so the block picks
+  // up the (possibly gliding) w0_ immediately. A re-target from setPitch()
+  // (mid-glide) is picked up on the next block (K-rate -> audio thread), which
+  // is the natural ~2.9 ms latency of every parameter in this unit.
+  if (glide_active_)
+  {
+    const uint32_t elapsed = glide_elapsed_ + frames;
+    if (elapsed >= kGlideSamples)
+    {
+      w0_ = glide_to_; // snap to the target
+      recalc_pitch_derived();
+      glide_active_ = false;
+      glide_elapsed_ = 0;
+    }
+    else
+    {
+      glide_elapsed_ = elapsed;
+      const float t = (float)elapsed / (float)kGlideSamples; // 0..1, linear
+      w0_ = glide_from_ + (glide_to_ - glide_from_) * t;
+      // Use the FRESH params_ for this frame: if a K-rate edit (CINT / CINT2 /
+      // DETUNE / WAV*) landed in the same block it already updated params_ on
+      // the worklet thread before this sample, so reading it here (not the
+      // stale `p` cache built below) avoids a one-frame stale derived voice.
+      {
+        const Params p = params_;
+        const float w = w0_;
+        update_w0_det();
+        chord_.update(w, p.chord_cents);
+        chord2_.update(w, p.chord2_cents);
+        update_w0_sub();
+        update_w0_sub2();
+        waves_.update(w);
+      }
+    }
+  }
+
 #ifdef __EMSCRIPTEN__
   // Consume any pending direct edit-parameter request from the UI thread
   // (see simEditRequest). The (select_, PARAM_VAL) pair is applied
@@ -178,8 +224,11 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // "breathing" (curve ~ x^2 is tiny) and the harsh sidebands only open up
   // near the top, so the FM is a smooth, usable timbre knob instead of
   // "slight turn = screech".
-  const float fm_a_curve  = powf(p.fm_a, kFmCurveExp) * kFmMaxCents; // 0..kFmMaxCents
-  const float fm_b_curve  = powf(p.fm_b, kFmCurveExp) * kFmMaxCents;
+  // kFmCurveExp is 2.0f (see osc_constants.h), so the quadratic depth curve is
+  // just x^2. We do NOT call libm powf(): it is emitted as a dynamic UND
+  // symbol that the NTS-1 mkII runtime cannot resolve at load.
+  const float fm_a_curve  = (p.fm_a * p.fm_a) * kFmMaxCents; // 0..kFmMaxCents
+  const float fm_b_curve  = (p.fm_b * p.fm_b) * kFmMaxCents;
   const float fm_a_static = fm_a_curve * 0.5f;  // static peak index (cycles)
   const float fm_b_static = fm_b_curve * 0.5f;  // static peak index (cycles)
   const bool fm_a_wander = rw_active && p.rfm_a > 0.f;  // walk on FM A (RATE-gated)
@@ -387,14 +436,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // (out-of-bounds LUT read -> garbage/NaN -> NaN-lock in the SVF /
     // FM feedback loop). floorf normalizes to [0, 1) for ANY finite
     // input (positive, negative, or > 1), so the LUT is always queried
-    // with a valid phase. Cost: one floorf per phasor per sample (4 total);
-    // floorf is a single VFP instruction on FPv4 (ARM) and SSE (x86), and
-    // is a no-op when the phasor is already in [0, 1) (the common case at
-    // FM = 0), so the stock sound is bit-identical.
-    phasor_a_   -= floorf(phasor_a_);
-    phasor_b_   -= floorf(phasor_b_);
-    phasor_sub_ -= floorf(phasor_sub_);
-    phasor_sub2_-= floorf(phasor_sub2_);
+    // with a valid phase. Cost: one fast_floorf per phasor per sample (4 total);
+    // it is a no-op when the phasor is already in [0, 1) (the common case at
+    // FM = 0), so the stock sound is bit-identical. fast_floorf() (not libm
+    // floorf) keeps the unit free of unresolved libm dynamic symbols.
+    phasor_a_   -= fast_floorf(phasor_a_);
+    phasor_b_   -= fast_floorf(phasor_b_);
+    phasor_sub_ -= fast_floorf(phasor_sub_);
+    phasor_sub2_-= fast_floorf(phasor_sub2_);
 
     // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
     // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()

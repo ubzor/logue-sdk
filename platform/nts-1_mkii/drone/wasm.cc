@@ -423,10 +423,25 @@ extern "C" void rndTrigger()
   processor.rndRequest();
 }
 
+// ---- Web-sim: Legato mode (mirrors the device's "Legato" optional slot) -----
+// raw 0..1023: 0..511 = OFF, 512..1023 = ON (the same mapping as header.c /
+// Osc::setLegato). The UI switch writes 0 or 1023. K-rate (UI thread); the
+// DSP reads it on its next note event, so there is no audio-rate race.
+extern "C" void setLegato(int value)
+{
+  processor.setLegato(value);
+}
+extern "C" int getLegato()
+{
+  return static_cast<int>(processor.getLegato());
+}
+
 EMSCRIPTEN_BINDINGS(drone_ui)
 {
   emscripten::function("getSelectParam", &getSelectParam);
   emscripten::function("getEditParamValue", &getEditParamValue);
   emscripten::function("setEditParam", &setEditParam);
   emscripten::function("rndTrigger", &rndTrigger);
+  emscripten::function("setLegato", &setLegato);
+  emscripten::function("getLegato", &getLegato);
 }

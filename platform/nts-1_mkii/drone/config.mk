@@ -86,14 +86,22 @@ ULIBDIR =
 ##############################################################################
 # Libraries
 #
-# Note: no -lm. The unit does not pull in any libm code:
-#   - powf() was replaced by a 4th-order Taylor series in update_w0_b()
-#   - tanhf() was replaced by soft_tanhf() (a Padé [5/5] rational approx.)
-#   - sqrtf() (random-walk step, once per 128-sample block) is inlined by the
-#     compiler into the single Cortex-M7 FMSQRT instruction via -fno-math-errno
-#     (see UCXXOPT below), so no libm sqrtf / __errno / PLT entry is linked.
-# All math runs entirely on the Cortex-M7 FPU, keeping the final .nts1mkiiunit
-# free of libm code and dynamic symbols.
+# Note: no -lm. The unit must pull in NO libm code, because the NTS-1 mkII
+# runtime resolves a unit's undefined dynamic symbols by name at load time and
+# only knows the unit_* API + the firmware LUTs (osc_white, wavesA..F,
+# wt_sine_lut_f, midi_to_hz_lut_f). Any libm symbol left undefined (e.g. powf,
+# floorf, expf) becomes an "ELF: unresolved symbol" error and the unit fails to
+# load. We therefore replace every scalar libm call with a fast, inlined
+# equivalent (see the headers):
+#   - powf(x, 2.0)  -> x*x                (FM quadratic curve, osc_mix/param_display)
+#   - powf(a, b)    -> fasterpowf(a, b)   (FCUT log sweep, osc_param_apply)
+#   - expf(x)       -> fasterexpf(x)      (envelope / sub2 coefficients)
+#   - floorf(x)     -> fast_floorf(x)     (modular phasor wrap, osc.h)
+#   - tanhf()       -> soft_tanhf()       (Padé [5/5] rational approx.)
+#   - sqrtf()       -> inlined FMSQRT via -fno-math-errno (see UCXXOPT)
+# All math runs on the Cortex-M7 FPU, keeping the .nts1mkiiunit free of libm
+# dynamic symbols. The `install` target also runs a UND-symbol guard that fails
+# the build if any unexpected unresolved symbol reappears (see Makefile).
 #
 
 ULIBS  =

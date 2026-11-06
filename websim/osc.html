@@ -51,7 +51,7 @@
             <div class="flex flex-col gap-2">
               <label class="flex items-center gap-3">
                 <span class="w-16 text-sm font-medium shrink-0">Volume</span>
-                <input type="range" min="0" max="1" value="0.5" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
+                <input type="range" min="0" max="1" value="1" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
                 <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right"></span>
               </label>
 
@@ -90,7 +90,7 @@
                painted primary by the flyonui .btn rule itself (see
                .octave-join in app.css). JS (setOctaveShift) only applies the
                shift and mirrors the Z/X hotkeys into .checked. -->
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3 flex-wrap">
             <span class="w-16 text-sm font-medium shrink-0">Octave</span>
             <div class="octave-join drop-shadow" title="Current octave shift of the whole keyboard range">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-2" aria-label="-2" title="Down two octaves (A0..D2)">
@@ -99,6 +99,17 @@
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="1" aria-label="+1" title="Up one octave (A3..D5)">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="2" aria-label="+2" title="Up two octaves (A4..D6)">
             </div>
+            <!-- Legato switch (mirrors the device's "Legato" optional slot):
+                 OFF  - key release starts the 2 s release (original behavior).
+                 ON   - key release does NOT stop the sound; pressing the SAME
+                        key again fades it out; a DIFFERENT key re-targets the
+                        note with a 2 s pitch glide and keeps playing.
+                 Delivered to the DSP through Module.setLegato (raw 0..1023,
+                 0..511 = off, 512..1023 = on). -->
+            <label class="flex items-center gap-2 ml-2" title="Legato: releasing a key no longer stops the drone. Press the same key to fade it out, or a different key to glide to it (2 s).">
+              <span class="text-sm font-medium">Legato</span>
+              <input type="checkbox" id="LegatoSwitch" class="switch switch-primary">
+            </label>
           </div>
 
           <!-- Keyboard (moved here from the old Oscillator card). No margin-top wrapper:
@@ -410,7 +421,11 @@
       // audio graph
       // let oscillator = new OscillatorNode(context, { frequency: 440.0 });
       let envelope = new GainNode(context, { gain: 1.0 }); // unity gain: the A-H-R envelope lives in the DSP (processor.noteOn/noteOff)
-      let volume = new GainNode(context, { gain: 0.1 })
+      // Master sim volume. Starts at 1.0 (= the VolumeSlider default, full
+      // scale) so the simulator is as loud as the unit's DSP output; the
+      // slider (value below) is what the user controls. The previous 0.1 /
+      // 0.5 defaults made the sim read ~2x quieter than the device.
+      let volume = new GainNode(context, { gain: 1.0 })
       let analyser = new AnalyserNode(context, { fftSize: 4096 });
       let data = new Float32Array(analyser.frequencyBinCount);
 
@@ -510,8 +525,26 @@
       });
 
       let osc_frequency = 440.0;
+      // Notes currently "held" (for the touch keyboard's virtual-hold quirk,
+      // see the keyDown handler). Used to synthesize a note-off before a
+      // re-press so the DSP's legato toggle-off (same key while sounding ->
+      // fade out) can fire: the touch lib keeps a key "mouse-down" after a
+      // touchstart, so a later touch of the same key fires no keyup/keydown
+      // pair of its own.
+      let pressedNotes = new Set();
 
       keyboard.keyDown = function (note, frequency) {
+        // Touch keyboard quirk: pressing an already-"held" key (e.g. the
+        // mouse is still down from the first touch) never produced a keyup
+        // for it, so the DSP never saw noteOff and its legato toggle-off
+        // (same note while sounding -> fade out) could not trigger. Detect
+        // the re-press and synthesize the missing noteOff just before the
+        // noteOn, restoring the press/release event pair.
+        if (pressedNotes.has(note)) {
+          Module.noteOff(note);
+        }
+        pressedNotes.add(note);
+
         if (!window.frequencyStack) {
           window.frequencyStack = [];
         }
@@ -524,6 +557,7 @@
       };
 
       keyboard.keyUp = function (note, frequency) {
+        pressedNotes.delete(note);
         if (!window.frequencyStack) {
           window.frequencyStack = [];
         }
@@ -585,6 +619,18 @@
         }
       });
 
+      // Legato switch: OFF = original behavior (key release -> 2 s release);
+      // ON = legato (release keeps sounding, same-key re-press fades out,
+      // different-key re-targets with a 2 s pitch glide). Delivered to the DSP
+      // through Module.setLegato with the device's raw mapping (0..511 off,
+      // 512..1023 on -> we write 0 / 1023).
+      const legatoSwitch = document.getElementById("LegatoSwitch");
+      if (legatoSwitch) {
+        legatoSwitch.addEventListener("change", () => {
+          Module.setLegato(legatoSwitch.checked ? 1023 : 0);
+        });
+      }
+
       // scope
       let canvasWave = document.getElementById("TimeDomain");
       let canvasFFT = document.getElementById("FrequencyDomain");
@@ -609,15 +655,14 @@
         attributeFilter: ["data-theme"],
       });
 
-      // Vertical gain for the time-domain trace. The DSP output goes through a
-      // fixed gain of 0.1 (volume node) before the analyser, so a nominal
-      // -20 dBFS tone lands at v ≈ ±0.1 in getFloatTimeDomainData. The old
-      // mapping (v * 0.5) rendered that as ~5 px on the 128 px canvas - barely
-      // visible. WAVE_GAIN = 1.5 sits between the original v * 0.5 scale
-      // (~8 px of 128, ~6% of the canvas); louder signals scale up
-      // proportionally and the trace clamps to [0, H] so it can never leave
-      // the canvas.
-      const WAVE_GAIN = 1.5;
+      // Vertical gain for the time-domain trace. The analyser is tapped at the
+      // unity-gain `envelope` node, i.e. it sees the RAW DSP output (before the
+      // user-controlled `volume` master), so getFloatTimeDomainData values are
+      // on the same ~0..1 scale as the unit's audio path (a full-scale tone
+      // reads v ≈ ±1.0, a typical drone ≈ ±0.3..±0.9). WAVE_GAIN scales that
+      // to the canvas height (128 px); the trace is hard-clamped to [0, H] so
+      // it can never leave the canvas even when the DSP peaks near 1.0.
+      const WAVE_GAIN = 1.0;
 
       draw();
       function draw() {

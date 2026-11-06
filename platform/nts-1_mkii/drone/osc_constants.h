@@ -158,6 +158,15 @@
   //   w0_sub_ = w0_ * kSubW0Scale  (== w0/2 * 2^(kSubDetuneCents/1200))
   // so the audio path does not recompute 2^(-4/1200) on every setPitch().
   static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
+  // ---- Note glide (portamento) -----------------------------------------------
+  // When the base note changes (any key press, legato or not), the phase
+  // increment w0_ is not swapped instantaneously: it is interpolated LINEARLY
+  // from the old value to the new one over kGlideSamples (1 s @ 48 kHz). All
+  // derived voices (A/B detuned pair, sub-1, sub-2, chord, chord-2) follow
+  // automatically because their phase increments are (re)computed from w0_
+  // every sample during the glide, so the whole sound slides in pitch
+  // smoothly. The length is a fixed constant (per design: 1 s).
+  static constexpr uint32_t kGlideSamples = 1U * 48000U; // 1 s @ 48 kHz
 
 // ---- Display scaling (raw 10-bit <-> DSP float) -------------------------------
 // Single source of truth for the ranges each editable parameter maps onto,

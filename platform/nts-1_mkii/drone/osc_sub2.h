@@ -61,10 +61,13 @@ struct Sub2Voice
   // Recompute the fixed coefficients from the base phase increment w0.
   void update(float w0)
   {
-    // one-pole LPF: a = 1 - exp(-2*pi*fc/sr)
-    lpf_a = 1.f - expf(-6.28318530718f * kLpfCutoffHz / kSampleRate);
+    // one-pole LPF: a = 1 - exp(-2*pi*fc/sr). Use one_minus_expf (a small-x
+    // Taylor series, declared in osc.h) -- NOT libm expf (unresolved dynamic
+    // symbol on the device) and NOT the fasterexpf bit-trick (wrong for small
+    // |x|). Computed once when the base pitch changes (K-rate).
+    lpf_a = one_minus_expf(-6.28318530718f * kLpfCutoffHz / kSampleRate);
     // first-order gate: k = 1 - exp(-1/tau)
-    gate_k = 1.f - expf(-1.f / (kGateTauSec * kSampleRate));
+    gate_k = one_minus_expf(-1.f / (kGateTauSec * kSampleRate));
     // base frequency (Hz) at which the f/4 fundamental equals kGateHz
     gate_hz = 4.f * kGateHz;
     (void)w0; // reserved for future pitch-dependent coefficients

@@ -19,9 +19,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' as displayed on device. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
-    .version = 0x0000000AU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
+    .version = 0x0000000BU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 5,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 6,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -110,5 +110,17 @@ const __unit_header unit_header_t unit_header = {
         //   0 = never (default, no randomization until changed)
         //   1..16 = fire on any change to this value.
         {0, 15, 0, 0, k_unit_param_type_enum, 0, 0, 0, {"Rnd"}},
+
+        // Slot 5 (Legato): key-release behavior switch. type_onoff so the
+        // platform renders it as a 0/1 toggle natively (no custom display code;
+        // unit_get_param_str_value returns "" like Rnd). The raw value maps:
+        //   0..511   = OFF (default): key release starts the 2 s release.
+        //   512..1023 = ON (legato): key release does NOT stop the sound;
+        //              pressing the same key again fades it out; pressing a
+        //              different key retargets the note (2 s pitch glide) and
+        //              it keeps playing.
+        // Delivered to the DSP through unit_set_param_value(id=5) ->
+        // Osc::setLegato(value). Optional (edit-menu) slot, like Rnd.
+        {0, 1023, 0, 0, k_unit_param_type_onoff, 0, 0, 0, {"Legato"}},
     },
 };

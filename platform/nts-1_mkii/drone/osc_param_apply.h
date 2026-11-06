@@ -36,6 +36,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (511 = 0 cents).
     case DETUNE:
       params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
+      update_w0_det(); // recompute the A/B detuned phase increments from the new detune
       break;
 
     // ---- Shared random-walk depth ceiling (RATE) ----
@@ -104,15 +105,15 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // between adjacent tables.
     case WAV1:
       params_.wave_a = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
+      recalc_pitch_derived(); // re-resolve wavetables + keep derived voices in sync
       break;
     case WAV2:
       params_.wave_b = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
+      recalc_pitch_derived();
       break;
     case WAV3:
       params_.wave_c = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      waves_.update(w0_);
+      recalc_pitch_derived();
       break;
 
     // ---- Chord voice (CHORD level, CINT interval) ----
@@ -164,7 +165,9 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         params_.svf_wet = x;
         // Recompute the SVF coefficients at K-rate (the audio path only adds
         // the per-sample cc from the random walk). See osc_svf.h.
-        const float freq = 80.f * powf(12000.f / 80.f, x);
+        // Log sweep 80 Hz..12 kHz. fasterpowf (not libm powf) to avoid an
+        // unresolved libm dynamic symbol on the device.
+        const float freq = 80.f * fasterpowf(12000.f / 80.f, x);
         svf_.updateCutoff(freq, 0.5f, kSampleRate);
       }
       break;
@@ -173,7 +176,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         // Q = 0.5 + 2.0 * x  (x in 0..1) -> 0.5..2.5
         const float x = param_10bit_to_f32(value);
         params_.svf_res = x;
-        const float freq = 80.f * powf(12000.f / 80.f, params_.svf_cut);
+        const float freq = 80.f * fasterpowf(12000.f / 80.f, params_.svf_cut);
         svf_.updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
       }
       break;
@@ -220,7 +223,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     case CINT2:
       {
         params_.chord2_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        chord2_.update(w0_, params_.chord2_cents);
+        recalc_pitch_derived(); // chord2 phasor + keep every derived voice consistent with the current w0_
       }
       break;
 
