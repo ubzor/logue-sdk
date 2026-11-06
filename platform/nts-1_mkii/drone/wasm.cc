@@ -414,9 +414,19 @@ extern "C" void setEditParam(int idx, int raw)
   processor.simEditRequest(static_cast<uint8_t>(idx), static_cast<int32_t>(raw));
 }
 
+// Fire a one-shot RANDOMIZE on the audio-worklet thread (mirrors the hardware's
+// "Rnd" slot). Sets Osc::rnd_request_; the next process() block consumes it and
+// calls randomizeAll() -- so the simulator's "Rnd" control re-rolls the SAME
+// random preset (same osc_white() LCG / windows) the device would.
+extern "C" void rndTrigger()
+{
+  processor.rndRequest();
+}
+
 EMSCRIPTEN_BINDINGS(drone_ui)
 {
   emscripten::function("getSelectParam", &getSelectParam);
   emscripten::function("getEditParamValue", &getEditParamValue);
   emscripten::function("setEditParam", &setEditParam);
+  emscripten::function("rndTrigger", &rndTrigger);
 }

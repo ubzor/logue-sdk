@@ -98,6 +98,17 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
   // cache value for unit_get_param_value(id)
   cached_values[id] = value;
 
+  // Slot 4 (Rnd) is a one-shot RANDOMIZE TRIGGER, not a DSP parameter. Any
+  // value 0..15 makes the processor re-roll every edit parameter to a fresh
+  // audition-friendly random preset (the same windows the web simulator's
+  // "Random" button uses). The value itself carries no sound, so there is no
+  // per-knob DSP state to set -- just fire the side-effect and stop.
+  if (id == 4U)
+  {
+    s_osc_instance.randomizeAll();
+    return;
+  }
+
   // Slots 0/1 are the fixed A/B knobs (PARAM selector / VALUE). Slots 2/3 are
   // their full optional (edit-menu) duplicates (see header.c) — they must
   // read/write the exact same underlying state. Remap the header slot index
@@ -114,6 +125,8 @@ __unit_callback int32_t unit_get_param_value(uint8_t id)
   // last raw value written via unit_set_param_value for that slot.
   if (id == 1U || id == 3U)
     return s_osc_instance.getValue();
+  // Slot 4 (Rnd) is a trigger, not DSP state: report the cached slot value
+  // (0 = never / 1..16 = last fired value).
   // just return the cached value
   return cached_values[id];
 }
@@ -121,6 +134,11 @@ __unit_callback int32_t unit_get_param_value(uint8_t id)
 __unit_callback const char *unit_get_param_str_value(uint8_t id, int32_t value)
 {
   value = clipminmaxi32(unit_header.params[id].min, value, unit_header.params[id].max); // just in case
+  // Slot 4 (Rnd) is a type_enum parameter: the platform renders the integer
+  // natively (1..16), so we return "" here (the minimal-cost path -- no custom
+  // formatter needed).
+  if (id == 4U)
+    return "";
   return s_osc_instance.getParameterStrValue(id, value);
 }
 

@@ -21,7 +21,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x0000000AU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 4,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 5,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -96,5 +96,19 @@ const __unit_header unit_header_t unit_header = {
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
+
+        // Slot 4 (Rnd): RANDOMIZE TRIGGER. This is NOT an edit parameter with
+        // its own DSP state -- it is a one-shot command. Changing the value to
+        // ANY of 0..15 makes the processor re-roll every edit parameter to a
+        // fresh audition-friendly random preset (the same windows the web
+        // simulator's "Random" button uses). It is type_enum so the platform
+        // renders the integer natively (1..16) with no custom display code;
+        // the value itself carries no sound, only the side-effect. Optional
+        // (edit-menu) slot, reachable via Kontrol Editor / loguecli / the web
+        // simulator (the device's two fixed knobs are the PARAM/VALUE
+        // multiplexer, so Rnd is a menu control, not a physical knob).
+        //   0 = never (default, no randomization until changed)
+        //   1..16 = fire on any change to this value.
+        {0, 15, 0, 0, k_unit_param_type_enum, 0, 0, 0, {"Rnd"}},
     },
 };

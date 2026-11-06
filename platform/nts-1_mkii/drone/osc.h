@@ -177,6 +177,20 @@ public:
   // web simulator's VALUE slider init/display (wasm.cc unit_get_param_value).
   int32_t getValue() const { return edit_value_[select_]; }
 
+  // Re-roll every edit parameter to a fresh audition-friendly random preset and
+  // apply all of them to the live DSP. Used by:
+  //   * the hardware "Rnd" optional slot (unit.cc -> randomizeAll()), and
+  //   * the web simulator's "Rnd" control (rndRequest() -> process() ->
+  //     randomizeAll()), so both share the exact same random windows / LCG.
+  // Safe to call at K-rate; it only writes params_ / edit_value_ / the
+  // phasor caches and re-applies each edit param through apply_edit_param().
+  void randomizeAll();
+
+  // Randomizer primitive used by randomizeAll(): returns a uniform integer in
+  // 0..count-1 from one osc_white() sample (integer math, no float/libm --
+  // see osc_randomize.h for the derivation).
+  int32_t rnd_int(uint32_t count) const;
+
 #ifdef __EMSCRIPTEN__
   // ---- Direct edit-parameter channel (web simulator only) -------------------
   // On hardware the PARAM/VALUE multiplexer is driven by the platform's
@@ -202,6 +216,13 @@ public:
   // the volatile slot is absent (zero size) and process() never touches it.
   volatile uint32_t sim_edit_request_;
 
+  // One-shot RANDOMIZE request from the main thread (UI). Set by rndRequest();
+  // consumed (and cleared) by process() on the next block, which calls
+  // randomizeAll(). This is the worklet-thread mirror of the hardware Rnd
+  // slot, so the simulator's "Rnd" control re-rolls the SAME random preset
+  // (same osc_white() LCG / windows) as the device would.
+  volatile uint32_t rnd_request_;
+
   // Write an edit-parameter request from the main thread (UI). Index is
   // 0..(kEditParamCount - 1), raw is 0..1023. Safe to call from any
   // thread; the audio worklet thread picks it up on the next block.
@@ -215,6 +236,14 @@ public:
     const uint32_t packed = (1U << 31) | (static_cast<uint32_t>(index) & 0x3FU) |
                             ((static_cast<uint32_t>(raw) & 0x3FFU) << 8);
     sim_edit_request_ = packed;
+  }
+
+  // Fire a one-shot RANDOMIZE from the main thread (UI). Idempotent: setting
+  // the flag repeatedly before the worklet consumes it still fires exactly
+  // once on the next process() block (see rnd_request_).
+  void rndRequest()
+  {
+    rnd_request_ = 1;
   }
 #endif
 
@@ -340,6 +369,8 @@ public:
     // Clear any pending direct edit-parameter request (the UI may have
     // already sent one before init ran on the worklet thread).
     sim_edit_request_ = 0;
+    // Clear any pending one-shot randomize request too.
+    rnd_request_ = 0;
 #endif
     // First-order relaxation coefficients (per sample) for the exponential
     // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in
@@ -613,4 +644,5 @@ private:
 // from osc_constants.h.
 #include "osc_param_apply.h"   // Osc::apply_edit_param()
 #include "osc_param_display.h" // Osc::getParameterStrValue()
+#include "osc_randomize.h"     // Osc::randomizeAll()  (Rnd re-roll, device + sim)
 #include "osc_mix.h"           // Osc::process()

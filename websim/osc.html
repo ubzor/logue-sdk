@@ -975,6 +975,45 @@
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
         presetGrid.appendChild(b);
       }
+      // ---- Rnd trigger (mirrors the hardware's optional "Rnd" slot) ----------
+      // On the device, "Rnd" is an optional parameter slot (0..15): changing it
+      // to ANY value makes the processor re-roll every edit parameter. Here we
+      // expose the same thing as a 0..15 slider: on change we call
+      // Module.rndTrigger(), which sets the worklet thread's rnd_request_ flag;
+      // the next process() block consumes it and calls Osc::randomizeAll() --
+      // the EXACT same random windows / osc_white() LCG the device uses, so
+      // sim and device re-roll identically. (Unlike the "Random" button, this
+      // fires on the DSP thread, not the UI thread, so it is the faithful
+      // simulator of the hardware slot.)
+      {
+        const wrap = document.createElement("div");
+        wrap.className = "flex items-center gap-2";
+        const lbl = document.createElement("label");
+        lbl.className = "text-sm font-medium";
+        lbl.textContent = "Rnd";
+        const rng = document.createElement("input");
+        rng.type = "range";
+        rng.min = 0;
+        rng.max = 15;
+        rng.step = 1;
+        rng.value = 0;
+        rng.className = "range range-primary range-sm w-28";
+        rng.title = "Rnd (0..15): changing to ANY value re-randomizes all parameters (same as the device's Rnd slot). 0 = off.";
+        const val = document.createElement("span");
+        val.className = "badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-8 text-right";
+        val.textContent = "0";
+        rng.oninput = () => {
+          const v = parseInt(rng.value, 10);
+          val.textContent = String(v);
+          // Any change (including re-firing to 0, matching the slot semantics
+          // of "changing to ANY value") triggers the worklet-thread re-roll.
+          if (Module.rndTrigger) Module.rndTrigger();
+        };
+        wrap.appendChild(lbl);
+        wrap.appendChild(rng);
+        wrap.appendChild(val);
+        presetGrid.appendChild(wrap);
+      }
 
       // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
       const lfoFreq = document.getElementById("LfoFreq");

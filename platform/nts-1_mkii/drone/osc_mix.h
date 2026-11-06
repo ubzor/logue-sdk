@@ -49,6 +49,18 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       sim_edit_request_ = 0;
     }
   }
+
+  // Consume any pending one-shot RANDOMIZE request from the UI thread (see
+  // rndRequest). Calls randomizeAll() exactly once per block, then clears the
+  // flag. This is the worklet-thread mirror of the hardware Rnd slot, so the
+  // simulator's "Rnd" re-rolls the same random preset as the device.
+  {
+    if (rnd_request_)
+    {
+      rnd_request_ = 0;
+      randomizeAll();
+    }
+  }
 #endif
 
   // Caching current parameter values. Consider smoothing sensitive parameters in audio loop

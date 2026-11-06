@@ -298,7 +298,7 @@ $(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
 	@$(EMCC_BIN_PATH)/emcc -c $(INCDIR) -O2 -g -fdebug-compilation-dir='..' $< -o $@
 
 # C++ sources are compiled with C++17 as required by the wasm audio worklet engine
-$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h osc_params.h osc_constants.h osc_waves.h osc_envelope.h osc_saturator.h osc_random_walk.h osc_sub2.h osc_chord.h osc_detune.h osc_param_apply.h osc_param_display.h osc_mix.h | $(WASMOBJDIR)
+$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h osc_params.h osc_constants.h osc_waves.h osc_envelope.h osc_saturator.h osc_random_walk.h osc_sub2.h osc_chord.h osc_detune.h osc_param_apply.h osc_param_display.h osc_randomize.h osc_mix.h | $(WASMOBJDIR)
 	@echo Compiling wasm C++ object $(<F)
 	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) -fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -O2 -g -fdebug-compilation-dir='..' $< -o $@
 
