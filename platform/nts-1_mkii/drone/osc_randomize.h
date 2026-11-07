@@ -156,6 +156,22 @@ inline void Osc::randomizeAll()
   // RFM_A / RFM_B: FM-walk depth 0..50% (raw 0..511) -- "breathing" on the FM.
   edit_value_[RFM_A - kEditParamFirst] = rnd_int(511 + 1);
   edit_value_[RFM_B - kEditParamFirst] = rnd_int(511 + 1);
+  // ---- Enrichment-2 (formant / tape / comb / fold2 / ducking) ----
+  // FORM: any vowel (full range 0..1023) -- the formant stage is OFF until
+  // FVOL > 0, so this is musically free (no clipping).
+  edit_value_[FORM - kEditParamFirst] = rnd_int(1024);
+  // FVOL: 0..50% (raw 0..512) -- a clear formant color, never the full-level
+  // resonant biquad sum that would mask the drone.
+  edit_value_[FVOL - kEditParamFirst] = rnd_int(512 + 1);
+  // COMB: 0..30% (raw 0..307) -- a gentle resonance, never the ringy fb>0.7
+  // zone that "rings" harshly.
+  edit_value_[COMB - kEditParamFirst] = rnd_int(307 + 1);
+  // FOLD2: 0..30% (raw 0..307) -- a light "worn" edge, never the full double-
+  // fold that aliases harshly at the upper partials.
+  edit_value_[FOLD2 - kEditParamFirst] = rnd_int(307 + 1);
+  // DCK: 0..25% (raw 0..256) -- a gentle low-end "breathing", never the full
+  // duck that would silence the subs into a "hollow" drone.
+  edit_value_[DCK - kEditParamFirst] = rnd_int(256 + 1);
 
   // ---- Apply every edit parameter to the live DSP ---------------------------
   // Re-run the same apply path init() uses, so params_ (and the derived phasor

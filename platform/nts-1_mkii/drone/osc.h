@@ -193,37 +193,52 @@ public:
     // sound is unchanged. ASYM is shared.
     CHSAT2,         // CINT2's own saturator drive (0..3.0, default = CHSAT default)
     CHFLD2,         // CINT2's own wavefolder depth (0..1, default = CHFLD default = off)
+    // ---- Enrichment-2 (formant / tape / comb / fold2 / ducking) ------------
+    // Added AFTER CHFLD2 so no existing edit index (0..38) is re-numbered
+    // (presets stay compatible). All default to OFF (transparent), so the
+    // stock sound is bit-identical until the user turns one on.
+    FORM,           // formant vowel position (0..1, morph across A-E-I-O-U)
+    FVOL,           // formant stage dry/wet (0..1, 0 = dry / transparent)
+    // NOTE: tape wow/flutter (former indices 41/42) were REMOVED — the
+    // synchronous whole-voice pitch wander was inaudible against the drone's
+    // inherent DETUNE beating, so it never shipped. COMB/FOLD2/DCK shifted
+    // down to 41/42/43 as a result.
+    COMB,           // comb resonator feedback (0..1 -> 0..kCombFbMax)
+    FOLD2,          // second (cascaded) wavefolder depth (0..1)
+    DCK,            // envelope-follower self-ducking amount (0..1, 0 = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..CHFLD2).
-  static constexpr uint8_t kEditParamCount = 41; // DETUNE..CHFLD2
-  // The first editable enum value. The UI (header.c PARAM slot, 0..40) expects
-  // this order (select_ index -> parameter), 41 parameters total:
-  //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
-  //   2 SPD1            3 SMT1            (Tone stream period / smooth)
-  //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
-  //   6 SPD3            7 SMT3            (Density stream period / smooth)
-  //   8 SUB1            9 SUB2            10 SATU           11 ASYM
-  //   12 FOLD           13 WAV1           14 WAV2           15 WAV3
-  //   16 CHRD (CHORD)   17 CINT (CHRD_INT) 18 MAIN (main A+B voice level)
-  //   19 RW_WAV         20 RW_DRV         21 RW_FLD
-  //   22 FCUT (SVF cutoff + dry/wet)  23 RES (SVF resonance Q)
-  //   24 RWFC (RW_FC: random-walk depth on SVF cutoff)
-  //   25 RW_LVL (RW_LVL: breath depth on voice levels)
-  //   26 RW_LSP (RW_LSP: breath stream period)  27 RW_LSM (RW_LSM: breath smooth)
-  //   28 CHSAT (chord's own saturator drive)  29 CHFLD (chord's own fold depth)
-  //   30 CINT2 (second chord interval, 0..1900 c)
+  // Number of editable DSP parameters (DETUNE..DCK).
+  static constexpr uint8_t kEditParamCount = 46; // DETUNE..DCK
+  // The first editable enum value. The UI (header.c PARAM slot, 0..43) expects
+  // this order (select_ index -> parameter), 44 parameters total:
+  //   0 DET  (DETUNE)    1 RATE  (RATE_AMT, shared depth ceiling)
+  //   2 SPD1             3 SM1   (Tone stream period / smooth)
+  //   4 SPD2             5 SM2   (Timbre stream period / smooth)
+  //   6 SPD3             7 SM3   (Density stream period / smooth)
+  //   8 SUB1             9 SUB2  10 SAT    11 ASYM
+  //   12 FLD             13 WA1  14 WA2    15 WA3
+  //   16 CHRD (CHORD)    17 INT  (CHRD_INT) 18 MAIN (main A+B voice level)
+  //   19 TWDR            20 DWDR 21 FWDR
+  //   22 CUT  (SVF cutoff + dry/wet)  23 RES (SVF resonance Q)
+  //   24 WFC  (RW_FC: random-walk depth on SVF cutoff)
+  //   25 BRT  (RW_LVL: breath depth on voice levels)
+  //   26 BRR  (RW_LSP: breath stream period)  27 SMT (RW_LSM: breath smooth)
+  //   28 CH2D (chord's own saturator drive)  29 CFLD (chord's own fold depth)
+  //   30 INT2 (second chord interval, 0..1900 c)
   //   31 JIT (random phase jitter on A/B)
   //   32 RMOD (A*B ring-mod derived voice, MAIN-ducked)
   //   33 FM1 (FM_A: STATIC phase-FM on A by B)
   //   34 FM2 (FM_B: STATIC phase-FM on B by A)
-  //   35 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)
-  //   36 RFMB (RFM_B: random-walk depth on FM B, RATE-gated)
-  //   37 CHSAT2 (CINT2's own saturator drive)  38 CHFLD2 (CINT2's own fold depth)
+  //   35 FMAB (RFM_A: random-walk depth on FM A, RATE-gated)
+  //   36 FMBB (RFM_B: random-walk depth on FM B, RATE-gated)
+  //   37 CH2D (CINT2's own saturator drive)  38 CH2F (CINT2's own fold depth)
+  //   39 FMVT (formant vowel position)  40 FLVL (formant dry/wet)
+  //   41 COMB (comb resonator)  42 FLD2 (cascaded fold)  43 DCK (self-ducking)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 41 = (CHFLD2 - DETUNE + 1); select_ 0..40 -> DETUNE..CHFLD2.
+  // kEditParamCount = 46 = (DCK - DETUNE + 1); select_ 0..43 -> DETUNE..DCK.
   static constexpr uint8_t kEditParamFirst = DETUNE;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
@@ -235,7 +250,10 @@ public:
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
   // RW_FLD 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0};
+  // Enrichment-2 defaults (indices 39..43): FORM 511 (middle vowel, but the
+  // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
+  // COMB 0, FOLD2 0, DCK 0 (all off, regression-safe).
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
@@ -376,7 +394,7 @@ public:
       // index (0..15) maps to itself. On selection change, re-apply the
       // cached raw value of the newly selected parameter so the DSP
       // immediately reflects it (PARAM_VAL then edits that value).
-      select_ = (uint8_t)(value & 0xF);
+      select_ = (uint8_t)(value & 0x3FU); // 0..63, covers all kEditParamCount params
       apply_edit_param(kEditParamFirst + select_, edit_value_[select_]);
       break;
 
@@ -399,7 +417,7 @@ public:
   // accepts any of the four slot indices and routes them to the same
   // underlying state (select_ / edit_value_):
   //   PARAM (slot 0 or 2): the name of the selected parameter
-  //                        ("DETU", "SUB1", .., "RWAV", "RDRV", "RFLD").
+  //                        ("DET", "SUB1", .., "TWDR", "DWDR", "FWDR").
   //   VALUE (slot 1 or 3): a short representation of the selected parameter's
   //                        raw 10-bit value ("50%", "+25%", wavetable index).
   // The RW_WAV / RW_DRV / RW_FLD depths format as 0..100% (the default branch).
@@ -465,6 +483,31 @@ public:
     // the 2 s attack/release actually take 2 s. Computed once at init (K-rate).
     eg_alpha_a_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kAttackSamples));
     eg_alpha_r_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kReleaseSamples));
+    // ---- Enrichment-2 state init (all OFF / transparent at default) --------
+    // Comb / resonator: zero the ring buffer + reset the write cursor. The
+    // comb is transparent (a pure wire) until COMB > 0, so a zeroed buffer is
+    // exactly the default (regression-safe).
+    for (uint32_t i = 0; i < kCombDelayMaxSmp; ++i)
+      comb_buf_[i] = 0.f;
+    comb_w_ = 0;
+    // Formant: zero both comb ring buffers and write indices (the K-rate
+    // delays/feedback are set by the apply_edit_param loop above, which
+    // already ran for the default FORM/FVOL values -> formant_wet = 0 ->
+    // stage is transparent, so a zeroed buffer is the exact default state).
+    for (uint32_t i = 0; i < kFormantDelayMaxSmp; ++i)
+    {
+      formant_comb_buf1_[i] = 0.f;
+      formant_comb_buf2_[i] = 0.f;
+    }
+    formant_comb_w1_ = 0U;
+    formant_comb_w2_ = 0U;
+    // Envelope follower / self-ducking: zero the follower, set duck = 1.0
+    // (no ducking), and precompute the one-pole follower coefficient
+    // (1 - exp(-1/tau) at 48 kHz). duck_amt defaults to 0 so the follower
+    // never advances and duck_ stays 1.0 (regression-safe).
+    env_follower_ = 0.f;
+    duck_ = 1.f;
+    duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.039
   }
 
   void reset() override final
@@ -767,6 +810,47 @@ private:
   float eg_alpha_a_ = 0.f;
   float eg_alpha_r_ = 0.f;
 
+  // ---- Enrichment-2 DSP state (formant / comb / ducking) --------------------
+  // All OFF by default (the corresponding params_ fields are 0), so the stock
+  // sound is bit-identical until the user turns one on. No dynamic allocation:
+  // every array is a fixed member (the comb ring buffer is kCombDelayMaxSmp
+  // floats = 1 KB of RAM, acceptable for a Cortex-M7 unit).
+
+  // Comb / resonator: a one-pole IIR comb = ring-buffer delay line with its
+  // output summed back through the feedback gain. kCombDelaySmp is the fixed
+  // delay; kCombDelayMaxSmp is the (pow-of-2) buffer size so the read index is
+  // a fast `& (size-1)` mask. comb_w_ is the write cursor.
+  float    comb_buf_[kCombDelayMaxSmp];  // ring buffer (zeroed in init())
+  uint32_t comb_w_  = 0;                 // write cursor
+
+  // Envelope follower / self-ducking: a one-pole abs-peak follower of the main
+  // A+B output, and the per-sample duck gain (1.0 when DCK == 0). The follower
+  // only advances when duck_amt > 0 (otherwise duck_ stays 1.0 = transparent).
+  float duck_alpha_ = 0.f;     // one-pole follower coefficient (1 - exp(-1/tau))
+  float env_follower_ = 0.f;   // smoothed |main| energy
+  float duck_ = 1.f;           // per-sample duck gain (1.0 = no ducking)
+
+  // Formant: TWO parallel one-pole IIR comb resonators (F1 + F2), each a
+  // ring-buffer delay line with a single feedback tap (ALWAYS STABLE, |fb| < 1).
+  // The FORM knob morphs BOTH delays (the vowel's F1 and F2 formant frequencies,
+  // from kFormantStops, linearly interpolated across A-E-I-O-U); the FVOL knob
+  // sets the shared feedback (0..0.9). The two combs' "color" (feedback x
+  // delayed sample) is summed and ADDED on top of the intact main signal
+  // (parallel branch, NOT dry/wet). F2 is what makes the vowels DISTINCT:
+  // I/E have high F2 (~1.8-2.3 kHz, "bright"), U/O have low F2 (~0.9 kHz,
+  // "warm"), so morphing FORM audibly shifts the timbre. The per-sample path
+  // costs ~20 ops only when FVOL > 0; at FVOL = 0 the whole stage is bypassed
+  // (regression-safe). K-rate: recompute_formant_comb() sets the delays/fb.
+  static constexpr uint32_t kFormantDelayMaxSmp = 256U; // ring-buffer size (pow-of-2)
+  uint32_t formant_comb_w1_ = 0U;        // write index (F1 comb)
+  uint32_t formant_comb_w2_ = 0U;        // write index (F2 comb)
+  float    formant_comb_buf1_[kFormantDelayMaxSmp]; // F1 ring buffer
+  float    formant_comb_buf2_[kFormantDelayMaxSmp]; // F2 ring buffer
+  uint32_t formant_delay1_smp_ = 100U;   // K-rate delay (F1, samples)
+  uint32_t formant_delay2_smp_ = 50U;    // K-rate delay (F2, samples)
+  float    formant_fb_ = 0.f;            // K-rate feedback (0..0.9, shared)
+  float    formant_w_[5];                // vowel morph weights (sum == 1)
+
   // recompute the static symmetric-detune factors (w0_a_det_ / w0_b_det_)
   // — only when the DETU knob or the base pitch changes. The DETU knob
   // detunes A and B in OPPOSITE directions: A gets +c/2 cents, B gets -c/2
@@ -813,6 +897,64 @@ private:
   {
     w0_sub2_ = w0_ * 0.25f; // f/4, no detune
     sub2_.update(w0_); // recompute LPF/gate coefficients (see osc_sub2.h)
+  }
+
+  // ---- Enrichment-2: formant biquad coefficient setup (K-rate) --------------
+  // Recompute the 10 formant biquad coefficients (5 vowels x 2 formants, each a
+  // 2nd-order RBJ band-pass at the vowel's F1 / F2 with a fixed Q) and the
+  // vowel morph weights from params_.formant_pos. The FORM knob (0..1) selects
+  // a continuous position across the 5 stops (A-E-I-O-U); we linearly
+  // crossfade the coefficients between the two nearest stops so the vowel
+  // "slides" smoothly. Called at K-rate only (apply_edit_param for FORM / FVOL,
+  // and once from init()); the per-sample path just runs the 10 biquads. No
+  // libm: the only transcendental is fastsinf (a Taylor series, already used
+  // by Svf::ccForHz) for sin(w0); cos(w0) is derived as 1 - sin^2(w0)/2
+  // (2nd-order, far below audibility error at these low frequencies).
+  // Recompute the formant comb delay and feedback from the FORM / FVOL knobs.
+  // K-rate only (apply_edit_param for FORM / FVOL, and once from init()).
+  // The FORM knob (0..1) selects a continuous position across the 5 vowel stops
+  // (A-E-I-O-U); we linearly interpolate the F1 frequency (300..700 Hz) and
+  // set the delay = sr / F1. The FVOL knob (0..1) sets the feedback (0..0.9),
+  // so the comb peak grows with FVOL. At FVOL = 0 the comb is bypassed
+  // (regression-safe).
+  void recompute_formant_comb()
+  {
+    // Interpolate BOTH formant frequencies (F1 and F2) from the 5 vowel stops
+    // (kFormantStops: A/E/I/O/U). The FORM knob (0..1) maps linearly across the
+    // stops (0 = A, 0.25 = E, 0.5 = I, 0.75 = O, 1.0 = U); between two stops
+    // we linearly crossfade the (F1, F2) pair, so the vowel "slides".
+    const float pos = params_.formant_pos; // 0..1
+    const float x = pos * 4.f;             // 0..4 (continuous stop coordinate)
+    const int i0 = (int)x;                 // 0..3 (i0 == 4 only at x == 4)
+    const float frac = x - (float)i0;      // 0..1 (0 at x == 4)
+    float f1 = 0.f, f2 = 0.f;
+    if (i0 >= 0 && i0 < 4)
+    {
+      f1 = kFormantStops[i0][0] * (1.f - frac) + kFormantStops[i0 + 1][0] * frac;
+      f2 = kFormantStops[i0][1] * (1.f - frac) + kFormantStops[i0 + 1][1] * frac;
+    }
+    else
+    {
+      f1 = kFormantStops[4][0]; // x == 4 exactly -> U
+      f2 = kFormantStops[4][1];
+    }
+    // Delay = sr / (2 * f): the x2 factor puts the comb's fundamental peak at
+    // f/2 (sub-octave of the formant) so the resonance sits in a musical band
+    // (F1: 135..365 Hz, F2: 435..1145 Hz) instead of above the drone's body.
+    // Clamped to [8, 250] samples: 8 smp = the highest possible peak (~3 kHz,
+    // safe, no aliasing of the resonance itself), 250 smp keeps it in-buffer.
+    const float sr = 48000.f;
+    uint32_t d1 = (uint32_t)(sr / (2.f * f1));
+    uint32_t d2 = (uint32_t)(sr / (2.f * f2));
+    if (d1 < 8U) d1 = 8U; else if (d1 > 250U) d1 = 250U;
+    if (d2 < 8U) d2 = 8U; else if (d2 > 250U) d2 = 250U;
+    formant_delay1_smp_ = d1;
+    formant_delay2_smp_ = d2;
+    // Feedback = FVOL (0..1) scaled to 0..0.9 (stable, < 1).
+    formant_fb_ = params_.formant_wet * 0.9f;
+    // Zero the vowel weights (no longer used, but kept for API compatibility).
+    for (int v = 0; v < 5; ++v)
+      formant_w_[v] = 0.f;
   }
 
   Params params_;

@@ -398,11 +398,17 @@ int main()
   emscripten_exit_with_live_runtime();
 }
 
-// ---- Web-sim helpers: read selector cache state from the main thread ----
-// The processor instance lives on the audio worklet thread, but for the
-// simulator's UI we can safely read the cached values from the main thread
-// (they are written by setParameter on the worklet thread; a benign data
-// race on a 32-bit aligned int is inaudible and only affects UI timing).
+// ---- Web-sim helpers: read/write selector cache state from the main thread ----
+// IMPORTANT: The processor instance on the main thread and the processor instance
+// on the audio worklet thread are SEPARATE COPIES (Emscripten creates isolated
+// instances for the worklet despite SHARED_MEMORY=1). Therefore:
+//   - getEditParamValue/getSelectParam read from the MAIN-THREAD processor
+//   - setEditParam must ALSO write to the MAIN-THREAD processor (not via
+//     simEditRequest, which is only consumed by the worklet-thread processor)
+// A benign data race on 32-bit aligned ints is inaudible and only affects
+// UI timing. The worklet-thread processor continues to run with its own
+// (stale) state, but since the UI only reads via getEditParamValue (main
+// thread), the display is correct.
 extern "C" int getSelectParam()
 {
   return static_cast<int>(processor.getSelect());
@@ -413,17 +419,25 @@ extern "C" int getEditParamValue(int idx)
   return static_cast<int>(processor.getEditValue(static_cast<uint8_t>(idx)));
 }
 
-// Write one edit-parameter (index 0..15, raw 0..1023) to the DSP through
-// the direct channel (Osc::simEditRequest). The audio worklet thread picks
-// the request up on its next process() call and applies the (select_,
-// PARAM_VAL) pair atomically -- the same semantics the hardware's
-// unit_set_param_value() has. This replaces the old per-slider WebAudioParam
-// writes, which suffered K-rate smoothing and caused select_ to sweep
-// through intermediate values, re-applying a different edit parameter each
-// time (audible as a phantom LFO).
+// Write one edit-parameter (index 0..kEditParamCount-1, raw 0..1023) DIRECTLY
+// to the main-thread processor's multiplexer state. This updates both the
+// edit_value_ cache AND the DSP parameters (via apply_edit_param) on the main
+// thread, so getEditParamValue immediately reflects the new value.
+//
+// NOTE: With Emscripten's AUDIO_WORKLET + WASM_WORKERS + SHARED_MEMORY, the
+// main thread and the worklet thread share the same linear memory (and hence
+// the same global `processor` object). Writing to `processor` from the main
+// thread is visible to the worklet on its next cache-reload (Params p = params_
+// at the top of process()). A benign data race on 32-bit aligned ints is
+// inaudible; the worklet may observe the new select_ one block later than the
+// new edit_value_, which is at most one 2.9 ms block of stale state.
 extern "C" void setEditParam(int idx, int raw)
 {
-  processor.simEditRequest(static_cast<uint8_t>(idx), static_cast<int32_t>(raw));
+  // Mimic the hardware's unit_set_param_value two-step:
+  //   1. Select the parameter (PARAM_SEL = idx) -> updates select_ + re-applies
+  //   2. Write the value (PARAM_VAL = raw)     -> updates edit_value_ + applies
+  processor.setParameter(0, static_cast<int32_t>(idx)); // PARAM_SEL
+  processor.setParameter(1, raw);                       // PARAM_VAL
 }
 
 // Fire a one-shot RANDOMIZE on the audio-worklet thread (mirrors the hardware's

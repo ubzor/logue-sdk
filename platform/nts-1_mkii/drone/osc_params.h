@@ -158,6 +158,16 @@ struct OscParamsData
   float rfm_a;        // 0.f .. 1.f, edit RFMA (random-walk depth on FM A)
   float rfm_b;        // 0.f .. 1.f, edit RFMB (random-walk depth on FM B)
 
+  // ---- Enrichment-2 (formant / comb / fold2 / ducking) ----------------------
+  // All default to OFF (transparent) so the stock sound is bit-identical.
+  // (Tape wow/flutter were removed — the synchronous whole-voice pitch wander
+  //  was inaudible against the drone's inherent DETUNE beating.)
+  float formant_pos;  // 0.f .. 1.f, edit FORM: vowel morph position (A=0 .. U=1)
+  float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
+  float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
+  float fold2_depth;  // 0.f .. 1.f, edit FOLD2 (second cascaded wavefolder)
+  float duck_amt;     // 0.f .. 1.f, edit DCK (self-ducking amount, 0 = off)
+
   void reset()
   {
     detune_cents = 0.f;     // default: in tune (sum voice)
@@ -221,6 +231,15 @@ struct OscParamsData
       fm_b         = 0.f;   // default: static phase-FM off (B)
       rfm_a        = 0.f;   // default: FM-A walk off (pure static FM)
       rfm_b        = 0.f;   // default: FM-B walk off (pure static FM)
+      // ---- Enrichment-2 defaults (all OFF, regression-safe) ----
+      // FORM sits at the middle vowel, but the formant stage is fully DRY
+      // (formant_wet = 0) so it contributes nothing until the user raises
+      // FVOL. Every other enrichment-2 knob defaults to 0 (off / transparent).
+      formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
+      formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
+      comb_fb      = 0.f;   // default: comb resonator off
+      fold2_depth  = 0.f;   // default: second (cascaded) fold off
+      duck_amt     = 0.f;   // default: self-ducking off
   }
 
   OscParamsData() { reset(); }

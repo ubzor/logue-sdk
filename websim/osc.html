@@ -210,7 +210,7 @@
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
-      const EDIT_PARAM_COUNT = 41;
+      const EDIT_PARAM_COUNT = 48;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DETU, 1 RATE (shared depth ceiling),
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
@@ -245,6 +245,8 @@
         "Chord Drive", "Chord Fold",
         "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Chord 2 Drive", "Chord 2 Fold",
+        "Formant Vowel", "Formant Level",
+        "Comb Res", "Fold 2", "Duck",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -264,15 +266,17 @@
       //   FILTER      FCUT RES
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [18, 13, 14, 0, 10, 11, 12, 33, 34, 31, 32] },
+        { title: "MAIN",       col: 0, items: [18, 13, 14, 0, 10, 11, 12, 42, 33, 34, 31, 32] },
         { title: "BREATH",   col: 0, items: [25, 26, 27] },
+        { title: "FORMANT",  col: 0, className: "mt-auto", items: [39, 40] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, className: "mt-auto", items: [19, 24, 20, 21, 35, 36] },
         // ---- Column 2 ----
         { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
-        { title: "FILTER",     col: 2, className: "mt-auto", items: [22, 23] },
+        { title: "FILTER",     col: 2, items: [22, 23, 41] },
+        { title: "DYNAMICS",   col: 2, className: "mt-auto", items: [43] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable
@@ -361,10 +365,18 @@
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
+        if (idx === 39) {
+          // FORM (edit 39): formant vowel position. Show the nearest vowel
+          // (A/E/I/O/U) across the 5 stops (0..1 -> 0..4), mirroring
+          // Osc::getParameterStrValue (osc_param_display.h).
+          const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
+          return "AEIOU".charAt(vi);
+        }
         // Every other index formats as 0..100%: 1..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
         // 19..21 (RWAV/RDRV/RFLD), 24 (RWFC), 25..27 (Breath), 29 (CHFLD),
-        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB).
+        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 40 (FVOL), 41 (COMB),
+        // 42 (FOLD2), 43 (DCK).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -976,6 +988,20 @@
         // RATE ceiling (20..50%) and the quadratic FM curve.
         set("FM A Bre", rRange(0, 511));
         set("FM B Bre", rRange(0, 511));
+        // ---- Enrichment-2 (formant / comb / fold2 / ducking) ----
+        // FORM: any vowel (full range) -- the formant stage is OFF until FVOL>0,
+        // so this is musically free (no clipping).
+        set("Formant Vowel", r1023());
+        // FVOL: 0..50% (raw 0..512) -- a clear formant color, never the
+        // full-level resonant biquad sum that would mask the drone.
+        set("Formant Level", rRange(0, 512));
+        // COMB: 0..30% (raw 0..307) -- a gentle resonance, never the ringy
+        // fb>0.7 zone that "rings" harshly.
+        set("Comb Res", rRange(0, 307));
+        // FOLD2: 0..30% (raw 0..307) -- a light "worn" edge.
+        set("Fold 2", rRange(0, 307));
+        // DCK: 0..25% (raw 0..256) -- a gentle low-end "breathing".
+        set("Duck", rRange(0, 256));
         return raws;
       }
 
@@ -1027,45 +1053,19 @@
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
         presetGrid.appendChild(b);
       }
-      // ---- Rnd trigger (mirrors the hardware's optional "Rnd" slot) ----------
-      // On the device, "Rnd" is an optional parameter slot (0..15): changing it
-      // to ANY value makes the processor re-roll every edit parameter. Here we
-      // expose the same thing as a 0..15 slider: on change we call
-      // Module.rndTrigger(), which sets the worklet thread's rnd_request_ flag;
-      // the next process() block consumes it and calls Osc::randomizeAll() --
-      // the EXACT same random windows / osc_white() LCG the device uses, so
-      // sim and device re-roll identically. (Unlike the "Random" button, this
-      // fires on the DSP thread, not the UI thread, so it is the faithful
-      // simulator of the hardware slot.)
-      {
-        const wrap = document.createElement("div");
-        wrap.className = "flex items-center gap-2";
-        const lbl = document.createElement("label");
-        lbl.className = "text-sm font-medium";
-        lbl.textContent = "Rnd";
-        const rng = document.createElement("input");
-        rng.type = "range";
-        rng.min = 0;
-        rng.max = 15;
-        rng.step = 1;
-        rng.value = 0;
-        rng.className = "range range-primary range-sm w-28";
-        rng.title = "Rnd (0..15): changing to ANY value re-randomizes all parameters (same as the device's Rnd slot). 0 = off.";
-        const val = document.createElement("span");
-        val.className = "badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-8 text-right";
-        val.textContent = "0";
-        rng.oninput = () => {
-          const v = parseInt(rng.value, 10);
-          val.textContent = String(v);
-          // Any change (including re-firing to 0, matching the slot semantics
-          // of "changing to ANY value") triggers the worklet-thread re-roll.
-          if (Module.rndTrigger) Module.rndTrigger();
-        };
-        wrap.appendChild(lbl);
-        wrap.appendChild(rng);
-        wrap.appendChild(val);
-        presetGrid.appendChild(wrap);
-      }
+      // ---- Rnd: DEVICE-ONLY parameter — intentionally NOT rendered in the sim
+      // ----
+      // On the device, "Rnd" is an OPTIONAL PARAMETER SLOT (0..15) in header.c:
+      // changing it to ANY value makes the processor re-roll every edit
+      // parameter (Osc::randomizeAll on the DSP thread, via rnd_request_).
+      // The web simulator deliberately does NOT expose a control for it:
+      //   - the "Random" button above already does the same re-roll, but on
+      //     the UI thread through applyPresetRaw(randomRaw());
+      //   - a 0..15 slider next to Reset was visual noise for a hardware-only
+      //     slot (the sim has no optional slots / edit menu).
+      // DO NOT re-add an Rnd slider/row to the sim UI; if a worklet-thread
+      // re-roll is ever needed in the sim, call Module.rndTrigger() from JS
+      // (it is still exported in wasm.cc) instead of adding a control.
 
       // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
       const lfoFreq = document.getElementById("LfoFreq");

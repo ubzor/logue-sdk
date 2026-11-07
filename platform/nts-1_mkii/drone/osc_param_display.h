@@ -29,17 +29,18 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   //       It can be assumed that caller will have copied or used the string
   //       before the next call to getParameterStrValue.
   static const char *const names[kEditParamCount] = {
-      "DETU", "RATE",
-      "SPD1", "SMT1", "SPD2", "SMT2", "SPD3", "SMT3",
-      "SUB1", "SUB2", "SATU", "ASYM", "FOLD", "WAV1", "WAV2", "WAV3",
-      "CHRD", "CINT",
+      "DET", "RATE",
+      "SPD1", "SM1", "SPD2", "SM2", "SPD3", "SM3",
+      "SUB1", "SUB2", "SAT", "ASYM", "FLD", "WA1", "WA2", "WA3",
+      "CHRD", "INT",
       "MAIN",
-      "RWAV", "RDRV", "RFLD",
-      "FCUT", "RESO", "RWFC",
-      "RVLL", "RVLS", "RVLS",
-      "SATC", "FLDC",
-      "INT2", "JIT", "RMOD", "FM1", "FM2", "RFMA", "RFMB",
-      "SATC2", "FLDC2"};
+      "TWDR", "DWDR", "FWDR",
+      "CUT", "RES", "WFC",
+      "BRT", "BRR", "SMT",
+      "CH2D", "CFLD",
+      "INT2", "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
+      "CH2D", "CH2F",
+      "FMVT", "FLVL", "COMB", "FLD2", "DCK"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -61,8 +62,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // 0..1023 value; showing % keeps the display consistent and avoids
   // pulling a fasterpowf into the K-rate display path.
 
-  // CINT (chord interval): display cents (0..1900), not a name.
-  // CINT2 (second chord interval) uses the same format.
+  // INT (chord interval): display cents (0..1900), not a name.
+  // INT2 (second chord interval) uses the same format.
   if (k == CHRD_INT || k == CINT2)
   {
     int ci = (int)(param_10bit_to_f32(raw) * ChordVoice::kMaxCents + 0.5f);
@@ -113,7 +114,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[3] = '\0';
     return buf;
   }
-  // FCUT (SVF cutoff + dry/wet): the cutoff frequency, "NNN H" (< 1 kHz) or
+  // CUT (SVF cutoff + dry/wet): the cutoff frequency, "NNN H" (< 1 kHz) or
   // "NN.Nk" (>= 1 kHz, at most 2 whole + 1 frac digit since max is 12.0k).
   if (k == FCUT)
   {
@@ -142,6 +143,21 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       buf[n++] = 'H';
     }
     buf[n] = '\0';
+    return buf;
+  }
+
+  // FMVT (formant vowel position): show the nearest vowel (A/E/I/O/U) as a
+  // single letter. The raw 0..1023 value maps to 0..1 across 5 stops, so
+  // (int)(pos*4.999) gives the stop index 0..4 (the 4.999 keeps raw=1023
+  // from overflowing to index 5).
+  if (k == FORM)
+  {
+    static const char vowels[5] = {'A', 'E', 'I', 'O', 'U'};
+    int vi = (int)(param_10bit_to_f32(raw) * 4.999f);
+    if (vi < 0) vi = 0;
+    else if (vi > 4) vi = 4;
+    buf[0] = vowels[vi];
+    buf[1] = '\0';
     return buf;
   }
 

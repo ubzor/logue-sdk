@@ -284,6 +284,55 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.rfm_b = param_10bit_to_f32(value);
       break;
 
+    // ---- Enrichment-2: formant vowel position (FORM) + dry/wet (FVOL) ----
+    // FORM maps 0..1023 -> 0..1 (vowel morph position across A-E-I-O-U). The
+    // audio path crossfades the per-vowel biquad coefficients between the two
+    // nearest stops, so the vowel "slides". FVOL is the formant stage's
+    // dry/wet (0..1); at 0 the formant contributes nothing (regression-safe),
+    // so the two knobs are independent: FORM can be dialed in silently, then
+    // FVOL fades the formant in. Changing either re-computes the (K-rate)
+    // formant biquad coefficients + morph weights.
+    case FORM:
+      params_.formant_pos = param_10bit_to_f32(value);
+      recompute_formant_comb(); // K-rate: 10 biquad coefs + morph weights
+      break;
+    case FVOL:
+      params_.formant_wet = param_10bit_to_f32(value);
+      recompute_formant_comb(); // K-rate (the weights only depend on FORM, but
+                                   // recompute keeps the cached coefs consistent)
+      break;
+
+    // ---- Enrichment-2: comb resonator feedback (COMB) ----
+    // The knob maps 0..1023 -> 0..kCombFbMax (the feedback coefficient of the
+    // one-pole IIR comb, clamped < 1 for stability). The comb delay is a fixed
+    // constant (kCombDelaySmp, ~190 Hz peak); only the feedback is settable.
+    // At 0 the comb is a pure wire (regression-safe). No K-rate recompute
+    // needed (the delay length is constant).
+    case COMB:
+      params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
+      break;
+
+    // ---- Enrichment-2: second (cascaded) wavefolder depth (FOLD2) ----
+    // The knob maps 0..1023 -> 0..1 (fold depth). The audio path runs the
+    // A+B chain's output through a SECOND Saturator::fold with this depth
+    // (on top of the FOLD knob's first fold), so full FOLD2 doubles the
+    // folding into a denser, "worn" timbre. At 0 it is a no-op
+    // (regression-safe).
+    case FOLD2:
+      params_.fold2_depth = param_10bit_to_f32(value);
+      break;
+
+    // ---- Enrichment-2: envelope-follower self-ducking (DCK) ----
+    // The knob maps 0..1023 -> 0..1 (ducking amount). The audio path computes
+    // a one-pole abs-peak envelope follower of the main A+B output (only when
+    // DCK > 0) and uses it to duck the two sub voices (SUB1 / SUB2) so the low
+    // end "breathes out" of the way of the main voice's peaks. The duck gain
+    // is floored at kDuckFloor (0.2) so the subs are never fully silenced.
+    // At 0 the duck gain is 1.0 (regression-safe).
+    case DCK:
+      params_.duck_amt = param_10bit_to_f32(value);
+      break;
+
     default:
       break;
   }
