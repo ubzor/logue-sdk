@@ -96,7 +96,26 @@ int32_t unit_get_param_value(uint8_t id) {
 1. `osc.h`: `enum` (после `WAV2`), `Params` struct, `Params::reset()`, `edit_value_[kEditParamCount]` (увеличить `kEditParamCount`), `apply_edit_param` (новый `case`), `names[]` в `getParameterStrValue`, `formatParamValue`-логика.
 2. `header.c`: **не менять** — мультиплексор подхватит автоматически.
 3. `websim/osc.html`: новый `if (idx === N)` в `formatParamValue` + имя в `EDIT_PARAM_NAMES[N]`. **Слайдер создаётся автоматически** — `EDIT_PARAM_COUNT` равен `kEditParamCount`, цикл `for i in 0..EDIT_PARAM_COUNT` добавит строку сам; отдельный контрол писать не нужно.
-4. `make install` + `make wasm`.
+4. **Синхронизировать `platform/nts-1_mkii/drone/README.md`** — добавить/обновить строку параметра в таблице (индекс, имя, диапазон, default, влияние) и, если изменилась топология тракта, — раздел *Sound path*.
+5. `make install` + `make wasm`.
+
+### Синхронизация `drone/README.md` (строго)
+`platform/nts-1_mkii/drone/README.md` — эталонная документация звукового тракта и параметров юнита DRONE. При **любом** добавлении/удалении/переименовании/изменении диапазона/по умолчанию параметров, а также при изменении топологии звукового тракта, **в той же правке** обновить `drone/README.md`:
+- таблицу edit-параметров (индекс, имя, формат дисплея, диапазон, default, влияние);
+- раздел *The four random-walk streams* (если тронуто RATE/SPDx/SMTx/RWAV/RDRV/RFLD/RWFC/RVLL/RVLS/RVLSM);
+- раздел *Sound path* (если изменилось соединение веток/обработчиков);
+- раздел *Non-editable (fixed) behaviour* (если изменились фиксированные константы: envelope, glide, sub-1/sub-2, output makeup и т.п.).
+
+Точки правки, после которых README **обязательно** синхронизировать:
+1. `osc.h` — `enum` (порядок/имена), `edit_value_[kEditParamCount]` (default'ы), `Params` struct, `Params::reset()`.
+2. `osc_params.h` — поля `OscParamsData` и их default'ы.
+3. `osc_param_apply.h` — диапазоны/маппинг (`apply_edit_param`).
+4. `osc_param_display.h` — имена и формат дисплея (`names[]`, `getParameterStrValue`).
+5. `header.c` — слоты `header.c` (Rnd/Legato/мультиплексор).
+6. `websim/osc.html` — `EDIT_PARAM_NAMES`, `PARAM_GROUPS`, `formatParamValue`, `EDIT_PARAM_COUNT`.
+7. `osc_mix.h` / `osc_*` (топология тракта, фиксированные константы в `osc_constants.h`).
+
+Параметр не считается добавленным, пока README не отражает его.
 ## Git-дисциплина (строго)
 
 **Никаких `git commit` / `git push` без явного указания пользователя.**
