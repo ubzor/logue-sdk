@@ -213,6 +213,17 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     case CHFLD:
       params_.chord_fold = param_10bit_to_f32(value);
       break;
+    // ---- CINT2's OWN drive/fold (CHSAT2 / CHFLD2) ----
+    // Independent of both the A+B SATU/FOLD and the CINT voice's CHSAT/CHFLD,
+    // so the second interval (chord2) can be driven/filtered separately.
+    // Defaults match CHSAT/CHFLD (see OscParamsData::reset) so the stock sound
+    // is unchanged until the user splits the drive.
+    case CHSAT2:
+      params_.chord2_drive = param_10bit_to_f32(value) * kSatuMax;
+      break;
+    case CHFLD2:
+      params_.chord2_fold = param_10bit_to_f32(value);
+      break;
 
     // ---- Enrichment: second chord interval (CINT2) ----
     // A second chord-voice oscillator at a continuous interval above the base

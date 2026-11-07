@@ -113,11 +113,22 @@ struct OscParamsData
   float chord_fold;   // 0.f .. 1.f, edit CHFLD: chord's own wavefolder depth
   // ---- Enrichment: second chord interval, jitter, ring-mod, phase-FM ----
   // CINT2: second chord-voice interval (0..ChordVoice::kMaxCents). Shares the
-  // chord's level (chord_level/CHRD), wavetable (wave_c/WAV3), folder/saturator
-  // (chord_drive/chord_fold via CHSAT/CHFLD), and the Breath stream's lvl_c, so
-  // both intervals breathe in sync (the chord is one object). See the CINT2
-  // branch in the audio path (osc_mix.h).
+  // chord's level (chord_level/CHRD) and the Breath stream's lvl_c (both
+  // intervals breathe in sync). It has its OWN drive/fold (chord2_drive /
+  // chord2_fold via CHSAT2/CHFLD2), independent of CINT's CHSAT/CHFLD and of
+  // the A+B SATU/FOLD, so the higher interval can be softened/filtered on its
+  // own (see the CINT2 branch in osc_mix.h).
   float chord2_cents; // 0.f .. ChordVoice::kMaxCents (1900), edit CINT2
+  // ---- CINT2's OWN drive/fold (CHSAT2 / CHFLD2) ----------------------------
+  // The CINT2 interval gets its OWN folder+saturator pass, independent of both
+  // the A+B SATU/FOLD and the CINT voice's CHSAT/CHFLD. This lets the higher
+  // interval (e.g. octave+fifth at CINT2 = 1900 c) be softened/filtered
+  // separately, which is where a shared drive/fold tends to turn the top
+  // metallic on wide intervals. Defaults MATCH CHSAT/CHFLD (drive = 1.0,
+  // fold = 0) so the stock sound is unchanged (the chord behaves as one object
+  // until the user explicitly splits the drive). ASYM is shared with everything.
+  float chord2_drive; // 0.f .. 3.f, edit CHSAT2: CINT2's own saturator drive
+  float chord2_fold;  // 0.f .. 1.f, edit CHFLD2: CINT2's own wavefolder depth
   // JIT: random phase jitter on A/B. The knob maps 0..1023 -> 0..kJitMaxCycles
   // (peak phase deviation, in cycles). The audio path adds (white()-0.5)*jit
   // to each voice's phasor increment, so the carrier "smears" into a dense
@@ -199,6 +210,11 @@ struct OscParamsData
       // JIT / RMOD / FM1 / FM2 all default to 0 (off), so the enrichment
       // voices are silent at the factory preset.
       chord2_cents = 950.f; // default: major sixth (~950 c)
+       // CINT2's own drive/fold default to the CHSAT/CHFLD values (drive = 1.0,
+       // fold = 0) so the chord starts as one object (both intervals share the
+       // same drive/fold) and the stock sound is unchanged.
+       chord2_drive = 1.0f; // default: gentle drive (same as CHSAT)
+       chord2_fold  = 0.f;  // default: CINT2 wavefolder off (same as CHFLD)
       jit_cycles   = 0.f;   // default: jitter off
       ring_mix     = 0.f;   // default: ring-mod off
       fm_a         = 0.f;   // default: static phase-FM off (A)

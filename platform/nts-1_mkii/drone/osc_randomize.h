@@ -141,6 +141,11 @@ inline void Osc::randomizeAll()
   edit_value_[CHSAT - kEditParamFirst] = rnd_int(613 + 1);
   // CHFLD: chord fold 0..50% (raw 0..511) -- light edge, no harsh aliasing.
   edit_value_[CHFLD - kEditParamFirst] = rnd_int(511 + 1);
+  // CHSAT2: CINT2's own drive 0..60% (raw 0..613) -- same window as CHSAT, so the
+  // CINT2 interval is driven independently but to the same safe ceiling.
+  edit_value_[CHSAT2 - kEditParamFirst] = rnd_int(613 + 1);
+  // CHFLD2: CINT2's own fold 0..50% (raw 0..511) -- same window as CHFLD.
+  edit_value_[CHFLD2 - kEditParamFirst] = rnd_int(511 + 1);
   // JIT: 0..15% (raw 0..153) -- light "smear", never harsh static.
   edit_value_[JIT - kEditParamFirst] = rnd_int(153 + 1);
   // RMOD: 0..25% (raw 0..256) -- gentle metallic "ring".

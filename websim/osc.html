@@ -70,8 +70,8 @@
             <div class="flex flex-col gap-2">
               <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO frequency (Hz).">
                 <span class="w-20 text-sm font-medium shrink-0">LFO F (Hz)</span>
-                <input type="range" min="0" max="30" value="1" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
-                <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">1.00</span>
+                <input type="range" min="0" max="30" value="0" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
+                <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0.00</span>
               </label>
 
               <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO depth (%)">
@@ -210,7 +210,7 @@
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
-      const EDIT_PARAM_COUNT = 37;
+      const EDIT_PARAM_COUNT = 41;
       // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
       // 0 DETU, 1 RATE (shared depth ceiling),
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
@@ -244,6 +244,7 @@
         "Breath Depth", "Breath Rate", "Breath Smooth",
         "Chord Drive", "Chord Fold",
         "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
+        "Chord 2 Drive", "Chord 2 Fold",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -269,7 +270,7 @@
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, className: "mt-auto", items: [19, 24, 20, 21, 35, 36] },
         // ---- Column 2 ----
-        { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29] },
+        { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
         { title: "FILTER",     col: 2, className: "mt-auto", items: [22, 23] },
       ];
@@ -333,7 +334,7 @@
           const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 10 || idx === 28)
+        if (idx === 10 || idx === 28 || idx === 37)
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU / CHSAT)
         if (idx === 17 || idx === 30) {
           // CINT (edit idx 17) / CINT2 (edit idx 30): 0..1900 cents (continuous interval)
@@ -819,7 +820,7 @@
       // RWAV 0, RDRV 0, RFLD 0, FCUT 921, RES 0, RWFC 0,
       // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
       // CHFLD 0 (chord fold off, = FOLD default).
-      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0];
+      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 341, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -946,6 +947,12 @@
         // triangle fold (which would alias harshly at the chord's higher
         // partials). 0 keeps the chord clean.
         set("Chord Fold", rRange(0, 511));
+        // CHSAT2: CINT2's own drive (0..300). Same window as Chord Drive
+        // (0..60% raw 0..613) so the higher interval can be driven independently.
+        set("Chord 2 Drive", rRange(0, 613));
+        // CHFLD2: CINT2's own fold (0..100%). Same window as Chord Fold
+        // (0..50% raw 0..511) — light edge on the higher interval.
+        set("Chord 2 Fold", rRange(0, 511));
         // ---- Enrichment params (formerly left at 0 — now randomized safely) ----
         // JIT: random phase jitter on A/B (0..100% -> 0..0.5% cycle peak).
         // Window 0..15% (raw 0..153) — a light "smear" of the carriers into a

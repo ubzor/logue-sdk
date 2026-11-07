@@ -34,7 +34,7 @@ struct ShapeLfoSim
   // ---- State (per-sample, owned by the Osc) ----
 
   float phase  = 0.f;  // LFO phase (0..1)
-  float freq   = 1.f;  // LFO frequency in Hz (set by the UI, 0..30 Hz)
+  float freq   = 0.f;  // LFO frequency in Hz (set by the UI, 0..30 Hz; 0 = off by default)
   float depth  = 0.f;  // LFO depth (0..1, set by the UI; 0 = LFO off)
 
   // ---- Audio path (called once per sample from Osc::process) ----

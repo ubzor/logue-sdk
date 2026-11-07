@@ -486,8 +486,9 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // first chord, but at a different interval (chord2_.phasor). Gated by
     // chord2_active (interval > 0) AND chord2_gain > 0 (CHRD > 0) to keep the
     // default path (CINT2 = 0 or CHRD = 0) free of the extra lookup. Both
-    // intervals share lvl_c (Breath stream dev_c) in the final mix, so they
-    // breathe in sync (the chord is one object, not two independent voices).
+    // intervals share the CHRD level (chord_gain) and lvl_c (Breath stream
+    // dev_c) in the final mix, so they breathe in sync. Each interval then
+    // runs its OWN folder+saturator (CINT: CHSAT/CHFLD, CINT2: CHSAT2/CHFLD2).
     const float wav_c2 = (chord2_active && chord2_gain > 0.f)
         ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord2_.phasor)
         : 0.f;
@@ -597,9 +598,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // defaults to 0 (off). A hard clip prevents digital overflow when all
     // branches peak simultaneously.
     //
-    // CHORD through its OWN folder + saturator (stateless — same functions
-    // as the A+B path, but driven by the chord's OWN knobs CHSAT/CHFLD, so
-    // the chord's drive/fold are independent of the A+B SATU/FOLD).
+    // Each chord interval through its OWN folder + saturator (stateless — same
+    // functions as the A+B path, but driven by the interval's OWN knobs: CINT
+    // uses CHSAT/CHFLD, CINT2 uses CHSAT2/CHFLD2, so both are independent of
+    // the A+B SATU/FOLD and of each other).
     // chord_gain is linear (p.chord_level, 0..1); lvl_c is the per-sample
     // LFO level modulation. ASYM is SHARED (p.asym, same as A+B) per design.
     //
@@ -611,16 +613,32 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     float chord_fold_clamped = p.chord_fold;
     if (chord_fold_clamped < 0.f) chord_fold_clamped = 0.f;
     else if (chord_fold_clamped > 1.f) chord_fold_clamped = 1.f;
-    // Both chord intervals (CINT + CINT2) share the CHRD level (chord_gain),
-    // the Breath stream's lvl_c (they breathe in sync), and the chord's OWN
-    // folder+saturator (CHSAT/CHFLD, ASYM shared). Summing them BEFORE the
-    // saturator means the chord's drive/fold sees the combined level (a full
-    // chord "drives" the saturator more than a single interval), which is the
-    // desired "chord = one object" behavior. At CINT2 = 0 (default off) or
-    // CHRD = 0, wav_c2 = 0 and the sum is just wav_c (regression-safe).
-    const float chord_in   = (wav_c + wav_c2) * chord_gain * lvl_c;
-    const float chord_fold = Saturator::fold(chord_in, chord_fold_clamped);
-    const float chord_sat  = Saturator::saturate(chord_fold, chord_drive_clamped, p.asym);
+    // CINT2's OWN drive/fold (CHSAT2/CHFLD2), clamped exactly like the CINT
+    // voice's. At the defaults they equal chord_drive_clamped / chord_fold_clamped,
+    // so the CINT2 branch reduces to the CINT branch's gain structure.
+    float chord2_drive_clamped = p.chord2_drive;
+    if (chord2_drive_clamped < 0.f) chord2_drive_clamped = 0.f;
+    else if (chord2_drive_clamped > kSatuMax) chord2_drive_clamped = kSatuMax;
+    float chord2_fold_clamped = p.chord2_fold;
+    if (chord2_fold_clamped < 0.f) chord2_fold_clamped = 0.f;
+    else if (chord2_fold_clamped > 1.f) chord2_fold_clamped = 1.f;
+    // The two chord intervals each run their OWN folder+saturator pass now:
+    // CINT through (CHSAT/CHFLD) and CINT2 through (CHSAT2/CHFLD2). They still
+    // share the CHRD level (chord_gain) and the Breath stream's lvl_c (so they
+    // breathe in sync — the chord is one object in level). ASYM is shared with
+    // everything. Summing AFTER the saturator means each interval is driven at
+    // its OWN level, so the higher interval (CINT2) can be softened/filtered
+    // independently of the lower one. At CINT2 = 0 (default off) or CHRD = 0,
+    // wav_c2 = 0 and the CINT2 branch is 0 (regression-safe).
+    const float c1 = Saturator::saturate(
+        Saturator::fold(wav_c * chord_gain * lvl_c, chord_fold_clamped),
+        chord_drive_clamped, p.asym);
+    const float c2 = (chord2_gain > 0.f)
+        ? Saturator::saturate(
+              Saturator::fold(wav_c2 * chord_gain * lvl_c, chord2_fold_clamped),
+              chord2_drive_clamped, p.asym)
+        : 0.f;
+    const float chord_sat = c1 + c2;
     // ---- RMOD: A*B ring-mod DERIVED voice (NOT in A+B, but ducks with it) ----
     // (wav_a * wav_b) * ring_mix is a spectral "difference" (the two
     // wavetables' partials shifted by +/- each other's frequencies) — it

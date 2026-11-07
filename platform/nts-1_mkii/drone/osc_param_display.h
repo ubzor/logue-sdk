@@ -38,7 +38,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "FCUT", "RESO", "RWFC",
       "RVLL", "RVLS", "RVLS",
       "SATC", "FLDC",
-      "INT2", "JIT", "RMOD", "FM1", "FM2", "RFMA", "RFMB"};
+      "INT2", "JIT", "RMOD", "FM1", "FM2", "RFMA", "RFMB",
+      "SATC2", "FLDC2"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -151,8 +152,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     v = (int)((raw * 200) / kRawMax) - 100;
   else if (k == DETUNE)
     v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
-  else if (k == SATU || k == CHSAT)
-    v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (CHSAT = chord's own drive)
+  else if (k == SATU || k == CHSAT || k == CHSAT2)
+    v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (SATU / CHSAT / CHSAT2 = per-voice drive)
   else
     v = (int)((raw * 100) / kRawMax);
 

@@ -183,14 +183,24 @@ public:
     // on top of the static FM index. RFM=0 -> pure static FM (no wandering).
     RFM_A,          // random-walk depth on FM A index (0..100%, RATE-gated)
     RFM_B,          // random-walk depth on FM B index (0..100%, RATE-gated)
+    // ---- CINT2's OWN drive/fold (CHSAT2 / CHFLD2) --------------------------
+    // Appended at the END (after RFM_B) so the existing edit indices
+    // (DETUNE..RFM_B = 0..38) are not renumbered. The CINT2 interval gets its
+    // OWN folder+saturator pass, independent of the CINT voice's CHSAT/CHFLD
+    // and the A+B SATU/FOLD (see the CINT2 branch in osc_mix.h). This lets the
+    // higher interval be softened/filtered separately. Defaults MATCH
+    // CHSAT/CHFLD (drive = SATU default, fold = FOLD default) so the stock
+    // sound is unchanged. ASYM is shared.
+    CHSAT2,         // CINT2's own saturator drive (0..3.0, default = CHSAT default)
+    CHFLD2,         // CINT2's own wavefolder depth (0..1, default = CHFLD default = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..RFM_B).
-  static constexpr uint8_t kEditParamCount = 39; // DETUNE..RFM_B
-  // The first editable enum value. The UI (header.c PARAM slot, 0..38) expects
-  // this order (select_ index -> parameter), 39 parameters total:
+  // Number of editable DSP parameters (DETUNE..CHFLD2).
+  static constexpr uint8_t kEditParamCount = 41; // DETUNE..CHFLD2
+  // The first editable enum value. The UI (header.c PARAM slot, 0..40) expects
+  // this order (select_ index -> parameter), 41 parameters total:
   //   0 DET (DETUNE)    1 RATE (RATE_AMT, shared depth ceiling)
   //   2 SPD1            3 SMT1            (Tone stream period / smooth)
   //   4 SPD2            5 SMT2            (Timbre stream period / smooth)
@@ -211,8 +221,9 @@ public:
   //   34 FM2 (FM_B: STATIC phase-FM on B by A)
   //   35 RFMA (RFM_A: random-walk depth on FM A, RATE-gated)
   //   36 RFMB (RFM_B: random-walk depth on FM B, RATE-gated)
+  //   37 CHSAT2 (CINT2's own saturator drive)  38 CHFLD2 (CINT2's own fold depth)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 39 = (RFM_B - DETUNE + 1); select_ 0..38 -> DETUNE..RFM_B.
+  // kEditParamCount = 41 = (CHFLD2 - DETUNE + 1); select_ 0..40 -> DETUNE..CHFLD2.
   static constexpr uint8_t kEditParamFirst = DETUNE;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
@@ -224,7 +235,7 @@ public:
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
   // RW_FLD 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0};
 
   // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
   // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
