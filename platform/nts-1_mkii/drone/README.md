@@ -84,6 +84,24 @@ deliberately does **not** render an Rnd control (the *Random* button already
 does the same re-roll); `Module.rndTrigger()` stays exported in wasm.cc for
 programmatic worklet-thread re-rolls.
 
+**The hardware Rnd slot is debounced (0.5 s).** Turning the knob in the edit
+menu sends a stream of value changes (one per detent); left raw, each would
+fire a full re-roll, audible as a continuous jump of parameters. The debounce
+(hardware-only, running on the audio clock in `process()`) turns that into:
+* the **first** change re-rolls **immediately** (next `process()` block, <3 ms);
+* every further change within the **0.5 s** window only **resets** the timer
+  (no re-roll);
+* after **0.5 s of silence** following a change that landed inside the window,
+  **one final** re-roll fires (so the last-set value is reflected), then
+  silence.
+
+Re-rolls therefore happen at most once per 0.5 s. The window is
+`Osc::kRndDebounceSamples = 24000` samples (0.5 s at the fixed 48 kHz rate).
+
+**The web simulator's *Random* button is NOT debounced.** A single click is a
+single event (not a knob-turn stream), so every click re-rolls immediately on
+the next `process()` block -- no 0.5 s window.
+
 ---
 
 ## Parameters
@@ -212,7 +230,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 |------|------|
 | header.c | Unit header: name, the 5 parameter slots (4 multiplexer + Rnd). |
 | unit.cc | Runtime entry points; maps the 4 multiplexer slots onto PARAM_SEL/PARAM_VAL (slots 2->0, 3->1). |
-| osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, pitch/glide/envelope/legato handling, note callbacks. |
+| osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, pitch/glide/envelope/legato handling, note callbacks, and the Rnd debounce (rndArm/rndTick, 0.5 s). |
 | osc_params.h | OscParamsData -- the live DSP parameter struct (raw -> float) + reset() defaults. |
 | osc_param_apply.h | apply_edit_param() -- the single raw-10-bit -> DSP-float converter (source of truth for ranges). |
 | osc_param_display.h | getParameterStrValue() -- raw -> display string. |
@@ -227,7 +245,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
 | osc_lfo_sim.h | Web-simulator-only shape-LFO synthesizer. |
 | osc_constants.h | All static tuning constants (max depths, scales, glide/envelope lengths). |
-| osc_randomize.h | randomizeAll() -- the Rnd re-roll (shared by device + web sim). |
+| osc_randomize.h | randomizeAll() -- the Rnd re-roll (shared by device + web sim, fired by the Rnd debounce). |
 | wasm.cc | Web-simulator glue (embind) for the sim/ build. |
 | Makefile / config.mk | Build: ARM unit (make) and web simulator (make wasm). |
 

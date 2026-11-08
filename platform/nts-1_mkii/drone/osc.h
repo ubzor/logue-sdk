@@ -272,18 +272,129 @@ public:
   int32_t getValue() const { return edit_value_[select_]; }
 
   // Re-roll every edit parameter to a fresh audition-friendly random preset and
-  // apply all of them to the live DSP. Used by:
-  //   * the hardware "Rnd" optional slot (unit.cc -> randomizeAll()), and
-  //   * the web simulator's "Rnd" control (rndRequest() -> process() ->
-  //     randomizeAll()), so both share the exact same random windows / LCG.
-  // Safe to call at K-rate; it only writes params_ / edit_value_ / the
-  // phasor caches and re-applies each edit param through apply_edit_param().
+  // apply all of them to the live DSP. Used by the Rnd debounce (rndTick, in
+  // osc.h) which is armed by:
+  //   * the hardware "Rnd" optional slot (unit.cc -> rndArm()), and
+  //   * the web simulator's *Random* button (rndRequest() -> rndArm()), so both
+  //     share the exact same random windows / LCG and the same 0.5 s debounce.
+  // Only ever called from the audio-worklet thread (rndTick), at block rate.
   void randomizeAll();
 
   // Randomizer primitive used by randomizeAll(): returns a uniform integer in
   // 0..count-1 from one osc_white() sample (integer math, no float/libm --
   // see osc_randomize.h for the derivation).
   int32_t rnd_int(uint32_t count) const;
+
+  // ---- Rnd re-roll (hardware slot 4: debounced; web-sim *Random*: immediate) ----
+  // The hardware Rnd slot and the web simulator's *Random* button both re-roll
+  // every edit parameter. They differ in how they are driven:
+  //   * The HARDWARE Rnd slot (edit menu) is a knob: a turn sends a stream of
+  //     unit_set_param_value() calls (one per detent). Left raw, each would
+  //     fire a full randomizeAll() -- audible as a continuous "jump" of
+  //     parameters. The 0.5 s DEBOUNCE (rndArm(true)) turns that into:
+  //       - the FIRST change re-rolls IMMEDIATELY (next process() block,
+  //         <1 block ~2.9 ms), and
+  //       - every further change within the 0.5 s window only RESETS the
+  //         window (no re-roll); when 0.5 s of silence elapses after a change
+  //         that landed inside the window, ONE final re-roll fires (so the
+  //         last-set value is reflected), then silence.
+  //     Re-rolls happen at most once per 0.5 s.
+  //   * The WEB SIM *Random* button is a single click (a single event, not a
+  //     knob-turn stream), so it is NOT debounced (rndArm(false)): every
+  //     click re-rolls immediately on the next process() block.
+  //
+  // There is no platform "current time" API (unit_runtime_osc_context_t only
+  // carries shape_lfo / pitch), so the timer runs on the audio clock:
+  // process() advances rnd_now_ by `frames` each block (getSampleRate() is a
+  // fixed 48000 Hz) and rndTick() checks the deadline. The hardware slot is
+  // armed from the K-rate thread (rndArm(true)); the simulator's button is
+  // armed from the UI thread (rndRequest() -> rndArm(false)). Both write only
+  // 32-bit / 1-byte fields, which are atomic on both the Cortex-M7 and x86-64,
+  // so no locks are needed. Available in BOTH builds (the hardware Rnd slot
+  // uses it; the web sim's button uses it too, with debounced=false).
+  //
+  //   rnd_now_            current audio-clock sample position (audio thread
+  //                       writes it each block; K-rate reads it to arm).
+  //   rnd_cooldown_until_ sample time until which a NEW immediate re-roll is
+  //                       blocked (hardware debounce only). Each arm extends
+  //                       it to now + kRndDebounceSamples.
+  //   rnd_fire_           a change that must re-roll on the next block (the
+  //                       "immediate" first change, or any sim click).
+  //                       Consumed by rndTick().
+  //   rnd_armed_          a change landed inside the cooldown window (hardware
+  //                       only); re-roll once when the window elapses (the
+  //                       "final" re-roll).
+  volatile uint32_t rnd_now_ = 0;
+  volatile uint32_t rnd_cooldown_until_ = 0;
+  volatile uint8_t rnd_fire_ = 0;   // 0/1: immediate re-roll pending
+  volatile uint8_t rnd_armed_ = 0;  // 0/1: deferred (final) re-roll pending
+
+  // Rnd debounce window in samples: 0.5 s at the fixed 48 kHz rate
+  // (24000 / 48000 = 0.5 s). Used by the hardware Rnd slot only.
+  static constexpr uint32_t kRndDebounceSamples = 24000U;
+
+  // Arm the Rnd re-roll from the K-rate thread (hardware slot 4) or the UI
+  // thread (web sim *Random* button).
+  //
+  //   debounced == true  (hardware slot 4):
+  //     Called on EVERY Rnd value change (the edit-menu knob sends one per
+  //     detent). The first change re-rolls IMMEDIATELY (rnd_fire_ -- consumed
+  //     on the next process() block) and starts the 0.5 s window; every
+  //     further change inside the window only marks rnd_armed_ (one final
+  //     re-roll when the window elapses) and EXTENDS the window to
+  //     (now + kRndDebounceSamples) so a continued knob turn keeps pushing the
+  //     deadline back -- the "reset to 0.5 s".
+  //
+  //   debounced == false (web sim *Random* button):
+  //     A single click is a single event (not a knob-turn stream), so there is
+  //     nothing to debounce. Just set rnd_fire_ -> immediate re-roll on the
+  //     next block, no window, no deferred final re-roll. Every click fires.
+  //
+  // rnd_now_ is read here (K-rate) and written by the audio thread; the read is
+  // at most one block (~2.9 ms) stale, negligible against the 0.5 s window.
+  void rndArm(bool debounced = true)
+  {
+    if (!debounced)
+    {
+      // Sim button: immediate re-roll on every click, no debounce.
+      rnd_fire_ = 1;
+      return;
+    }
+    const uint32_t now = rnd_now_;
+    const uint32_t until = now + kRndDebounceSamples;
+    if (now >= rnd_cooldown_until_)
+    {
+      // Outside any window: this is a fresh change -> immediate re-roll.
+      rnd_fire_ = 1;
+    }
+    else
+    {
+      // Inside the window: a change happened -> one final re-roll on expiry.
+      rnd_armed_ = 1;
+    }
+    // Extend the window (monotonic; each change resets the 0.5 s countdown).
+    rnd_cooldown_until_ = until;
+  }
+
+  // Audio-thread tick, called once per process() block with the block's frame
+  // count. Advances the audio clock, then consumes pending re-rolls:
+  //   * rnd_fire_ (immediate, from a fresh change) always fires.
+  //   * rnd_armed_ (a change inside the window) fires once the window elapses.
+  void rndTick(uint32_t frames)
+  {
+    rnd_now_ += frames;
+    const bool fire = rnd_fire_;
+    if (fire)
+      rnd_fire_ = 0;
+    bool do_final = false;
+    if (rnd_armed_ && rnd_now_ >= rnd_cooldown_until_)
+    {
+      rnd_armed_ = 0;
+      do_final = true;
+    }
+    if (fire || do_final)
+      randomizeAll();
+  }
 
 #ifdef __EMSCRIPTEN__
   // ---- Direct edit-parameter channel (web simulator only) -------------------
@@ -310,13 +421,6 @@ public:
   // the volatile slot is absent (zero size) and process() never touches it.
   volatile uint32_t sim_edit_request_;
 
-  // One-shot RANDOMIZE request from the main thread (UI). Set by rndRequest();
-  // consumed (and cleared) by process() on the next block, which calls
-  // randomizeAll(). This is the worklet-thread mirror of the hardware Rnd
-  // slot, so the simulator's "Rnd" control re-rolls the SAME random preset
-  // (same osc_white() LCG / windows) as the device would.
-  volatile uint32_t rnd_request_;
-
   // Write an edit-parameter request from the main thread (UI). Index is
   // 0..(kEditParamCount - 1), raw is 0..1023. Safe to call from any
   // thread; the audio worklet thread picks it up on the next block.
@@ -332,12 +436,12 @@ public:
     sim_edit_request_ = packed;
   }
 
-  // Fire a one-shot RANDOMIZE from the main thread (UI). Idempotent: setting
-  // the flag repeatedly before the worklet consumes it still fires exactly
-  // once on the next process() block (see rnd_request_).
+  // Fire the *Random* button from the main thread (UI). A single click is a
+  // single event (no knob-turn stream), so it is NOT debounced: every click
+  // re-rolls immediately on the next process() block.
   void rndRequest()
   {
-    rnd_request_ = 1;
+    rndArm(false);
   }
 #endif
 
@@ -464,12 +568,17 @@ public:
     glide_from_ = 0.f;
     glide_to_ = 0.f;
     eg_.reset();
+    // Reset the Rnd debounce state (both builds): no pending re-rolls, clock at
+    // zero. (The debounce fields live outside the EMSCRIPTEN block so the
+    // hardware build's Rnd slot shares them.)
+    rnd_now_ = 0;
+    rnd_cooldown_until_ = 0;
+    rnd_fire_ = 0;
+    rnd_armed_ = 0;
 #ifdef __EMSCRIPTEN__
     // Clear any pending direct edit-parameter request (the UI may have
     // already sent one before init ran on the worklet thread).
     sim_edit_request_ = 0;
-    // Clear any pending one-shot randomize request too.
-    rnd_request_ = 0;
 #endif
     // First-order relaxation coefficients (per sample) for the exponential
     // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in

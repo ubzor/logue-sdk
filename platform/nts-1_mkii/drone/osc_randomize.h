@@ -11,10 +11,15 @@
  *
  *  It is the ONE source of truth for randomization, shared by:
  *    * the hardware "Rnd" optional slot (unit.cc: unit_set_param_value(id=4)
- *      -> Osc::randomizeAll(), K-rate, fires once per value change), and
- *    * the web simulator's "Rnd" control (wasm.cc rndRequest() -> process() ->
- *      Osc::randomizeAll() on the audio-worklet thread).
- *  Both therefore produce bit-identical random windows (and the same
+ *      -> Osc::rndArm(true), debounced 0.5 s), and
+ *    * the web simulator's *Random* button (wasm.cc rndRequest() ->
+ *      Osc::rndArm(false), NOT debounced -- every click fires).
+ *  Both arms feed the shared Rnd re-roll path (osc.h: rndArm / rndTick), which
+ *  fires randomizeAll() on the audio thread. The hardware slot is debounced
+ *  (first change immediate, further changes within 0.5 s only reset the
+ *  timer, one final re-roll after 0.5 s of silence); the web sim button is
+ *  not (every click re-rolls immediately). Both therefore produce
+ *  bit-identical random windows (and the same
  *  osc_rand() Park-Miller-Carta source, see rnd_int below), so the simulator's
  *  "Rnd" and the device's "Rnd" re-roll the same distribution.
  *

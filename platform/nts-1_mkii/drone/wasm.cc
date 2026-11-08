@@ -440,10 +440,10 @@ extern "C" void setEditParam(int idx, int raw)
   processor.setParameter(1, raw);                       // PARAM_VAL
 }
 
-// Fire a one-shot RANDOMIZE on the audio-worklet thread (mirrors the hardware's
-// "Rnd" slot). Sets Osc::rnd_request_; the next process() block consumes it and
-// calls randomizeAll() -- so the simulator's "Rnd" control re-rolls the SAME
-// random preset (same osc_white() LCG / windows) the device would.
+// Fire the *Random* button on the audio-worklet thread (mirrors the hardware's
+// "Rnd" slot, but NOT debounced -- a single click is a single event). Arms
+// Osc::rndRequest() -> rndArm(false): every click re-rolls immediately on the
+// next process() block. Same random windows (osc_white() LCG) as the device.
 extern "C" void rndTrigger()
 {
   processor.rndRequest();

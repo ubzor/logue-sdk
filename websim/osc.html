@@ -1033,8 +1033,9 @@
       // ---- Rnd: DEVICE-ONLY parameter — intentionally NOT rendered in the sim
       // ----
       // On the device, "Rnd" is an OPTIONAL PARAMETER SLOT (0..15) in header.c:
-      // changing it to ANY value makes the processor re-roll every edit
-      // parameter (Osc::randomizeAll on the DSP thread, via rnd_request_).
+      // changing it to ANY value arms the Rnd debounce (Osc::rndArm(true) on
+      // the DSP thread), which re-rolls every edit parameter (randomizeAll) --
+      // first change immediately, then at most once per 0.5 s.
       // The web simulator deliberately does NOT expose a control for it:
       //   - the "Random" button above already does the same re-roll, but on
       //     the UI thread through applyPresetRaw(randomRaw());

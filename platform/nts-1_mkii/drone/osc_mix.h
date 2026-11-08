@@ -28,6 +28,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 {
   (void)in; // drone generator does not use the audio input
 
+  // ---- Rnd debounce tick (audio clock) --------------------------------------
+  // Advance the audio clock and consume any pending Rnd re-roll (immediate or
+  // the final one after a 0.5 s silence window). Runs in BOTH builds: the
+  // hardware Rnd slot (unit.cc) and the web simulator's *Random* button both
+  // arm the debounce (rndArm / rndRequest), and this is the single place the
+  // re-roll actually fires. See the Rnd debounce comment block in osc.h.
+  rndTick(frames);
+
   // ---- Pitch glide (portamento) ---------------------------------------------
   // If a note change is in flight, advance the base phase increment LINEARLY
   // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
@@ -93,18 +101,6 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         apply_edit_param(kEditParamFirst + idx, raw);
       }
       sim_edit_request_ = 0;
-    }
-  }
-
-  // Consume any pending one-shot RANDOMIZE request from the UI thread (see
-  // rndRequest). Calls randomizeAll() exactly once per block, then clears the
-  // flag. This is the worklet-thread mirror of the hardware Rnd slot, so the
-  // simulator's "Rnd" re-rolls the same random preset as the device.
-  {
-    if (rnd_request_)
-    {
-      rnd_request_ = 0;
-      randomizeAll();
     }
   }
 #endif

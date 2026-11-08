@@ -99,13 +99,14 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
   cached_values[id] = value;
 
   // Slot 4 (Rnd) is a one-shot RANDOMIZE TRIGGER, not a DSP parameter. Any
-  // value 0..15 makes the processor re-roll every edit parameter to a fresh
-  // audition-friendly random preset (the same windows the web simulator's
-  // "Random" button uses). The value itself carries no sound, so there is no
-  // per-knob DSP state to set -- just fire the side-effect and stop.
+  // value 0..15 arms the Rnd debounce (rndArm): the first change re-rolls
+  // every edit parameter immediately (next process() block), and further
+  // changes within the 0.5 s window only reset the timer -- one final
+  // re-roll fires after 0.5 s of silence. The value itself carries no sound,
+  // so there is no per-knob DSP state to set -- just arm the debounce and stop.
   if (id == 4U)
   {
-    s_osc_instance.randomizeAll();
+    s_osc_instance.rndArm();
     return;
   }
 
