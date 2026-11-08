@@ -109,16 +109,6 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
     return;
   }
 
-  // Slot 5 (Legato) is a behavior switch, not an edit parameter: 0..511 = OFF
-  // (key release starts the 2 s release), 512..1023 = ON (legato: release does
-  // not stop the sound, same-key re-press fades it out, different-key re-targets
-  // with a 2 s pitch glide). Forward to the DSP and stop.
-  if (id == 5U)
-  {
-    s_osc_instance.setLegato(value);
-    return;
-  }
-
   // Slots 0/1 are the fixed A/B knobs (PARAM selector / VALUE). Slots 2/3 are
   // their full optional (edit-menu) duplicates (see header.c) — they must
   // read/write the exact same underlying state. Remap the header slot index
@@ -135,10 +125,6 @@ __unit_callback int32_t unit_get_param_value(uint8_t id)
   // last raw value written via unit_set_param_value for that slot.
   if (id == 1U || id == 3U)
     return s_osc_instance.getValue();
-  // Slot 5 (Legato) reports the DSP's actual switch state (0 or 1023) so the
-  // UI's on/off toggle always reflects what the processor is doing.
-  if (id == 5U)
-    return s_osc_instance.getLegato();
   // Slot 4 (Rnd) is a trigger, not DSP state: report the cached slot value
   // (0 = never / 1..16 = last fired value).
   // just return the cached value
@@ -152,10 +138,6 @@ __unit_callback const char *unit_get_param_str_value(uint8_t id, int32_t value)
   // natively (1..16), so we return "" here (the minimal-cost path -- no custom
   // formatter needed).
   if (id == 4U)
-    return "";
-  // Slot 5 (Legato) is type_onoff: the platform renders the toggle natively,
-  // so no custom string is needed (same minimal-cost path as Rnd).
-  if (id == 5U)
     return "";
   return s_osc_instance.getParameterStrValue(id, value);
 }

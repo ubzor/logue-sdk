@@ -71,14 +71,11 @@ Key facts about the path:
 
 The unit runs its own **A-H-R** envelope (the platform EG is set to *open*):
 2 s exponential attack, hold at full level while the note is active, 2 s
-exponential release. Key behaviour depends on the Legato switch:
-
-* **Legato OFF** (default): key release starts the 2 s release. Pressing a
-  *different* key re-targets the pitch (1 s glide, amplitude stays continuous);
-  re-pressing the *same* key re-triggers a fresh attack.
-* **Legato ON**: key release does **not** stop the sound. Re-pressing the
-  *same* key fades it out (toggle-off); pressing a *different* key retargets
-  the pitch and keeps playing.
+exponential release. **Legato is always on** (there is no Legato switch):
+key release does **not** stop the sound. Re-pressing the *same* key fades it
+out (toggle-off); pressing a *different* key retargets the pitch (1 s glide,
+amplitude stays continuous) and keeps playing. The drone is stopped by the
+toggle-off re-press or by All-Notes-Off.
 
 The **Rnd** slot is **device-only** (edit-menu): it re-rolls every edit
 parameter to a fresh audition-friendly random preset -- the same windows the
@@ -101,7 +98,6 @@ two physical knobs:
   cached per parameter, so re-selecting one restores its last value.
 * **Slots 2/3 PARAM/VALUE** -- full duplicates of 0/1 (edit-menu visibility).
 * **Slot 4 Rnd** (edit-menu) -- randomize trigger (see above).
-* **Slot 5 Legato** (edit-menu) -- key-release behaviour switch (on/off).
 
 All 48 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
@@ -214,7 +210,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 
 | File | Role |
 |------|------|
-| header.c | Unit header: name, the 6 parameter slots (4 multiplexer + Rnd + Legato). |
+| header.c | Unit header: name, the 5 parameter slots (4 multiplexer + Rnd). |
 | unit.cc | Runtime entry points; maps the 4 multiplexer slots onto PARAM_SEL/PARAM_VAL (slots 2->0, 3->1). |
 | osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, pitch/glide/envelope/legato handling, note callbacks. |
 | osc_params.h | OscParamsData -- the live DSP parameter struct (raw -> float) + reset() defaults. |

@@ -99,17 +99,6 @@
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="1" aria-label="+1" title="Up one octave (A3..D5)">
               <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="2" aria-label="+2" title="Up two octaves (A4..D6)">
             </div>
-            <!-- Legato switch (mirrors the device's "Legato" optional slot):
-                 OFF  - key release starts the 2 s release (original behavior).
-                 ON   - key release does NOT stop the sound; pressing the SAME
-                        key again fades it out; a DIFFERENT key re-targets the
-                        note with a 2 s pitch glide and keeps playing.
-                 Delivered to the DSP through Module.setLegato (raw 0..1023,
-                 0..511 = off, 512..1023 = on). -->
-            <label class="flex items-center gap-2 ml-2" title="Legato: releasing a key no longer stops the drone. Press the same key to fade it out, or a different key to glide to it (2 s).">
-              <span class="text-sm font-medium">Legato</span>
-              <input type="checkbox" id="LegatoSwitch" class="switch switch-primary">
-            </label>
           </div>
 
           <!-- Keyboard (moved here from the old Oscillator card). No margin-top wrapper:
@@ -631,18 +620,6 @@
           setOctaveShift(octaveShift + 1, "hotkey");
         }
       });
-
-      // Legato switch: OFF = original behavior (key release -> 2 s release);
-      // ON = legato (release keeps sounding, same-key re-press fades out,
-      // different-key re-targets with a 2 s pitch glide). Delivered to the DSP
-      // through Module.setLegato with the device's raw mapping (0..511 off,
-      // 512..1023 on -> we write 0 / 1023).
-      const legatoSwitch = document.getElementById("LegatoSwitch");
-      if (legatoSwitch) {
-        legatoSwitch.addEventListener("change", () => {
-          Module.setLegato(legatoSwitch.checked ? 1023 : 0);
-        });
-      }
 
       // scope
       let canvasWave = document.getElementById("TimeDomain");

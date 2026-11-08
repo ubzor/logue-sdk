@@ -458,7 +458,6 @@ public:
     fm_smooth_b_ = 0.f;
     // A-H-R envelope: start silent, no note active.
     note_on_ = false;
-    legato_ = false;
     last_note_ = 0;
     glide_active_ = false;
     glide_elapsed_ = 0;
@@ -529,109 +528,62 @@ public:
     fm_smooth_b_ = 0.f;
     // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
     note_on_ = false;
-    legato_ = false; // reset() is a full state reset: legato returns to OFF
     last_note_ = 0;
     glide_active_ = false;
     eg_.reset();
   }
   // ---- note handling ---------------------------------------------------------
 
-  // Key press.
+  // Key press. Legato is ALWAYS ON: the drone is held until explicitly stopped.
   //  * If a note is ALREADY sounding: this only re-targets the pitch. The
   //    envelope is deliberately NOT re-triggered, so the amplitude stays
   //    continuous (no drop to zero / re-attack) while setPitch() glides the
-  //    whole sound from the old note to this one over 2 s. This is true in
-  //    BOTH modes: a legato note is always a new note, and in legato-off a
-  //    new key also glides (and keeps sounding until it is released).
+  //    whole sound from the old note to this one over 2 s.
   //  * If nothing is sounding: start the A-H-R attack (2 s ramp-up).
-  //  * LEGATO ON  and the SAME key is pressed while sounding -> TOGGLE-OFF:
-  //    the sound fades out to zero (re-triggering the same key stops it).
-  //  * LEGATO OFF and the SAME key is pressed while sounding -> re-trigger:
-  //    restart the attack (a re-press of the held key is a new note-on).
+  //  * The SAME key is pressed while sounding -> TOGGLE-OFF: the sound fades
+  //    out to zero (re-triggering the same key stops it).
   void noteOn(uint8_t note, uint8_t velo) override final
   {
     (void)velo;
-    if (legato_)
+    // Legato: the drone is held until explicitly stopped.
+    //  * same key as the one currently sounding -> TOGGLE-OFF (fade out).
+    //  * different key (or nothing sounding)    -> the new note becomes the
+    //    sounding one: start the attack if we were silent, otherwise only
+    //    retarget the pitch (setPitch glides, amplitude stays continuous).
+    if (note_on_ && note == last_note_)
     {
-      // LEGATO: the drone is held until explicitly stopped.
-      //  * same key as the one currently sounding -> TOGGLE-OFF (fade out).
-      //  * different key (or nothing sounding)    -> the new note becomes the
-      //    sounding one: start the attack if we were silent, otherwise only
-      //    retarget the pitch (setPitch glides, amplitude stays continuous).
-      if (note_on_ && note == last_note_)
-      {
-        note_on_ = false;
-        last_note_ = 0;
-        eg_.noteOff();
-        return;
-      }
-      const bool was_sounding = note_on_;
-      last_note_ = note;
-      note_on_ = true;
-      if (!was_sounding)
-        eg_.noteOn(); // genuine new drone: 2 s attack
-      // else: keep the envelope (continuous amplitude); only the pitch glides.
+      note_on_ = false;
+      last_note_ = 0;
+      eg_.noteOff();
       return;
     }
-    // LEGATO OFF: a different sounding key re-targets the pitch only (glide,
-    // continuous amplitude); the same key re-triggers a fresh attack.
-    if (note_on_)
-    {
-      if (note == last_note_)
-      {
-        eg_.noteOn(); // re-trigger: re-press of the held key
-      }
-      else
-      {
-        last_note_ = note; // glide to the new note, amplitude unchanged
-      }
-      return;
-    }
-    // Was silent: genuine new note-on -> start the attack.
+    const bool was_sounding = note_on_;
     last_note_ = note;
     note_on_ = true;
-    eg_.noteOn();
+    if (!was_sounding)
+      eg_.noteOn(); // genuine new drone: 2 s attack
+    // else: keep the envelope (continuous amplitude); only the pitch glides.
   }
 
-  // Key release.
-  //  LEGATO ON  -> NO-OP: releasing a key does not stop the drone. It also
-  //                must NOT clear the "sounding note" tracking, otherwise a
-  //                click (which is a noteOn immediately followed by a
-  //                noteOff) would clobber last_note_ and the re-press
-  //                toggle-off in noteOn could never match. Only an explicit
-  //                re-press of the sounding note (noteOn) or All-Notes-Off
-  //                stops a legato drone.
-  //  LEGATO OFF -> note inactive: begin the 2 s exponential release (the
-  //                sound fades out on its own).
+  // Key release. Legato is ALWAYS ON, so releasing a key is a NO-OP: it does
+  // not stop the drone. It also must NOT clear the "sounding note" tracking,
+  // otherwise a click (which is a noteOn immediately followed by a noteOff)
+  // would clobber last_note_ and the re-press toggle-off in noteOn could never
+  // match. Only an explicit re-press of the sounding note (noteOn) or
+  // All-Notes-Off stops a drone.
   void noteOff(uint8_t note) override final
   {
     (void)note;
-    if (legato_)
-      return;
-    note_on_ = false;
-    last_note_ = 0;
-    eg_.noteOff();
   }
 
   // All-notes-off: note inactive, kill any in-flight envelope immediately
-  // (instant silence — no release tail). Same in legato mode (legato only
-  // suppresses per-key release, not the global stop).
+  // (instant silence — no release tail). This is the global stop: it silences
+  // the held (legato) drone too, which per-key release does not.
   void allNoteOff() override final
   {
     note_on_ = false;
     last_note_ = 0;
     eg_.allOff();
-  }
-
-  // ---- Legato mode (optional header slot "Legato", K-rate) --------------------
-  // value: raw 0..1023. 0..511 -> OFF, 512..1023 -> ON (see header.c).
-  void setLegato(int32_t value)
-  {
-    legato_ = (value >= 512);
-  }
-  int32_t getLegato() const
-  {
-    return legato_ ? 1023 : 0;
   }
 
   // audio processing callbacks
@@ -781,14 +733,10 @@ private:
   // that shapes the attack/release of the active note.
   bool note_on_ = false;
 
-  // ---- Legato mode (optional header slot "Legato") ---------------------------
-  // LEGATO OFF (default): key release starts the 2 s exponential release, like
-  // the original drone behavior.
-  // LEGATO ON: key release does NOT stop the sound (it keeps sounding
+  // Legato is ALWAYS ON: key release does NOT stop the sound (it keeps sounding
   // indefinitely); pressing the SAME key again fades it out (toggle-off);
   // pressing a DIFFERENT key retargets the note (the pitch glide below slides
   // from the old note to the new one) and it keeps playing.
-  bool legato_ = false;
   // Last key pressed (for the toggle-off test in noteOn). 0 = none.
   uint8_t last_note_ = 0;
 
