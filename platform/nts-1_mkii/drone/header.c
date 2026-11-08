@@ -21,7 +21,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
     .version = 0x0000000BU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 5,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 6,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
         // Format:
         // min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -34,8 +34,8 @@ const __unit_header unit_header_t unit_header = {
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
         // Selectable parameters (A knob value -> name -> default raw value):
-        //   0: DET  - static symmetric detune of A/B (-10..+10 c, A=+c/2, B=-c/2), default 511 (0 c)
-        //   1: RATE - shared random-walk depth ceiling (quadratic, 0..100%), default 0 (off)
+        //   0: RATE - shared random-walk depth ceiling (quadratic, 0..100%), default 0 (off)
+        //   1: DET  - static symmetric detune of A/B (-10..+10 c, A=+c/2, B=-c/2), default 511 (0 c)
         //   2: SPD1 - Tone stream period (0..100% -> 0.1 s..10 s, log), default 511
         //   3: SM1  - Tone stream time constant (0..100% -> 10 ms..1.5 s, log), default 511
         //   4: SPD2 - Timbre stream period (log), default 511
@@ -104,18 +104,31 @@ const __unit_header unit_header_t unit_header = {
         // Identical to slot 1.
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
 
-        // Slot 4 (Rnd): RANDOMIZE TRIGGER. This is NOT an edit parameter with
-        // its own DSP state -- it is a one-shot command. Changing the value to
-        // ANY of 0..15 makes the processor re-roll every edit parameter to a
-        // fresh audition-friendly random preset (the same windows the web
-        // simulator's "Random" button uses). It is type_enum so the platform
-        // renders the integer natively (1..16) with no custom display code;
-        // the value itself carries no sound, only the side-effect. Optional
-        // (edit-menu) slot, reachable via Kontrol Editor / loguecli / the web
-        // simulator (the device's two fixed knobs are the PARAM/VALUE
-        // multiplexer, so Rnd is a menu control, not a physical knob).
+        // ---- Rnd randomization multiplexer (slots 4/5) -----------------------
+        // The single old "Rnd" trigger knob is split into TWO slots: a TYPE
+        // selector (slot 4 "RndM") and a TRIGGER (slot 5 "Rnd").
+        //
+        // Slot 4 (RndM): randomization TYPE, 0..1 (type_strings so the name is
+        // shown via unit_get_param_str_value -> Osc::getParameterStrValue):
+        //   0 = "All"  - re-roll EVERY edit parameter (the old Rnd behaviour)
+        //   1 = "Part" - re-roll a RANDOM SUBSET (2..6) of parameters to fresh
+        //                audition-friendly "safe window" values, leaving the rest
+        //                (a "development" around the current sound, not a reset).
+        //   (Reserved 2+ : random-to-preset, planned -- see TODO.md.)
+        // Default 0 (All). This is a persistent setting, not a trigger.
+        {0, 1, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"RndM"}},
+
+        // Slot 5 (Rnd): randomization TRIGGER (0..15, type_enum). Like the old
+        // Rnd, this is NOT an edit parameter with DSP state -- it is a one-shot
+        // command. Changing the value to ANY of 1..15 makes the processor re-roll
+        // (per the current RndM type: All or Part) with the SAME 0.5 s debounce
+        // (first change immediate, further changes within the window reset the
+        // timer, one final re-roll after 0.5 s of silence). type_enum so the
+        // platform renders the integer natively (1..16); the value carries no
+        // sound, only the side-effect. Optional (edit-menu) slot, reachable via
+        // Kontrol Editor / loguecli / the web simulator.
         //   0 = never (default, no randomization until changed)
-        //   1..16 = fire on any change to this value.
+        //   1..15 = fire on any change to this value.
         {0, 15, 0, 0, k_unit_param_type_enum, 0, 0, 0, {"Rnd"}},
     },
 };

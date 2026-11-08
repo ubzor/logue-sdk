@@ -29,7 +29,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   //       It can be assumed that caller will have copied or used the string
   //       before the next call to getParameterStrValue.
   static const char *const names[kEditParamCount] = {
-      "DET", "RATE",
+      "RATE", "DET",
       "SPD1", "SM1", "SPD2", "SM2", "SPD3", "SM3",
       "SUB1", "SUB2", "SAT", "ASYM", "FLD", "WA1", "WA2", "WA3",
       "CHRD", "INT",
@@ -47,6 +47,15 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   {
     return (value >= 0 && value < (int)kEditParamCount) ? names[value] : "";
   }
+
+  // RndM (header slot 4, RND-тип) and Rnd (slot 5, запуск) are type_strings /
+  // type_enum; for slot 4 we return the type name ("All"/"Part") so the
+  // device / loguecli / sim show the selector; for slot 5 we return "" and
+  // let the platform render the enum value natively (1..15).
+  if (id == 4U)
+    return (value == kRndModePart) ? "Part" : "All";
+  if (id == 5U)
+    return "";
   if (!is_param_val)
     return "";
 

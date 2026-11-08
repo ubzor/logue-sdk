@@ -129,8 +129,8 @@ public:
   {
     PARAM_SEL = 0U, // knob A (header slot 0): parameter selector 0..15, shows name
     PARAM_VAL,      // knob B (header slot 1): raw value 0..1023 of PARAM_SEL, shows value
-    DETUNE,         // static symmetric detune of A/B (−10..+10 cents, A=+c/2, B=−c/2, default 0)
-    RATE_AMT,       // SHARED random-walk depth ceiling for all three streams (0..100%, default 0% = off)
+    RATE_AMT,       // SHARED random-walk depth ceiling for all three streams (0..100%, default 0% = off). FIRST editable param (select_ 0) -- it is the most-edited "chaos" lever, so it leads the multiplexer.
+    DETUNE,         // static symmetric detune of A/B (−10..+10 cents, A=+c/2, B=−c/2, default 0). select_ 1.
     // Three independent wandering streams (Tone / Timbre / Density). Each has
     // its own period (SPDx) and time constant (SMTx), so they are not
     // phase-locked. See osc_params.h for the per-stream targets each drives.
@@ -210,11 +210,11 @@ public:
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (DETUNE..DCK).
-  static constexpr uint8_t kEditParamCount = 46; // DETUNE..DCK
+  // Number of editable DSP parameters (RATE_AMT..DCK).
+  static constexpr uint8_t kEditParamCount = 46; // RATE_AMT..DCK
   // The first editable enum value. The UI (header.c PARAM slot, 0..43) expects
   // this order (select_ index -> parameter), 44 parameters total:
-  //   0 DET  (DETUNE)    1 RATE  (RATE_AMT, shared depth ceiling)
+  //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
   //   2 SPD1             3 SM1   (Tone stream period / smooth)
   //   4 SPD2             5 SM2   (Timbre stream period / smooth)
   //   6 SPD3             7 SM3   (Density stream period / smooth)
@@ -238,8 +238,9 @@ public:
   //   39 FMVT (formant vowel position)  40 FLVL (formant dry/wet)
   //   41 COMB (comb resonator)  42 FLD2 (cascaded fold)  43 DCK (self-ducking)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 46 = (DCK - DETUNE + 1); select_ 0..43 -> DETUNE..DCK.
-  static constexpr uint8_t kEditParamFirst = DETUNE;
+  // kEditParamCount = 46 = (DCK - RATE_AMT + 1); select_ 0..45 -> RATE_AMT..DCK.
+  // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
+  static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
   using Params = ::OscParamsData;
 
@@ -253,10 +254,13 @@ public:
   // Enrichment-2 defaults (indices 39..43): FORM 511 (middle vowel, but the
   // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
   // COMB 0, FOLD2 0, DCK 0 (all off, regression-safe).
-  int32_t edit_value_[kEditParamCount] = {511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+  // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
+  // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
 
-  // Currently selected parameter (0..19), i.e. edit_value_[select_] is what
-  // PARAM_VAL edits. 0 = DETUNE (default, matches header "init" of PARAM_SEL).
+  // Currently selected parameter (0..kEditParamCount-1), i.e.
+  // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
+  // leading "chaos" lever).
   uint8_t select_ = 0;
 
   // Public accessors for the web simulator (wasm.cc) to read the selector
@@ -279,6 +283,21 @@ public:
   //     share the exact same random windows / LCG and the same 0.5 s debounce.
   // Only ever called from the audio-worklet thread (rndTick), at block rate.
   void randomizeAll();
+
+  // Partial re-roll: randomize a RANDOM SUBSET (2..6) of the edit parameters to
+  // fresh values drawn from the SAME audition-friendly "safe windows" as
+  // randomizeAll(), leaving the rest untouched (a "development" rather than a
+  // full reset). Each changed parameter is guaranteed a SIGNIFICANT step: the
+  // new raw must differ from the current raw by >= kRndMinStepRaw (102, ~10%
+  // of the 10-bit range), re-drawing up to kRndRedrawMax times (see
+  // osc_randomize.h). Used when rnd_mode_ == kRndModePart (the RndM selector).
+  // Only ever called from the audio-worklet thread (rndTick), at block rate.
+  void randomizePartial();
+
+  // Draw one edit parameter's fresh raw value from its safe window (see
+  // kRndWindows in osc_randomize.h). Shared by randomizeAll() (every param) and
+  // randomizePartial() (a subset). Audio-thread only.
+  int32_t rnd_draw(uint8_t idx);
 
   // Randomizer primitive used by randomizeAll(): returns a uniform integer in
   // 0..count-1 from one osc_white() sample (integer math, no float/libm --
@@ -380,6 +399,37 @@ public:
   // count. Advances the audio clock, then consumes pending re-rolls:
   //   * rnd_fire_ (immediate, from a fresh change) always fires.
   //   * rnd_armed_ (a change inside the window) fires once the window elapses.
+  // ---- Rnd randomization TYPE (header slot 4 "RndM") ----------------------
+  // 0 = kRndModeAll  : re-roll EVERY edit parameter (the old Rnd behaviour).
+  // 1 = kRndModePart : re-roll a random SUBSET (2..6) to fresh safe values
+  //                    (a "development" around the current sound, see
+  //                    randomizePartial()). Reserved: 2+ = random-to-preset
+  //                    (planned, see TODO.md).
+  // Written from the K-rate thread (unit_set_param_value slot 4) / the UI
+  // thread (web sim); read by rndTick() on the audio thread. A 1-byte aligned
+  // store/load is atomic on Cortex-M7 and x86-64, so no lock is needed (the
+  // worst case is rndTick using a mode that is a few ms stale).
+  static constexpr uint8_t kRndModeAll  = 0U;
+  static constexpr uint8_t kRndModePart = 1U;
+  volatile uint8_t rnd_mode_ = kRndModeAll;
+
+  uint8_t getRndMode() const { return rnd_mode_; }
+  void setRndMode(uint8_t mode) { rnd_mode_ = (mode <= kRndModePart) ? mode : kRndModeAll; }
+
+  // The header slot 5 "Rnd" (0..15, enum) is the randomization TRIGGER (it
+  // fires on any value 1..15, debounced). This is only for display/getter
+  // parity; the trigger itself has no DSP state, so unit.cc reports the last
+  // raw value it was written (cached_values[5]).
+  uint8_t getRndRun() const { return rnd_run_; }
+  void setRndRun(uint8_t v) { rnd_run_ = v; }
+  volatile uint8_t rnd_run_ = 0;
+
+  // Audio-thread tick, called once per process() block with the block's frame
+  // count. Advances the audio clock, then consumes pending re-rolls:
+  //   * rnd_fire_ (immediate, from a fresh change) always fires.
+  //   * rnd_armed_ (a change inside the window) fires once the window elapses.
+  // The re-roll itself honours the current rnd_mode_ (All -> randomizeAll,
+  // Part -> randomizePartial).
   void rndTick(uint32_t frames)
   {
     rnd_now_ += frames;
@@ -393,7 +443,12 @@ public:
       do_final = true;
     }
     if (fire || do_final)
-      randomizeAll();
+    {
+      if (rnd_mode_ == kRndModePart)
+        randomizePartial();
+      else
+        randomizeAll();
+    }
   }
 
 #ifdef __EMSCRIPTEN__
@@ -492,7 +547,7 @@ public:
     switch (index)
     {
     case PARAM_SEL:
-      // Knob A: parameter selector. 0..15 -> DETUNE, RATE_AMT, RATE_SPD,
+      // Knob A: parameter selector. 0..15 -> RATE_AMT, DETUNE, RATE_SPD,
       // RATE_SMTH, SUB1, SUB2, SATU, ASYM, FOLD, WAV1, WAV2, CHORD, CHRD_INT,
       // RW_WAV, RW_DRV, RW_FLD. Mask the low nibble (& 0xF) so any in-range
       // index (0..15) maps to itself. On selection change, re-apply the
@@ -544,11 +599,11 @@ public:
     sub2_.gate = 0.f;
     w0_ = 0.f;
     lfo_ = 0.f;
-    // Parameter selector: start with DETUNE (select_ = 0) selected.
-    // Re-apply the cached default values so the DSP and the PARAM SEL /
-    // PARAM VAL display agree on startup (the header's "init" value of
-    // PARAM_VAL already matches edit_value_[0], but this keeps the two in
-    // sync if either side is edited independently later).
+    // Parameter selector: start with RATE (select_ = 0) selected (RATE leads
+    // the multiplexer). Re-apply the cached default values so the DSP and the
+    // PARAM SEL / PARAM VAL display agree on startup (the header's "init"
+    // value of PARAM_VAL already matches edit_value_[0], but this keeps the
+    // two in sync if either side is edited independently later).
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);

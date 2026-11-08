@@ -77,30 +77,39 @@ out (toggle-off); pressing a *different* key retargets the pitch (1 s glide,
 amplitude stays continuous) and keeps playing. The drone is stopped by the
 toggle-off re-press or by All-Notes-Off.
 
-The **Rnd** slot is **device-only** (edit-menu): it re-rolls every edit
-parameter to a fresh audition-friendly random preset -- the same windows the
-web simulator's *Random* button uses (see osc_randomize.h). The web simulator
-deliberately does **not** render an Rnd control (the *Random* button already
-does the same re-roll); `Module.rndTrigger()` stays exported in wasm.cc for
-programmatic worklet-thread re-rolls.
+The randomization is a **two-slot multiplexer** (edit-menu, device-only):
 
-**The hardware Rnd slot is debounced (0.5 s).** Turning the knob in the edit
-menu sends a stream of value changes (one per detent); left raw, each would
-fire a full re-roll, audible as a continuous jump of parameters. The debounce
-(hardware-only, running on the audio clock in `process()`) turns that into:
+* **Slot 4 RndM** -- the randomization **TYPE** (a persistent setting):
+  * `All`  -- re-roll **every** edit parameter to a fresh audition-friendly
+    random preset (the original Rnd behaviour).
+  * `Part` -- re-roll a **random subset (2..6)** of parameters to fresh values
+    from the same "safe windows", leaving the rest untouched -- a *development
+    around the current sound*, not a reset. Each changed parameter is
+    guaranteed a **significant step** (new raw >= `kRndMinStepRaw` = 102, ~10%
+    of the 10-bit range, from the current raw; re-drawn up to 5 times) so the
+    change is actually audible -- no "FOLD 53 -> 56" no-ops.
+  * (reserved `2+`: random-to-preset, planned -- see TODO.md.)
+* **Slot 5 Rnd** -- the **trigger** (0..15, enum): like the old Rnd, changing it
+  to any value 1..15 fires the re-roll **per the current RndM type**.
+
+**The hardware Rnd trigger (slot 5) is debounced (0.5 s).** Turning the knob in
+the edit menu sends a stream of value changes (one per detent); left raw, each
+would fire a re-roll, audible as a continuous jump. The debounce (hardware-only,
+running on the audio clock in `process()`) turns that into:
 * the **first** change re-rolls **immediately** (next `process()` block, <3 ms);
-* every further change within the **0.5 s** window only **resets** the timer
-  (no re-roll);
-* after **0.5 s of silence** following a change that landed inside the window,
-  **one final** re-roll fires (so the last-set value is reflected), then
-  silence.
+* every further change within the **0.5 s** window only **resets** the timer;
+* after **0.5 s of silence** following a change inside the window, **one final**
+  re-roll fires (so the last-set value is reflected), then silence.
 
 Re-rolls therefore happen at most once per 0.5 s. The window is
 `Osc::kRndDebounceSamples = 24000` samples (0.5 s at the fixed 48 kHz rate).
 
-**The web simulator's *Random* button is NOT debounced.** A single click is a
-single event (not a knob-turn stream), so every click re-rolls immediately on
-the next `process()` block -- no 0.5 s window.
+**The web simulator** has a *Random* block mirroring this: a **Type** selector
+(All/Part, `Module.setRndMode`), a **Trigger** slider (0..15, `Module.setRndRun`)
+and a **Fire** button (`Module.rndTrigger()`), which re-rolls on the audio
+worklet thread per the selected type (NOT debounced -- a single click fires
+immediately). The separate **Random** preset button is a UI-thread convenience
+that does a full All re-roll via `applyPresetRaw(randomRaw())`.
 
 ---
 
@@ -109,21 +118,22 @@ the next `process()` block -- no 0.5 s window.
 The unit exposes its **48** DSP knobs through a PARAM/VALUE multiplexer on the
 two physical knobs:
 
-* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..47; the display
+* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..43; the display
   shows the name of the selected parameter.
 * **Slot 1 VALUE** (fixed knob B) -- raw 10-bit value (0..1023) of the selected
   parameter. Each parameter maps 0..1023 onto its own range; the raw value is
   cached per parameter, so re-selecting one restores its last value.
 * **Slots 2/3 PARAM/VALUE** -- full duplicates of 0/1 (edit-menu visibility).
-* **Slot 4 Rnd** (edit-menu) -- randomize trigger (see above).
+* **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part), see above.
+* **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 48 editable DSP parameters (select_ index -> name), with range, factory
+All 44 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
 |---|------|---------|-------|---------|--------|
-| 0 | DET | +/-c | -10..+10 c | 0 c | Static symmetric detune: A = +c/2, B = -c/2. |
-| 1 | RATE | % | 0..100% (quadratic) | 0% (off) | Shared ceiling for every random-walk stream. 0 = all wandering off. |
+| 0 | RATE | % | 0..100% (quadratic) | 0% (off) | Shared ceiling for every random-walk stream. 0 = all wandering off. (First in the multiplexer -- the most-edited "chaos" lever.) |
+| 1 | DET | +/-c | -10..+10 c | 0 c | Static symmetric detune: A = +c/2, B = -c/2. |
 | 2 | SPD1 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Tone** stream period (mean target-update gap). |
 | 3 | SM1 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Tone** stream time constant. |
 | 4 | SPD2 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Timbre** stream period. |
@@ -228,8 +238,8 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 
 | File | Role |
 |------|------|
-| header.c | Unit header: name, the 5 parameter slots (4 multiplexer + Rnd). |
-| unit.cc | Runtime entry points; maps the 4 multiplexer slots onto PARAM_SEL/PARAM_VAL (slots 2->0, 3->1). |
+| header.c | Unit header: name, the 6 parameter slots (4 multiplexer + RndM type + Rnd trigger). |
+| unit.cc | Runtime entry points; maps the 4 multiplexer slots onto PARAM_SEL/PARAM_VAL (slots 2->0, 3->1); slot 4 -> setRndMode, slot 5 -> rndArm (trigger). |
 | osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, pitch/glide/envelope/legato handling, note callbacks, and the Rnd debounce (rndArm/rndTick, 0.5 s). |
 | osc_params.h | OscParamsData -- the live DSP parameter struct (raw -> float) + reset() defaults. |
 | osc_param_apply.h | apply_edit_param() -- the single raw-10-bit -> DSP-float converter (source of truth for ranges). |
@@ -245,7 +255,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
 | osc_lfo_sim.h | Web-simulator-only shape-LFO synthesizer. |
 | osc_constants.h | All static tuning constants (max depths, scales, glide/envelope lengths). |
-| osc_randomize.h | randomizeAll() -- the Rnd re-roll (shared by device + web sim, fired by the Rnd debounce). |
+| osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind) for the sim/ build. |
 | Makefile / config.mk | Build: ARM unit (make) and web simulator (make wasm). |
 

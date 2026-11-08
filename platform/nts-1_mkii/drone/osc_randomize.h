@@ -6,24 +6,27 @@
 /*
  *  File: osc_randomize.h
  *
- *  Out-of-line definition of Osc::randomizeAll() -- the single "re-roll every
- *  edit parameter to a fresh audition-friendly random preset" routine.
+ *  Out-of-line definitions of Osc::randomizeAll() and Osc::randomizePartial()
+ *  -- the re-roll routines. randomizeAll() re-rolls EVERY edit parameter to a
+ *  fresh audition-friendly random preset; randomizePartial() re-rolls a random
+ *  SUBSET (2..6) to fresh safe-window values (a "development", not a reset),
+ *  each with a guaranteed significant step (>= kRndMinStepRaw from current).
  *
- *  It is the ONE source of truth for randomization, shared by:
- *    * the hardware "Rnd" optional slot (unit.cc: unit_set_param_value(id=4)
+ *  Both are the ONE source of truth for randomization, shared by:
+ *    * the hardware "Rnd" trigger slot (unit.cc: unit_set_param_value(id=5)
  *      -> Osc::rndArm(true), debounced 0.5 s), and
- *    * the web simulator's *Random* button (wasm.cc rndRequest() ->
+ *    * the web simulator's Fire button (wasm.cc rndRequest() ->
  *      Osc::rndArm(false), NOT debounced -- every click fires).
- *  Both arms feed the shared Rnd re-roll path (osc.h: rndArm / rndTick), which
- *  fires randomizeAll() on the audio thread. The hardware slot is debounced
- *  (first change immediate, further changes within 0.5 s only reset the
- *  timer, one final re-roll after 0.5 s of silence); the web sim button is
- *  not (every click re-rolls immediately). Both therefore produce
- *  bit-identical random windows (and the same
- *  osc_rand() Park-Miller-Carta source, see rnd_int below), so the simulator's
- *  "Rnd" and the device's "Rnd" re-roll the same distribution.
+ *  The TYPE (All / Part) is set by the "RndM" slot (unit.cc id=4 ->
+ *  Osc::setRndMode); rndTick() dispatches to randomizeAll or randomizePartial
+ *  based on rnd_mode_. The hardware slot is debounced (first change immediate,
+ *  further changes within 0.5 s only reset the timer, one final re-roll after
+ *  0.5 s of silence); the web sim Fire button is not (every click re-rolls
+ *  immediately). Both therefore produce bit-identical random windows (and the
+ *  same osc_rand() Park-Miller-Carta source, see rnd_int below), so the
+ *  simulator's and the device's re-rolls use the same distribution.
  *
- *  The raw windows below are the exact port of the web simulator's randomRaw()
+ *  The safe windows are the exact port of the web simulator's randomRaw()
  *  (websim/osc.html): "safe" (walk / timbre) parameters get the full 0..1023
  *  range; "critical" parameters are constrained to audition-friendly windows
  *  so the result always plays cleanly (no clipping / mud / dissonance /
@@ -31,7 +34,7 @@
  *  discrete consonant set the sim uses, so the chord is always "in key".
  *
  *  It is #included at the BOTTOM of osc.h, after the Osc class is complete, so
- *  it can reference edit_value_ / select_ / apply_edit_param() / osc_white().
+ *  it can reference edit_value_ / select_ / apply_edit_param() / osc_rand().
  */
 
 #include "osc.h"  // Osc class (complete definition) + osc_consts::* + helpers
@@ -87,96 +90,112 @@ static inline int32_t drone_cents_raw(int32_t cents)
   return (int32_t)((float)cents * (float)kRawMax / ChordVoice::kMaxCents + 0.5f);
 }
 
+// ---- Shared "safe windows" (audition-friendly random ranges) -----------------
+// The single source of truth for the raw 0..1023 range each edit parameter is
+// randomized over. randomizeAll() draws every parameter; randomizePartial()
+// draws a random SUBSET of them. A parameter NOT listed in rnd_window_for()
+// uses the full 0..1023 range (it is "safe" at any value -- the walk / timbre /
+// period knobs, the per-stream depths, the wavetables, the breath stream, and
+// the formant vowel all play cleanly across their full span).
+//
+// C++11 note: the window table is NOT a constexpr array (the ARM build is
+// -std=c++11, and a constexpr initializer may not reference the Osc class
+// members DETUNE..DCK / kEditParamFirst). It is a plain static array, built
+// once at load time from rnd_window_for(), whose return type is deduced from
+// its (C++11-legal) default-argument initializers. (The WASM build is C++17 and
+// treats these as constant-initialized; either way they are initialized before
+// any re-roll, which only ever happens after init().)
+static constexpr int32_t kRndFullRange = 1023; // full 0..1023 window ceiling
+static constexpr int32_t kRndWavMax     = (int32_t)(WaveTable::kWavesTotal - 1); // 90
+static constexpr int32_t kRndWavDiv     = (int32_t)(WaveTable::kWavesTotal - 1); // 90
+static constexpr int32_t kRndCentMax    = (int32_t)ChordVoice::kMaxCents; // 1900
+static constexpr int32_t kRndCentDiv    = (int32_t)ChordVoice::kMaxCents; // 1900
+
+// The safe window for one edit parameter. Named struct (C++11-safe: an
+// anonymous struct in a function signature is ill-formed in C++11).
+struct RndWindow
+{
+  uint8_t kind; // 0 = uniform raw [lo,hi]; 1 = wavetable 0..kWavesTotal-1; 2 = consonant interval
+  int32_t lo;
+  int32_t hi;
+  int32_t div;  // divisor for kind 1 (kWavesTotal-1) / kind 2 (kMaxCents); 0 for kind 0
+};
+
+// Return the audition-friendly safe window for one edit parameter (idx = the
+// select_ index = enum - kEditParamFirst). Parameters not listed here get the
+// full 0..1023 range (safe at any value). The case labels are LITERAL select_
+// indices (computed from the current enum order, where RATE is 0 and DETUNE is
+// 1), so this free function does not reference any Osc member (keeping it
+// free of class-scope issues). See the osc.h enum for the index -> name map.
+static RndWindow rnd_window_for(uint8_t idx)
+{
+  RndWindow w;
+  w.kind = 0; w.lo = 0; w.hi = kRndFullRange; w.div = 0; // default: full range
+  switch (idx)
+  {
+    case 1:  w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // DET   +/-5 c
+    case 0:  w.kind=0; w.lo=204;  w.hi=511;  w.div=0; break; // RATE  20..50% (cap wander)
+    case 8:  w.kind=0; w.lo=153;  w.hi=818;  w.div=0; break; // SUB1  15..80%
+    case 9:  w.kind=0; w.lo=0;    w.hi=460;  w.div=0; break; // SUB2  0..45%
+    case 10: w.kind=0; w.lo=136;  w.hi=819;  w.div=0; break; // SAT   40..240
+    case 11: w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // ASYM  +/-50%
+    case 12: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // FLD   0..60%
+    case 16: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CHRD  0..60%
+    case 17: w.kind=2; w.lo=0;    w.hi=0;    w.div=kRndCentDiv; break; // INT  consonant interval
+    case 18: w.kind=0; w.lo=563;  w.hi=1023; w.div=0; break; // MAIN  55..100%
+    case 22: w.kind=0; w.lo=740;  w.hi=1023; w.div=0; break; // CUT   1 kHz..11 kHz
+    case 23: w.kind=0; w.lo=0;    w.hi=669;  w.div=0; break; // RES   0.5..1.8 Q
+    case 25: w.kind=0; w.lo=204;  w.hi=818;  w.div=0; break; // BRT   20..80% breath
+    case 28: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CH2D  0..60% chord drive
+    case 29: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CFLD  0..50% chord fold
+    case 30: w.kind=2; w.lo=0;    w.hi=0;    w.div=kRndCentDiv; break; // INT2 consonant interval
+    case 31: w.kind=0; w.lo=0;    w.hi=153;  w.div=0; break; // JIT   0..15% smear
+    case 32: w.kind=0; w.lo=0;    w.hi=256;  w.div=0; break; // RMOD  0..25% ring
+    case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM1   0..30% color
+    case 34: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM2   0..30% color
+    case 35: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMAB  0..50% FM breath
+    case 36: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMBB  0..50% FM breath
+    case 37: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CH2D2 0..60% CINT2 drive
+    case 38: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CH2F  0..50% CINT2 fold
+    case 40: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
+    case 41: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
+    case 42: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FLD2  0..30% worn edge
+    case 43: w.kind=0; w.lo=0;    w.hi=256;  w.div=0; break; // DCK   0..25% duck
+    default: break; // full range (SPDx/SMTx, walk depths, WAV1/2/3, etc.)
+  }
+  return w;
+}
+
+// Minimum SIGNIFICANT step (raw units) for a Partial re-roll: ~10% of the
+// 10-bit range. A Partial change that moves a parameter by less than this is
+// inaudible ("FOLD 53 -> 56"), so the draw is re-rolled until the new value is
+// at least kRndMinStepRaw away from the current one (up to kRndRedrawMax tries,
+// after which the last draw is accepted -- better a small step than none).
+static constexpr uint32_t kRndMinStepRaw = 102U; // ~10% of 1024
+static constexpr uint32_t kRndRedrawMax  = 5U;
+
+// Draw a fresh raw value for one edit parameter from its safe window (see
+// rnd_window_for()). Used by both randomizeAll() and randomizePartial().
+inline int32_t Osc::rnd_draw(uint8_t idx)
+{
+  const RndWindow w = rnd_window_for(idx);
+  if (w.kind == 0)
+    return w.lo + rnd_int((uint32_t)(w.hi - w.lo + 1));
+  if (w.kind == 1)
+    return drone_wav_raw(rnd_int((uint32_t)(kRndWavMax + 1)));
+  if (w.kind == 2)
+    return drone_cents_raw(kRndCintSet[rnd_int((uint32_t)(sizeof(kRndCintSet) / sizeof(kRndCintSet[0])))]);
+  return 0;
+}
+
 // ---- The re-roll itself ------------------------------------------------------
+// All-mode re-roll: draw a fresh safe value for EVERY edit parameter, then apply
+// all of them to the live DSP (see the tail loop). This is the original Rnd
+// behaviour (a full reset to a fresh audition-friendly preset).
 inline void Osc::randomizeAll()
 {
-
-  // ---- Full-range (walk / timbre) parameters --------------------------------
-  // SPD1..3 / SMT1..3: stream period / time constant. Any value is safe.
-  edit_value_[SPD1 - kEditParamFirst] = rnd_int(1024);
-  edit_value_[SMT1 - kEditParamFirst] = rnd_int(1024);
-  edit_value_[SPD2 - kEditParamFirst] = rnd_int(1024);
-  edit_value_[SMT2 - kEditParamFirst] = rnd_int(1024);
-  edit_value_[SPD3 - kEditParamFirst] = rnd_int(1024);
-  edit_value_[SMT3 - kEditParamFirst] = rnd_int(1024);
-  // RW_WAV / RW_DRV / RW_FLD / RW_FC: per-stream random-walk depths (0..100%).
-  edit_value_[RW_WAV - kEditParamFirst] = rnd_int(1024);
-  edit_value_[RW_DRV - kEditParamFirst] = rnd_int(1024);
-  edit_value_[RW_FLD - kEditParamFirst] = rnd_int(1024);
-  edit_value_[RW_FC - kEditParamFirst]  = rnd_int(1024);
-  // WAV1 / WAV2 / WAV3: wavetable index (0..kWavesTotal-1 = 0..90), full span.
-  edit_value_[WAV1 - kEditParamFirst] = drone_wav_raw(rnd_int((uint32_t)WaveTable::kWavesTotal));
-  edit_value_[WAV2 - kEditParamFirst] = drone_wav_raw(rnd_int((uint32_t)WaveTable::kWavesTotal));
-  edit_value_[WAV3 - kEditParamFirst] = drone_wav_raw(rnd_int((uint32_t)WaveTable::kWavesTotal));
-
-  // ---- Constrained (critical) parameters ------------------------------------
-  // (raw window = lo + rnd_int(hi-lo+1), i.e. uniform over lo..hi inclusive)
-  // DETU: +/-5 c (raw 256..767) -- clear beat without going out of tune.
-  edit_value_[DETUNE - kEditParamFirst] = 256 + rnd_int(767 - 256 + 1);
-  // RATE: shared walk ceiling, 20..50% (raw 204..511) -- capped so the combined
-  // wander doesn't clip/howl.
-  edit_value_[RATE_AMT - kEditParamFirst] = 204 + rnd_int(511 - 204 + 1);
-  // SUB1: 15..80% (raw 153..818) -- body without mud.
-  edit_value_[SUB1 - kEditParamFirst] = 153 + rnd_int(818 - 153 + 1);
-  // SUB2: 0..45% (raw 0..460) -- light low end, never the f/4 "mud" zone.
-  edit_value_[SUB2 - kEditParamFirst] = rnd_int(460 + 1);
-  // SATU: 40..240 (drive 0.4..2.4, raw 136..819) -- audible drive, no clip.
-  edit_value_[SATU - kEditParamFirst] = 136 + rnd_int(819 - 136 + 1);
-  // ASYM: +/-50% (raw 256..767) -- moderate asymmetry.
-  edit_value_[ASYM - kEditParamFirst] = 256 + rnd_int(767 - 256 + 1);
-  // FOLD: 0..60% (raw 0..613) -- metallic character, no "metal mush".
-  edit_value_[FOLD - kEditParamFirst] = rnd_int(613 + 1);
-  // CHORD: 0..60% (raw 0..613) -- presence without masking.
-  edit_value_[CHORD - kEditParamFirst] = rnd_int(613 + 1);
-  // CINT / CINT2: discrete consonant intervals (see kRndCintSet).
-  edit_value_[CHRD_INT - kEditParamFirst] = drone_cents_raw(kRndCintSet[rnd_int(9)]);
-  edit_value_[CINT2 - kEditParamFirst]    = drone_cents_raw(kRndCintSet[rnd_int(9)]);
-  // MAIN: 55..100% (raw 563..1023) -- stays clearly present (never hollow).
-  edit_value_[MAIN - kEditParamFirst] = 563 + rnd_int(1023 - 563 + 1);
-  // FCUT: 1 kHz..11 kHz (raw 740..1023) -- working band, never "in a box".
-  edit_value_[FCUT - kEditParamFirst] = 740 + rnd_int(1023 - 740 + 1);
-  // RES: 0.5..1.8 (raw 0..669) -- gentle peak, no ringy spike.
-  edit_value_[RES - kEditParamFirst] = rnd_int(669 + 1);
-  // RVLL: breath depth 20..80% (raw 204..818) -- audible, no voice vanishing.
-  edit_value_[RW_LVL - kEditParamFirst] = 204 + rnd_int(818 - 204 + 1);
-  // RW_LSP / RW_LSM: breath period / time constant, full range.
-  edit_value_[RW_LSP - kEditParamFirst] = rnd_int(1024);
-  edit_value_[RW_LSM - kEditParamFirst] = rnd_int(1024);
-  // CHSAT: chord drive 0..60% (raw 0..613) -- gentle-to-moderate, no clip.
-  edit_value_[CHSAT - kEditParamFirst] = rnd_int(613 + 1);
-  // CHFLD: chord fold 0..50% (raw 0..511) -- light edge, no harsh aliasing.
-  edit_value_[CHFLD - kEditParamFirst] = rnd_int(511 + 1);
-  // CHSAT2: CINT2's own drive 0..60% (raw 0..613) -- same window as CHSAT, so the
-  // CINT2 interval is driven independently but to the same safe ceiling.
-  edit_value_[CHSAT2 - kEditParamFirst] = rnd_int(613 + 1);
-  // CHFLD2: CINT2's own fold 0..50% (raw 0..511) -- same window as CHFLD.
-  edit_value_[CHFLD2 - kEditParamFirst] = rnd_int(511 + 1);
-  // JIT: 0..15% (raw 0..153) -- light "smear", never harsh static.
-  edit_value_[JIT - kEditParamFirst] = rnd_int(153 + 1);
-  // RMOD: 0..25% (raw 0..256) -- gentle metallic "ring".
-  edit_value_[RMOD - kEditParamFirst] = rnd_int(256 + 1);
-  // FM_A / FM_B: static phase-FM 0..30% (raw 0..307) -- audible color, no screech.
-  edit_value_[FM_A - kEditParamFirst] = rnd_int(307 + 1);
-  edit_value_[FM_B - kEditParamFirst] = rnd_int(307 + 1);
-  // RFM_A / RFM_B: FM-walk depth 0..50% (raw 0..511) -- "breathing" on the FM.
-  edit_value_[RFM_A - kEditParamFirst] = rnd_int(511 + 1);
-  edit_value_[RFM_B - kEditParamFirst] = rnd_int(511 + 1);
-  // ---- Enrichment-2 (formant / tape / comb / fold2 / ducking) ----
-  // FORM: any vowel (full range 0..1023) -- the formant stage is OFF until
-  // FVOL > 0, so this is musically free (no clipping).
-  edit_value_[FORM - kEditParamFirst] = rnd_int(1024);
-  // FVOL: 0..50% (raw 0..512) -- a clear formant color, never the full-level
-  // resonant biquad sum that would mask the drone.
-  edit_value_[FVOL - kEditParamFirst] = rnd_int(512 + 1);
-  // COMB: 0..30% (raw 0..307) -- a gentle resonance, never the ringy fb>0.7
-  // zone that "rings" harshly.
-  edit_value_[COMB - kEditParamFirst] = rnd_int(307 + 1);
-  // FOLD2: 0..30% (raw 0..307) -- a light "worn" edge, never the full double-
-  // fold that aliases harshly at the upper partials.
-  edit_value_[FOLD2 - kEditParamFirst] = rnd_int(307 + 1);
-  // DCK: 0..25% (raw 0..256) -- a gentle low-end "breathing", never the full
-  // duck that would silence the subs into a "hollow" drone.
-  edit_value_[DCK - kEditParamFirst] = rnd_int(256 + 1);
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    edit_value_[i] = rnd_draw(i);
 
   // ---- Apply every edit parameter to the live DSP ---------------------------
   // Re-run the same apply path init() uses, so params_ (and the derived phasor
@@ -184,4 +203,40 @@ inline void Osc::randomizeAll()
   // apply_edit_param() is idempotent per-parameter.
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     apply_edit_param(kEditParamFirst + i, edit_value_[i]);
+}
+
+// ---- Partial re-roll (RndM = Part) ------------------------------------------
+// A "development" rather than a reset: pick a RANDOM SUBSET of 2..6 edit
+// parameters and re-roll ONLY those to fresh safe-window values, leaving the
+// rest exactly as they are (the current sound is the reference). Each changed
+// parameter is guaranteed a SIGNIFICANT step (>= kRndMinStepRaw from its
+// current raw, up to kRndRedrawMax re-draws) so the change is actually audible
+// -- no "FOLD 53 -> 56" no-ops. The same LCG (rnd_int) and safe windows as
+// randomizeAll() are used, so All/Part share the same distribution.
+inline void Osc::randomizePartial()
+{
+  const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
+  for (uint32_t c = 0; c < count; ++c)
+  {
+    const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
+    const int32_t current = edit_value_[idx];
+    // First draw, then re-draw until the step is significant (or give up after
+    // kRndRedrawMax tries and accept the last draw -- a small step is better
+    // than no step at all).
+    int32_t v = rnd_draw(idx);
+    for (uint32_t t = 0; t < kRndRedrawMax; ++t)
+    {
+      int32_t d = v - current;
+      if (d < 0)
+        d = -d;
+      if (d >= (int32_t)kRndMinStepRaw)
+        break;
+      v = rnd_draw(idx);
+    }
+    edit_value_[idx] = v;
+    // Apply just this parameter immediately (idempotent). Applying per-parameter
+    // (rather than the full tail loop) keeps the other 40+ untouched params
+    // out of the apply path and matches the "only these changed" semantics.
+    apply_edit_param(kEditParamFirst + idx, v);
+  }
 }

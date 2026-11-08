@@ -440,13 +440,40 @@ extern "C" void setEditParam(int idx, int raw)
   processor.setParameter(1, raw);                       // PARAM_VAL
 }
 
-// Fire the *Random* button on the audio-worklet thread (mirrors the hardware's
-// "Rnd" slot, but NOT debounced -- a single click is a single event). Arms
-// Osc::rndRequest() -> rndArm(false): every click re-rolls immediately on the
-// next process() block. Same random windows (osc_white() LCG) as the device.
+// Fire the random re-roll on the audio-worklet thread (mirrors the hardware's
+// "Rnd" trigger slot, but NOT debounced -- a single click is a single event).
+// Arms Osc::rndRequest() -> rndArm(false): every click re-rolls immediately on
+// the next process() block, honouring the CURRENT RndM type (All or Part) -- so
+// the web sim's Fire button re-rolls per the selected type. Same random windows
+// (osc_rand() LCG) as the device.
 extern "C" void rndTrigger()
 {
   processor.rndRequest();
+}
+
+// ---- Rnd randomization-type accessors (web-sim "Random" block) --------------
+// The web simulator's Random block has a TYPE selector (All / Part) and a
+// TRIGGER. The type is a persistent setting (main-thread `processor`), the
+// trigger fires on the audio thread (rndTrigger). Reading the type back from
+// the main-thread processor keeps the sim UI in sync after a re-roll.
+extern "C" int getRndMode()
+{
+  return static_cast<int>(processor.getRndMode());
+}
+
+extern "C" void setRndMode(int mode)
+{
+  processor.setRndMode(static_cast<uint8_t>(mode));
+}
+
+extern "C" int getRndRun()
+{
+  return static_cast<int>(processor.getRndRun());
+}
+
+extern "C" void setRndRun(int v)
+{
+  processor.setRndRun(static_cast<uint8_t>(v));
 }
 
 EMSCRIPTEN_BINDINGS(drone_ui)
@@ -455,4 +482,8 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("getEditParamValue", &getEditParamValue);
   emscripten::function("setEditParam", &setEditParam);
   emscripten::function("rndTrigger", &rndTrigger);
+  emscripten::function("getRndMode", &getRndMode);
+  emscripten::function("setRndMode", &setRndMode);
+  emscripten::function("getRndRun", &getRndRun);
+  emscripten::function("setRndRun", &setRndRun);
 }

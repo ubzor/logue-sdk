@@ -200,8 +200,8 @@
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       const EDIT_PARAM_COUNT = 48;
-      // Names in select_ order (kEditParamFirst = DETUNE, see osc.h):
-      // 0 DETU, 1 RATE (shared depth ceiling),
+      // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h):
+      // 0 RATE (shared depth ceiling), 1 DETU,
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
       // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
       // 6 SPD3, 7 SMT3 (Density stream period / smooth),
@@ -223,7 +223,7 @@
       // 35 RFMA (random-walk depth on FM A, 0..100%, RATE-gated),
       // 36 RFMB (random-walk depth on FM B, 0..100%, RATE-gated).
       const EDIT_PARAM_NAMES = [
-        "Detune", "Rate",
+        "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
         "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave A", "Wave B", "Wave C",
         "Chord", "Interval",
@@ -255,7 +255,7 @@
       //   FILTER      FCUT RES
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [18, 13, 14, 0, 10, 11, 12, 42, 33, 34, 31, 32] },
+        { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 42, 33, 34, 31, 32, 0] },
         { title: "BREATH",   col: 0, items: [25, 26, 27] },
         { title: "FORMANT",  col: 0, className: "mt-auto", items: [39, 40] },
         // ---- Column 1 ----
@@ -323,7 +323,8 @@
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
-        if (idx === 0) {
+        // DETU (edit idx 1, RATE-first order): +/-10 cents, centered on 511.
+        if (idx === 1) {
           const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
@@ -800,16 +801,16 @@
       // (a short, smooth morph from the previous sound).
       // Two banks only: Random (randomize the wandering streams) and Reset
       // (always restore the factory defaults, osc.h edit_value_ initializers).
-      const PRESET_RANDOM = "Random";
+      const PRESET_RANDOM = "All Random";
       const PRESET_RESET = "Reset";
       // Factory defaults = the edit_value_ initializers in osc.h (kEditParamFirst
-      // order): DETU 511, RATE 0, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
+      // order, RATE-first): RATE 0, DETU 511, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
       // SPD3 511, SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0,
       // WAV1 0, WAV2 128, WAV3 0, CHRD 205, CINT 377, MAIN 1023 (full),
       // RWAV 0, RDRV 0, RFLD 0, FCUT 921, RES 0, RWFC 0,
       // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
       // CHFLD 0 (chord fold off, = FOLD default).
-      const DEFAULT_RAW = [511, 0, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 341, 0];
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 341, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -818,7 +819,7 @@
       // windows below are the exact inverse of formatParamValue (websim) /
       // Osc::getParameterStrValue (osc.h), so they line up with the slider
       // display. See the per-parameter comments for the DSP rationale.
-      function randomRaw() {
+      function randomizeAllRaw() {
         const raws = new Array(EDIT_PARAM_COUNT).fill(0);
         const I = (name) => EDIT_PARAM_NAMES.indexOf(name);
         // Guarded setter: `I(name)` returns -1 if the name is missing from
@@ -982,6 +983,68 @@
         return raws;
       }
 
+      // Backward-compat alias (All Random button / any existing callers).
+      function randomRaw() { return randomizeAllRaw(); }
+
+      // Partial randomization (the "Partial Random" button): a "development"
+      // around the CURRENT sound. Mirrors the device's RndM=Part behaviour
+      // (Osc::randomizePartial) but runs on the UI thread so the sliders
+      // visibly move (the same applyPresetRaw path All Random uses, so the
+      // worklet receives every write through the paced direct channel).
+      //
+      // Mechanics:
+      //   1. Read the current slider values (document.getElementById("editparam_<i>"))
+      //      as the BASE -- this is what the user is currently hearing.
+      //   2. Generate a fresh randomizeAllRaw() array (the same safe windows
+      //      All Random uses, so the draw distribution is identical).
+      //   3. Pick a RANDOM SUBSET of 2..6 edit indices (no duplicates).
+      //   4. For each chosen index, copy the fresh value from the array, BUT
+      //      re-draw up to 5 times if the step |fresh - current| < 102 raw
+      //      (~10% of the 10-bit range) -- a "significant" audible change,
+      //      matching Osc::randomizePartial's kRndMinStepRaw on the device.
+      //   5. Return the modified base array (unchanged params keep their
+      //      current value; only the 2..6 picked ones get fresh draws).
+      //
+      // The result is applied through applyPresetRaw() below: it writes each
+      // value to the slider DOM (so the UI moves) AND to the DSP via the
+      // paced setEditParam direct channel (one per 8 ms, the same morph
+      // All Random uses). Sliders and sound stay in lockstep.
+      function partialRandomRaw() {
+        // 1. Read current slider values as the base.
+        const base = new Array(EDIT_PARAM_COUNT).fill(0);
+        for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
+          const el = document.getElementById("editparam_" + i);
+          base[i] = el ? parseInt(el.value, 10) : 0;
+        }
+        // 2. Fresh random values for EVERY parameter (same safe windows as
+        //    All Random, so the draw distribution is identical).
+        const fresh = randomizeAllRaw();
+        // 3. Pick a random SUBSET of 2..6 indices (no duplicates).
+        const count = 2 + Math.floor(Math.random() * 5); // 2..6
+        const picked = new Set();
+        while (picked.size < count) {
+          picked.add(Math.floor(Math.random() * EDIT_PARAM_COUNT));
+        }
+        // 4. For each picked index, take the fresh value; if the step from the
+        //    current value is too small (< 102 raw, ~10%), re-draw up to 5
+        //    times. After 5 tries accept the last draw (a small step is better
+        //    than no step -- the same fallback as Osc::randomizePartial).
+        const MIN_STEP = 102; // ~10% of 1024, matches kRndMinStepRaw in osc_randomize.h
+        for (const idx of picked) {
+          let v = fresh[idx];
+          let step = Math.abs(v - base[idx]);
+          for (let t = 0; t < 5 && step < MIN_STEP; ++t) {
+            // Re-draw just this one parameter by regenerating the full array
+            // and taking the new draw for idx (the other draws are discarded,
+            // which is cheap -- randomizeAllRaw is pure Math.random, no DSP).
+            v = randomizeAllRaw()[idx];
+            step = Math.abs(v - base[idx]);
+          }
+          base[idx] = v;
+        }
+        return base;
+      }
+
       let presetApplyTimer = null;
       function applyPresetRaw(raws, presetLabel) {
         if (context.state !== "running") context.resume();
@@ -1011,39 +1074,54 @@
       }
 
       // Build the preset buttons (after the sliders exist, so apply can touch them).
+      // Three buttons, all styled like Reset (btn btn-outline btn-primary) and
+      // slightly smaller (btn-sm):
+      //   * "All Random"     -- re-roll EVERY parameter (a full reset to a fresh
+      //                         audition-friendly preset). Runs on the UI thread
+      //                         via applyPresetRaw(randomRaw()) so every slider
+      //                         visibly moves (the main-thread path).
+      //   * "Partial Random" -- re-roll a RANDOM SUBSET (2..6) of parameters to
+      //                         fresh safe-window values, leaving the rest (a
+      //                         "development" around the current sound). Each
+      //                         changed param gets a significant step (>=102 raw).
+      //                         Runs on the AUDIO worklet thread via
+      //                         Module.setRndMode(1) + Module.rndTrigger() -- the
+      //                         same Osc::rndArm/rndTick path the device uses.
+      //   * "Reset"          -- always restore the factory defaults.
       const presetGrid = document.getElementById("Presets");
       {
         const b = document.createElement("button");
-        b.textContent = PRESET_RANDOM;
-        b.className = "btn btn-primary";
-        b.title = "Random: RATE 20-100%, all walk periods/smooths + RWAV/RDRV/RFLD/RWFC + WAV1/WAV2 randomized.";
+        b.textContent = PRESET_RANDOM; // "All Random"
+        b.className = "btn btn-outline btn-primary btn-sm";
+        b.title = "Re-roll EVERY parameter to a fresh audition-friendly preset.";
         b.dataset.name = PRESET_RANDOM;
         b.onclick = () => applyPresetRaw(randomRaw(), PRESET_RANDOM);
         presetGrid.appendChild(b);
       }
       {
         const b = document.createElement("button");
+        b.textContent = "Partial Random";
+        b.className = "btn btn-outline btn-primary btn-sm";
+        b.title = "Re-roll a random SUBSET (2..6) of parameters to fresh safe values (a development around the current sound). Sliders move to show the new values.";
+        b.dataset.name = "Partial Random";
+        // Runs on the UI thread through applyPresetRaw (the same path All
+        // Random / Reset use): partialRandomRaw() reads the current sliders as
+        // the base, picks 2..6 random params, draws fresh safe values for them
+        // (re-rolling until the step >= 102 raw), and applyPresetRaw writes
+        // each result to both the slider DOM and the DSP (paced 8 ms apart),
+        // so the sliders visibly move to the new values AND the sound changes.
+        b.onclick = () => applyPresetRaw(partialRandomRaw(), "Partial Random");
+        presetGrid.appendChild(b);
+      }
+      {
+        const b = document.createElement("button");
         b.textContent = PRESET_RESET;
-        b.className = "btn btn-outline btn-primary";
+        b.className = "btn btn-outline btn-primary btn-sm";
         b.title = "Always restore the factory default parameters.";
         b.dataset.name = PRESET_RESET;
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
         presetGrid.appendChild(b);
       }
-      // ---- Rnd: DEVICE-ONLY parameter — intentionally NOT rendered in the sim
-      // ----
-      // On the device, "Rnd" is an OPTIONAL PARAMETER SLOT (0..15) in header.c:
-      // changing it to ANY value arms the Rnd debounce (Osc::rndArm(true) on
-      // the DSP thread), which re-rolls every edit parameter (randomizeAll) --
-      // first change immediately, then at most once per 0.5 s.
-      // The web simulator deliberately does NOT expose a control for it:
-      //   - the "Random" button above already does the same re-roll, but on
-      //     the UI thread through applyPresetRaw(randomRaw());
-      //   - a 0..15 slider next to Reset was visual noise for a hardware-only
-      //     slot (the sim has no optional slots / edit menu).
-      // DO NOT re-add an Rnd slider/row to the sim UI; if a worklet-thread
-      // re-roll is ever needed in the sim, call Module.rndTrigger() from JS
-      // (it is still exported in wasm.cc) instead of adding a control.
 
       // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
       const lfoFreq = document.getElementById("LfoFreq");
