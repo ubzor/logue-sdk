@@ -1056,6 +1056,15 @@ public:
     env_follower_ = 0.f;
     duck_ = 1.f;
     duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.039
+    // Chord interval fades (INT / INT2 on-off): start SILENT -- the interval
+    // level only ramps up from 0 over 2 s once its cents value is > 0. This
+    // makes the first note-on fade the chord in (no instant "start
+    // screaming") and keeps init() clean. Precompute the one-pole alpha for
+    // the 2 s fade (same curve as the note attack/release: 1 - exp(-5 / N),
+    // one_minus_expf, never libm).
+    chord1_fade_ = 0.f;
+    chord2_fade_ = 0.f;
+    chord_fade_alpha_ = one_minus_expf(-5.f / static_cast<float>(kChordFadeSamples));
   }
 
   void reset() override final
@@ -1080,6 +1089,11 @@ public:
     last_note_ = 0;
     glide_active_ = false;
     eg_.reset();
+    // Silence the chord interval fades on stop (allNoteOff semantics: the
+    // chord goes quiet instantly, no 2 s tail). The next note-on ramps them
+    // back in from 0 over 2 s.
+    chord1_fade_ = 0.f;
+    chord2_fade_ = 0.f;
   }
   // ---- note handling ---------------------------------------------------------
 
@@ -1306,6 +1320,16 @@ private:
   // init() (never in the audio path).
   float eg_alpha_a_ = 0.f;
   float eg_alpha_r_ = 0.f;
+
+  // ---- Chord interval fade (INT / INT2 on-off, see kChordFadeSamples) --------
+  // Two independent one-pole level fades, one per chord interval. The audio
+  // path (osc_mix.h) relaxes each toward (cents > 0 ? 1 : 0) per sample and
+  // multiplies the interval's level by it, so switching INT / INT2 on or off
+  // fades the voice in / out over 2 s instead of clicking (exactly the
+  // one-pole curve of the note attack/release envelope, same alpha).
+  float chord1_fade_ = 0.f; // CINT  interval level fade (0..1)
+  float chord2_fade_ = 0.f; // CINT2 interval level fade (0..1)
+  float chord_fade_alpha_ = 0.f; // per-sample one-pole alpha (K-rate, init())
 
   // ---- Enrichment-2 DSP state (formant / comb / ducking) --------------------
   // All OFF by default (the corresponding params_ fields are 0), so the stock

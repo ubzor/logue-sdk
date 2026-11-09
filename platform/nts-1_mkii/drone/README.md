@@ -36,7 +36,8 @@ CHORD voice (osc C at INT, osc C2 at INT2)
   phasor C  ->  wavetable C (WA3)  at base * 2^(INT/1200)
   phasor C2 ->  wavetable C (WA3)  at base * 2^(INT2/1200)
   each: -> FLD (CFLD / CH2F) -> SAT (CH2D / CH2D, shared ASYM)
-  y_chord = (c1 + c2) * CHRD * lvl_c      (lvl_c = Breath stream)
+  y_chord = (c1 + c2) * CHRD * lvl_c * fade    (lvl_c = Breath stream,
+                                               fade = 2 s one-pole on INT / INT2)
 
 SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub * DUCK   <-- new
 SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2 * DUCK   <-- new
@@ -66,6 +67,17 @@ Key facts about the path:
   interpolated linearly over **1 s** and every derived voice (A/B, sub-1,
   sub-2, chord, chord-2, wavetable morph) is recomputed from it, so the whole
   sound slides in pitch together.
+ * **Chord interval fade**: switching INT / INT2 on (> 0 c) or off (0 c,
+   unison) does not toggle the chord level instantly -- each interval's level
+   is relaxed toward (active ? 1 : 0) with a **2 s one-pole exponential**
+   (`chord1_fade_` / `chord2_fade_`, the same curve as the note attack/release
+   envelope), so an interval **fades in over 2 s when turned on** and **fades
+   out over 2 s when turned off** (no click, no instant "start screaming").
+   The chord phasor **always advances** (even at cents == 0), so the signal
+   shape is continuous (no "sine -> constant" jump) when the interval crosses
+   0; only the LEVEL fades. Re-targeting mid-fade is continuous, so scrubbing
+   the knob through 0 is click-free. The whole chord is still gated by the
+   note A-H-R envelope, so a note-off kills it instantly.
 
 ### Rnd re-roll (BPM-synced smooth morph)
 
@@ -264,7 +276,7 @@ default and effect:
 | 14 | WA2 | index | 0..90 (banks A-F) | ~11 | Osc B wavetable. |
 | 15 | WA3 | index | 0..90 (banks A-F) | 0 | Chord-voice (osc C/C2) wavetable. |
 | 16 | CHRD | % | 0..100% | ~20% | Chord-voice level (both intervals INT + INT2). |
-| 17 | INT | NNNc | 0..1900 c (continuous) | ~700 c (fifth) | First chord interval above the base note. |
+| 17 | INT | NNNc | 0..1900 c (continuous) | ~700 c (fifth) | First chord interval above the base note. 0 = off (unison); on/off fades over 2 s. |
 | 18 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). |
 | 19 | TWDR | % | 0..100% | 0% (off) | Walk depth on wavetable morph (+/-10 tables). |
 | 20 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
@@ -277,7 +289,7 @@ default and effect:
 | 27 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant. |
 | 28 | CH2D | 0..300 | 0..3.0 drive | = SAT | INT interval's own saturator drive (shared ASYM). |
 | 29 | CFLD | % | 0..100% | = FLD (0%) | INT interval's own wavefolder depth. |
-| 30 | INT2 | NNNc | 0..1900 c (continuous) | ~950 c (major sixth) | Second chord interval (shares CHRD level, WA3, Breath). |
+| 30 | INT2 | NNNc | 0..1900 c (continuous) | ~950 c (major sixth) | Second chord interval (shares CHRD level, WA3, Breath). 0 = off (unison); on/off fades over 2 s. |
 | 31 | JIT | % | 0..100% -> 0..0.5% phase | 0% (off) | Random phase jitter on A/B (smears the carrier). |
 | 32 | RMOD | % | 0..100% | 0% (off) | A*B ring-mod parallel voice (ducked by MAIN). |
 | 33 | FM1 | Nc | 0..100% (quadratic) -> ~0.5% phase | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). |
@@ -315,6 +327,7 @@ independent of the period, so the walk depth does not depend on speed.
 | Behaviour | Value | Notes |
 |-----------|-------|-------|
 | Attack / release | 2 s / 2 s | Exponential A-H-R, own envelope (platform EG open). |
+| Chord interval fade | 2 s / 2 s | INT / INT2 on-off: per-interval one-pole level fade (same curve as the note envelope); 0 c = off. |
 | Note glide | 1 s | Linear interpolation; all derived voices follow. |
 | Sub-1 detune | -4 c | One octave below the base, fixed. |
 | Sub-2 pitch gate | base < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. |

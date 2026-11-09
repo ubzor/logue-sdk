@@ -166,6 +166,18 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   const float alpha_a = eg_alpha_a_;
   const float alpha_r = eg_alpha_r_;
 
+  // ---- Chord interval fades (INT / INT2 on-off, see kChordFadeSamples) ------
+  // Each chord interval's level is relaxed toward (cents > 0 ? 1 : 0) with a
+  // one-pole exponential (the SAME curve as the note attack/release envelope),
+  // so switching an interval on fades it IN over 2 s and switching it off
+  // fades it OUT over 2 s -- no click, no instant "start screaming". The fade
+  // state (chord1_fade_ / chord2_fade_) is advanced per sample below and
+  // multiplies the interval's level in the final mix. The active targets are
+  // const per block (the cents knobs are L-rate), so only the state moves.
+  const float chord_fade_alpha = chord_fade_alpha_;
+  const float chord1_target = (p.chord_cents > 0.f) ? 1.f : 0.f;
+  const float chord2_target = (p.chord2_cents > 0.f) ? 1.f : 0.f;
+
   // ---- Second sub (SUB2) level (see osc_sub2.h for the voice DSP) ----
   const float sub2_level = p.sub2_level;
 
@@ -297,6 +309,16 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     float rw_dev_a_cents = 0.f;
     float rw_dev_b_cents = 0.f;
 
+    // Advance the chord interval fades by one sample (one-pole toward their
+    // per-block targets, see above). At cents == 0 the fade relaxes to 0 over
+    // 2 s (fade-out); at cents > 0 it relaxes to 1 over 2 s (fade-in). A
+    // re-target mid-fade is continuous, so scrubbing INT / INT2 through 0 is
+    // click-free. (The whole chord is also gated by the note A-H-R envelope
+    // eg_.env, so a note-off still kills it instantly -- these fades only
+    // shape the interval's on/off level.)
+    chord1_fade_ += (chord1_target - chord1_fade_) * chord_fade_alpha;
+    chord2_fade_ += (chord2_target - chord2_fade_) * chord_fade_alpha;
+
     if (rw_active)
     {
       // Advance all three streams (each draws its own random targets on its
@@ -423,14 +445,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     }
     // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
     // No random-walk modulation — the chord voice is a stable "anchor"
-    // like SUB2, not a beating voice. advance() returns false if the
-    // interval is OFF (no oscillator).
-    const bool chord_active = chord_.advance();
-    // Second chord phasor (CINT2): same stable-anchor behavior as chord_.
-    // advance() returns false if the second interval is 0 (OFF / unison).
-    // chord2_gain mirrors chord_gain (the CINT2 voice shares the CHRD level);
-    // it is used to gate the resolve_wave lookup below (skip when silent).
-    const bool chord2_active = chord2_.advance();
+    // like SUB2, not a beating voice. The phasor ALWAYS advances (even at
+    // cents == 0) so the signal shape is continuous; the LEVEL is gated by
+    // chord1_fade_ / chord2_fade_ (see the fade comment above).
+    chord_.advance();
+    // Second chord phasor (CINT2): same behavior as chord_. The phasor
+    // always advances; chord2_gain * chord2_fade_ gates the level.
+    chord2_.advance();
 
     // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
     // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
@@ -506,7 +527,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // is active (chord_active) and the level is non-zero (chord_gain > 0)
     // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
     // wavetable lookup. See osc_chord.h for the interval table.
-    const float wav_c = (chord_active && chord_gain > 0.f)
+    const float wav_c = (chord_gain * chord1_fade_) > 0.f
         ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord_.phasor)
         : 0.f;
     // Second chord voice (CINT2): same wavetable (WAV3) + LFO morph as the
@@ -516,7 +537,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // intervals share the CHRD level (chord_gain) and lvl_c (Breath stream
     // dev_c) in the final mix, so they breathe in sync. Each interval then
     // runs its OWN folder+saturator (CINT: CHSAT/CHFLD, CINT2: CHSAT2/CHFLD2).
-    const float wav_c2 = (chord2_active && chord2_gain > 0.f)
+    const float wav_c2 = (chord2_gain * chord2_fade_) > 0.f
         ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord2_.phasor)
         : 0.f;
 
@@ -712,14 +733,17 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // breathe in sync — the chord is one object in level). ASYM is shared with
     // everything. Summing AFTER the saturator means each interval is driven at
     // its OWN level, so the higher interval (CINT2) can be softened/filtered
-    // independently of the lower one. At CINT2 = 0 (default off) or CHRD = 0,
-    // wav_c2 = 0 and the CINT2 branch is 0 (regression-safe).
+    // independently of the lower one. The interval's ON/OFF level (INT/INT2 ==
+    // 0 vs > 0) is the chord1_fade_ / chord2_fade_ one-pole (2 s, see above),
+    // so switching an interval fades it in/out instead of clicking. At
+    // CINT2 = 0 (default off) or CHRD = 0, wav_c2 = 0 and the CINT2 branch is
+    // 0 (regression-safe).
     const float c1 = Saturator::saturate(
-        Saturator::fold(wav_c * chord_gain * lvl_c, chord_fold_clamped),
+        Saturator::fold(wav_c * chord_gain * lvl_c * chord1_fade_, chord_fold_clamped),
         chord_drive_clamped, p.asym);
-    const float c2 = (chord2_gain > 0.f)
+    const float c2 = (chord2_gain > 0.f && chord2_fade_ > 0.f)
         ? Saturator::saturate(
-              Saturator::fold(wav_c2 * chord_gain * lvl_c, chord2_fold_clamped),
+              Saturator::fold(wav_c2 * chord_gain * lvl_c * chord2_fade_, chord2_fold_clamped),
               chord2_drive_clamped, p.asym)
         : 0.f;
     const float chord_sat = c1 + c2;

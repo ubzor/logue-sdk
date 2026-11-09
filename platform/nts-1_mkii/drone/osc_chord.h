@@ -78,13 +78,15 @@ struct ChordVoice
   }
 
   // ---- Audio path (called once per sample from Osc::process) ----
-  // Advances the phasor by one sample. Returns false if the interval is 0
-  // (unison — the caller can skip the wavetable lookup to save a lookup,
-  // though at 0 cents the chord voice is inaudible anyway if CHORD=0).
-  bool advance()
+  // Advances the phasor by one sample. ALWAYS advances (even at cents == 0)
+  // so the phasor keeps moving and the wavetable lookup produces a
+  // continuous (sine-like) signal. The caller gates the LEVEL via
+  // chord1_fade_ / chord2_fade_ (see osc_mix.h), so at cents == 0 the
+  // phasor still moves (on the base frequency, since w0 = base_w0 at
+  // cents == 0) but the level fades to 0 over 2 s. This keeps the signal
+  // shape continuous (no "sine -> constant" jump) when cents crosses 0.
+  void advance()
   {
-    if (cents <= 0.f)
-      return false;
     phasor += w0;
     // Modular wrap (x - fast_floorf(x)) instead of a single subtract: keeps the
     // phasor in [0, 1) for ANY finite input. The chord voice is not
@@ -93,7 +95,6 @@ struct ChordVoice
     // against any future modulation that could push the phasor outside
     // [0, 1) (mirroring the main-voice phasor wrap in osc.h).
     phasor -= fast_floorf(phasor);
-    return true;
   }
 
   // Reset the chord voice state. Only the phasor / cached phase increment are

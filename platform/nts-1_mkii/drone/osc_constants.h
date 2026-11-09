@@ -188,6 +188,18 @@
   // smoothly. The length is a fixed constant (per design: 1 s).
   static constexpr uint32_t kGlideSamples = 1U * 48000U; // 1 s @ 48 kHz
 
+  // ---- Chord interval fade (INT / INT2 on-off) --------------------------------
+  // When a chord interval is switched OFF (0 c, unison) or ON (> 0 c) its LEVEL
+  // is not toggled instantly: a one-pole exponential relaxes toward the
+  // (active ? 1 : 0) target over kChordFadeSamples (2 s @ 48 kHz), the SAME
+  // curve the note attack/release envelope uses (alpha = 1 - exp(-5 / N), see
+  // AhEnvelope). Turning an interval on fades the voice in over 2 s, turning
+  // it off fades it out over 2 s (no click / no instant "start screaming").
+  // The alpha is precomputed in init() (K-rate, one_minus_expf -- no libm).
+  // A re-target mid-fade is continuous (the one-pole keeps relaxing from its
+  // current level), so scrubbing the INT / INT2 knob through 0 is click-free.
+  static constexpr uint32_t kChordFadeSamples = 2U * 48000U; // 2 s @ 48 kHz
+
  // ---- Rnd re-roll morph (BPM-synced smooth transition) -----------------------
  // When a Rnd re-roll fires (All / Part / Orbi), the affected parameters do NOT
  // jump to their new values: they morph from the OLD raw value to the NEW one,
