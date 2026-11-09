@@ -451,44 +451,68 @@ public:
       morph_cnt_ = 0;
       morph_elapsed_ = 0;
     }
+    if (reaim)
+    {
+      // RE-AIM: every currently-active param continues from its current
+      // (t, cur) point toward whatever target the new fire gives it (unchanged
+      // params keep their target). This kills AGING (no stale snaps) and keeps
+      // value + velocity continuous (no click). Re-targeted params get their
+      // `from` re-solved for C1 continuity; untouched params simply keep
+      // gliding (their from/to/t are already consistent).
+      for (uint8_t s = 0; s < morph_cnt_; ++s)
+      {
+        const uint8_t i = morph_idx_[s];
+        const float t = morph_t_[i]; // current progress 0.0..1.0
+        const float st = t * t * (3.0f - 2.0f * t); // smoothstep s(t)
+        const int32_t new_to = (target != nullptr) ? target[i] : morph_to_[i];
+        if (new_to == morph_to_[i])
+          continue; // untouched: keep gliding to the old target (consistent)
+        // Steer to `new_to` from the current point with C1 continuity: solve
+        // from_new so the smoothstep passes through `cur` at progress st and
+        // reaches new_to at progress 1. Value is continuous (cur unchanged);
+        // velocity is continuous because the curve shape s'(t) is unchanged at
+        // this t. Guard st near 0 (param barely started): plain re-start.
+        if (st < 0.001f)
+          morph_from_[i] = morph_cur_[i];
+        else
+          morph_from_[i] = (int32_t)((morph_cur_[i] - new_to * st) / (1.0f - st) + 0.5f);
+        morph_to_[i] = new_to;
+        // morph_cur_ / morph_t_ / morph_start_ are left unchanged: the param
+        // keeps its progress and stagger, so nothing snaps.
+      }
+      // No anchor on a re-aim (params already have their start delays).
+      morph_total_smp_ = total;
+      morph_active_ = (morph_cnt_ > 0U) ? 1 : 0;
+      return;
+    }
+
+    // ---- FRESH morph ---------------------------------------------------------
     for (uint8_t i = 0; i < kEditParamCount; ++i)
     {
-      const bool has_target = (target != nullptr) && (target[i] != morph_to_[i]);
+      const bool has_target = (target != nullptr) && (target[i] != edit_value_[i]);
       if (!has_target)
-      {
-        if (reaim)
-          continue; // mid-morph, unchanged by this fire: keep its old target
-        continue;   // fresh morph, no new target: nothing to do
-      }
-      // Active: morph from the CURRENT interpolated value to the new target.
-      // Fresh morph: `from` = edit_value_ (still the OLD value -- the caller
-      // sets edit_value_ AFTER rndMorphStart, see osc_randomize.h). Re-aim:
-      // `from` = morph_cur_ (the in-flight value, so the handoff is seamless).
-      morph_from_[i] = reaim ? morph_cur_[i] : edit_value_[i];
+        continue; // unchanged: nothing to do
+      // Fresh: morph from the current value to the new target. edit_value_ is
+      // still the OLD value here (the caller writes it AFTER rndMorphStart,
+      // see osc_randomize.h), so this is the value the sound is actually at.
+      morph_from_[i] = edit_value_[i];
       morph_to_[i] = target[i];
       morph_cur_[i] = morph_from_[i];
-      if (!reaim)
-        // Random stagger: 0..(kRndMorphStaggerDivs-1) subdivisions of the
-        // phrase, so the params roll in across the whole 4-bar window.
-        morph_start_[i] = (uint32_t)((uint32_t)rnd_int(kRndMorphStaggerDivs) * total / kRndMorphStaggerDivs);
-      // else: keep the original start delay (already mid-flight).
+      morph_t_[i] = 0.0f;
+      // Random stagger: 0..(kRndMorphStaggerDivs-1) subdivisions of the phrase,
+      // so the params roll in across the window.
+      morph_start_[i] = (uint32_t)((uint32_t)rnd_int(kRndMorphStaggerDivs) * total / kRndMorphStaggerDivs);
       morph_idx_[morph_cnt_] = i;
       ++morph_cnt_;
     }
-    // ANCHOR: guarantee that at least ONE parameter starts IMMEDIATELY
-    // (morph_start_ = 0), so the user sees/hears a change on the very first
-    // audio block after the fire. Without this, the random stagger could put
-    // every active parameter's start delay at 1..8 s, and the user would click
-    // the button and wait several seconds before anything moves -- the re-roll
-    // would feel "unresponsive" even though the morph is in progress. The
+    // ANCHOR (fresh morphs only -- re-aims returned above): guarantee that at
+    // least ONE parameter starts IMMEDIATELY (morph_start_ = 0), so the user
+    // sees/hears a change on the very first audio block after the fire. The
     // anchor is the active parameter with the LARGEST raw delta (the most
     // audible change); if the morph has only one active parameter, that one is
     // the anchor. The other parameters keep their random stagger, so the
-    // musical "roll-in" effect is preserved. On a re-aim (mid-morph fire) the
-    // anchor logic is skipped: the in-flight parameters already have their
-    // original start delays (some may have already started, some are still in
-    // their stagger), and re-anchoring would disrupt the in-flight morph.
-    if (!reaim && (morph_cnt_ > 0U))
+    // musical "roll-in" effect is preserved.
+    if (morph_cnt_ > 0U)
     {
       uint8_t anchor = morph_idx_[0];
       int32_t max_delta = 0;
@@ -538,6 +562,7 @@ public:
           apply_edit_param(kEditParamFirst + i, morph_to_[i]);
         }
         morph_cur_[i] = morph_to_[i];
+        morph_t_[i] = 1.0f; // at target (matters if a later re-aim reads it)
         morph_idx_[s] = morph_idx_[morph_cnt_ - 1U];
         --morph_cnt_;
         --s; // re-process the swapped-in slot
@@ -545,12 +570,14 @@ public:
       }
       if (morph_elapsed_ < morph_start_[i])
       {
-        any_left = true; // start delay not elapsed yet
+        morph_t_[i] = 0.0f; // still in its stagger delay
+        any_left = true;    // start delay not elapsed yet
         continue;
       }
       // In flight: smoothstep over [start, start+total).
       const float t = (float)(morph_elapsed_ - morph_start_[i]) / (float)morph_total_smp_;
       const float tt = t * t * (3.0f - 2.0f * t); // smoothstep 3t^2 - 2t^3
+      morph_t_[i] = t; // remember progress for a possible C1 re-aim
       const int32_t raw = (int32_t)(morph_from_[i] + (morph_to_[i] - morph_from_[i]) * tt + 0.5f);
       if (raw != morph_cur_[i])
       {
@@ -627,12 +654,18 @@ public:
   //   morph_to_[i]      raw value the param morphs TO (the re-roll target).
   //   morph_start_[i]   per-parameter start delay in samples (stagger).
   //   morph_cur_[i]     raw value currently applied (for re-aim + UI read).
+  //   morph_t_[i]       the param's CURRENT progress in 0.0..1.0 (0 = not
+  //                       started, 1 = at target). Updated each block by
+  //                       rndMorphTick; read by rndMorphStart on a re-aim to
+  //                       steer the param toward its new target WITHOUT a
+  //                       velocity discontinuity (C1 continuity, see below).
   //   morph_idx_[i]     i if param i is active in this morph, else 0xFF.
   //   morph_cnt_        number of active params (<= kEditParamCount).
   int32_t  morph_from_[kEditParamCount];
   int32_t  morph_to_[kEditParamCount];
   uint32_t morph_start_[kEditParamCount];
   int32_t  morph_cur_[kEditParamCount];
+  float    morph_t_[kEditParamCount];
   uint8_t  morph_idx_[kEditParamCount];
   uint8_t  morph_cnt_ = 0;
   uint32_t morph_total_smp_ = 0;
@@ -643,10 +676,22 @@ public:
   // (the slider-sync loop): while a morph is in flight this is the CURRENT
   // interpolated raw value, so the sim's sliders visibly "travel" toward the
   // re-roll target instead of jumping. Returns the plain edit_value_ when no
-  // morph is active. Read-only for the UI (audio thread writes morph_cur_).
+  // morph is active, OR when this parameter is NOT part of the active morph
+  // (unchanged by the re-roll): for such a parameter morph_cur_[i] is stale
+  // garbage (only re-targeted params get it (re)seated in rndMorphStart), and
+  // its true value is simply edit_value_[i] (the morph leaves it untouched).
+  // Read-only for the UI (audio thread writes morph_cur_ / morph_idx_).
   int32_t getEditMorphValue(uint8_t idx) const
   {
-    return (morph_active_ && (idx < kEditParamCount)) ? morph_cur_[idx] : getEditValue(idx);
+    if (idx >= kEditParamCount)
+      return 0;
+    if (!morph_active_)
+      return edit_value_[idx];
+    // Active in the current morph? (index present in morph_idx_[0..cnt-1])
+    for (uint8_t s = 0; s < morph_cnt_; ++s)
+      if (morph_idx_[s] == idx)
+        return morph_cur_[idx];
+    return edit_value_[idx]; // unchanged param: keep its real value, no garbage
   }
 
   // True while a Rnd re-roll morph is in flight (any parameter still moving

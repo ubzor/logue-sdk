@@ -99,9 +99,17 @@ all at once.
   with the moving raw values. Discrete parameters morph in their native space
   for free: a fractional wavetable index crossfades via `resolve_wave()` and
   fractional chord cents glide the interval continuously.
-* **Re-fire mid-morph**: a new fire re-anchors the in-flight parameters to the
-  CURRENT interpolated value (no jump) and keeps their stagger, so the sound
-  keeps flowing toward the new targets instead of restarting.
+* **Re-fire mid-morph (C1-continuous re-aim)**: a new fire while a morph is in
+  flight does NOT restart the morph. Each in-flight parameter **continues from
+  its current progress** (`morph_t_[i]`, 0.0..1.0) toward whatever target the
+  new fire gives it; untouched parameters keep gliding to their old target.
+  Re-targeted parameters have their segment start (`morph_from_`) **re-solved**
+  so the smoothstep passes through the current value at the current progress
+  and reaches the new target at progress 1 — this keeps both the **value** and
+  the **velocity** continuous (no click, no phase jump). This also fixes the
+  "aging" bug where parameters not re-targeted by the new fire would snap to
+  their old target part-way through (a hard discontinuity). The anchor is NOT
+  applied on a re-aim (parameters already have their start delays).
 * **Where it runs**: audio thread, K-rate — `rndMorphTick()` is called once per
   `process()` block (in `osc_mix.h`), right after the re-roll `rndTick()`.
   When no morph is active it is a single branch check (zero cost).
