@@ -6,11 +6,19 @@
 /*
  *  File: osc_randomize.h
  *
- *  Out-of-line definitions of Osc::randomizeAll() and Osc::randomizePartial()
- *  -- the re-roll routines. randomizeAll() re-rolls EVERY edit parameter to a
- *  fresh audition-friendly random preset; randomizePartial() re-rolls a random
- *  SUBSET (2..6) to fresh safe-window values (a "development", not a reset),
- *  each with a guaranteed significant step (>= kRndMinStepRaw from current).
+ *  Out-of-line definitions of Osc::randomizeAll(), Osc::randomizePartial() and
+ *  Osc::randomizeOrbi() -- the re-roll routines. randomizeAll() re-rolls EVERY
+ *  edit parameter to a fresh audition-friendly random preset;
+ *  randomizePartial() re-rolls a random SUBSET (2..6) to fresh safe-window
+ *  values (a "development", not a reset), each with a guaranteed significant
+ *  step (>= kRndMinStepRaw from current); randomizeOrbi() is the same partial
+ *  re-roll but anchored to the last STABLE state (stable_value_): the subset
+ *  is drawn from stable_value_, the step is measured from the stable value,
+ *  and the result is applied to the live edit_value_ without updating the
+ *  stable state (see the function comments below).
+ *
+ *  All/Part re-rolls end by STABILIZING: their result becomes the new
+ *  stable_value_ snapshot (the ORBI reference). ORBI never stabilizes.
  *
  *  Both are the ONE source of truth for randomization, shared by:
  *    * the hardware "Rnd" trigger slot (unit.cc: unit_set_param_value(id=5)
@@ -203,6 +211,11 @@ inline void Osc::randomizeAll()
   // apply_edit_param() is idempotent per-parameter.
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     apply_edit_param(kEditParamFirst + i, edit_value_[i]);
+
+  // STABILIZE: an All re-roll is a fresh stable state -- the ORBI reference
+  // (stable_value_) now points at this result.
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    stable_value_[i] = edit_value_[i];
 }
 
 // ---- Partial re-roll (RndM = Part) ------------------------------------------
@@ -239,4 +252,66 @@ inline void Osc::randomizePartial()
     // out of the apply path and matches the "only these changed" semantics.
     apply_edit_param(kEditParamFirst + idx, v);
   }
+
+  // STABILIZE: a Part re-roll is a fresh stable state too -- the ORBI
+  // reference (stable_value_) now points at this result.
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    stable_value_[i] = edit_value_[i];
+}
+
+// ---- Orbi re-roll (RndM = Orbi) --------------------------------------------
+// A partial re-roll (same 2..6-subset count, same safe windows, same
+// significant-step rule and the same LCG draw order as randomizePartial())
+// anchored to the LAST STABLE STATE instead of the current sound:
+//   * the base for every step is stable_value_[idx] (the last stable state --
+//     factory defaults at startup, or the result of the last All/Part re-roll);
+//   * the result is written to the LIVE edit_value_ and applied to the DSP,
+//     but stable_value_ is NOT touched -- an ORBI re-roll does not create a
+//     new stable state, so every ORBI fire develops from the same stable
+//     sound no matter how many times it is fired (or how much the live sound
+//     has drifted in the meantime).
+// Manual PARAM/VALUE edits of the live parameters also leave stable_value_
+// untouched by design.
+inline void Osc::randomizeOrbi()
+{
+  // Work on a temp copy seeded from the stable state; edit_value_ is committed
+  // only once, at the end. (Keeps the LCG draw order identical to
+  // randomizePartial(): one count draw, then per-slot idx + value draws.)
+  int32_t v[kEditParamCount];
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    v[i] = stable_value_[i];
+
+  const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
+  for (uint32_t c = 0; c < count; ++c)
+  {
+    const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
+    const int32_t base = v[idx];
+    int32_t x = rnd_draw(idx);
+    for (uint32_t t = 0; t < kRndRedrawMax; ++t)
+    {
+      int32_t d = x - base;
+      if (d < 0)
+        d = -d;
+      if (d >= (int32_t)kRndMinStepRaw)
+        break;
+      x = rnd_draw(idx);
+    }
+    v[idx] = x;
+  }
+
+  // Commit to the live state + DSP. stable_value_ is intentionally left
+  // untouched: ORBI never stabilizes.
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    edit_value_[i] = v[i];
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    apply_edit_param(kEditParamFirst + i, v[i]);
+}
+
+// Re-copy the live edit_value_ into the stable-state snapshot (see
+// Osc::stableSync()). Audio-thread safe (rndTick path) and main-thread
+// (web-sim preset path).
+inline void Osc::stableSync()
+{
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    stable_value_[i] = edit_value_[i];
 }

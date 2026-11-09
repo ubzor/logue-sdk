@@ -49,11 +49,15 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   }
 
   // RndM (header slot 4, RND-тип) and Rnd (slot 5, запуск) are type_strings /
-  // type_enum; for slot 4 we return the type name ("All"/"Part") so the
+  // type_enum; for slot 4 we return the type name ("All"/"Part"/"ORBI") so the
   // device / loguecli / sim show the selector; for slot 5 we return "" and
   // let the platform render the enum value natively (1..15).
   if (id == 4U)
+  {
+    if (value == kRndModeOrbi)
+      return "ORBI";
     return (value == kRndModePart) ? "Part" : "All";
+  }
   if (id == 5U)
     return "";
   if (!is_param_val)

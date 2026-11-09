@@ -1069,13 +1069,55 @@
             presetApplyTimer = setTimeout(step, 8);
           } else {
             presetApplyTimer = null;
+            // All/Partial/Reset applied through this UI-thread path bypass the
+            // audio re-roll that would stabilize on its own -- sync the C++
+            // ORBI "stable state" snapshot with what the sim is showing now.
+            if (Module.stableSync) Module.stableSync();
           }
         })();
       }
 
-      // Build the preset buttons (after the sliders exist, so apply can touch them).
-      // Three buttons, all styled like Reset (btn btn-outline btn-primary) and
-      // slightly smaller (btn-sm):
+      // Fire an audio-worklet re-roll in the given RndM type (0 = All,
+      // 1 = Part, 2 = ORBI) and poll the main-thread processor mirror until
+      // the sliders settle on the new values.
+      //
+      // Why the poll: in the web sim the main-thread and the audio-worklet
+      // processor are SEPARATE COPIES (see wasm.cc). rndTrigger() fires on the
+      // worklet copy; the UI reads the main-thread copy, which the worklet
+      // mirrors into shared state on each apply. So after a fire we poll
+      // getEditParamValue() every frame (rAF) and move the slider + span when
+      // its value changed, stopping after 2 s or once every value matches the
+      // worklet's result (a full re-roll changes <= 6 of the 48 params, so the
+      // settle is detected quickly). This is the same "UI reads the main
+      // thread" convention as getEditParamValue-based slider init.
+      let fireSyncTimer = null;
+      function fireRandom(mode) {
+        if (fireSyncTimer) clearInterval(fireSyncTimer);
+        Module.setRndMode(mode);
+        Module.rndTrigger();
+        const t0 = performance.now();
+        fireSyncTimer = setInterval(() => {
+          let dirty = false;
+          for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
+            const v = Module.getEditParamValue(i);
+            const el = document.getElementById("editparam_" + i);
+            if (el && parseInt(el.value, 10) !== v) {
+              el.value = v;
+              const span = el.parentElement.querySelector("span");
+              if (span) span.textContent = formatParamValue(i, v);
+              dirty = true;
+            }
+          }
+          if (!dirty || performance.now() - t0 > 2000) {
+            clearInterval(fireSyncTimer);
+            fireSyncTimer = null;
+          }
+        }, 33);
+      }
+
+      // Build the preset buttons (after the sliders exist, so apply can touch
+      // them). All styled like Reset (btn btn-outline btn-primary) and slightly
+      // smaller (btn-sm):
       //   * "All Random"     -- re-roll EVERY parameter (a full reset to a fresh
       //                         audition-friendly preset). Runs on the UI thread
       //                         via applyPresetRaw(randomRaw()) so every slider
@@ -1111,6 +1153,22 @@
         // each result to both the slider DOM and the DSP (paced 8 ms apart),
         // so the sliders visibly move to the new values AND the sound changes.
         b.onclick = () => applyPresetRaw(partialRandomRaw(), "Partial Random");
+        presetGrid.appendChild(b);
+      }
+      {
+        const b = document.createElement("button");
+        b.textContent = "Orbi Random";
+        b.className = "btn btn-outline btn-primary btn-sm";
+        b.title = "Re-roll a random SUBSET (2..6) of parameters from the LAST STABLE state (defaults at startup, or the result of the last All/Partial/Reset) -- a development that never drifts away from that stable sound. Does not create a new stable state. Sliders move to show the new values.";
+        b.dataset.name = "Orbi Random";
+        // Runs on the AUDIO worklet thread via Module.setRndMode(2) +
+        // Module.rndTrigger() -- the same Osc::rndArm/rndTick path the device
+        // uses (RndM = ORBI -> Osc::randomizeOrbi): draws the 2..6-subset from
+        // the worklet's stable_value_ snapshot and applies it to the worklet's
+        // live DSP. The main-thread processor (a separate copy, see wasm.cc)
+        // mirrors the result via the slider-sync loop below (rAF poll of
+        // getEditParamValue) so the sliders show the new values.
+        b.onclick = () => fireRandom(2);
         presetGrid.appendChild(b);
       }
       {

@@ -258,6 +258,17 @@ public:
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
   int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
 
+  // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
+  // sound that every ORBI re-roll develops from. It is set by init() (factory
+  // defaults -- the default initializer mirrors edit_value_ exactly, so it
+  // already matches at startup) and is REWRITTEN by every All/Part re-roll
+  // (they stabilize on their result). ORBI re-rolls read it but never write
+  // it, so an ORBI session stays anchored to the last stable sound. Manual
+  // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
+  // state" until an All/Part re-roll or reset confirms it). Keep the default
+  // list in sync with edit_value_ above.
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
   // leading "chaos" lever).
@@ -293,6 +304,24 @@ public:
   // osc_randomize.h). Used when rnd_mode_ == kRndModePart (the RndM selector).
   // Only ever called from the audio-worklet thread (rndTick), at block rate.
   void randomizePartial();
+
+  // Orbi re-roll (RndM = ORBI): the SAME partial re-roll as
+  // randomizePartial() (a random subset 2..6, same safe windows, same
+  // significant-step rule), but the step is measured from the LAST STABLE
+  // STATE (stable_value_) instead of the current edit_value_, and the result
+  // is applied to the live edit_value_ WITHOUT touching stable_value_ -- so
+  // repeated ORBI re-rolls always develop from the same stable sound. The
+  // stable state is set by init() (factory defaults) and by every All/Part
+  // re-roll. Only ever called from the audio-worklet thread (rndTick), at
+  // block rate.
+  void randomizeOrbi();
+
+  // Re-copy the live edit_value_ into the stable-state snapshot. Used by the
+  // web simulator's UI-thread preset path (All Random / Partial Random /
+  // Reset go through applyPresetRaw -> setEditParam, NOT through the audio
+  // re-roll that would stabilize on its own), so the C++ stable state stays
+  // in sync with what the sim is actually showing.
+  void stableSync();
 
   // Draw one edit parameter's fresh raw value from its safe window (see
   // kRndWindows in osc_randomize.h). Shared by randomizeAll() (every param) and
@@ -400,21 +429,28 @@ public:
   //   * rnd_fire_ (immediate, from a fresh change) always fires.
   //   * rnd_armed_ (a change inside the window) fires once the window elapses.
   // ---- Rnd randomization TYPE (header slot 4 "RndM") ----------------------
-  // 0 = kRndModeAll  : re-roll EVERY edit parameter (the old Rnd behaviour).
+  // 0 = kRndModeAll  : re-roll EVERY edit parameter (the old Rnd behaviour);
+  //                    the result becomes the new "stable state".
   // 1 = kRndModePart : re-roll a random SUBSET (2..6) to fresh safe values
   //                    (a "development" around the current sound, see
-  //                    randomizePartial()). Reserved: 2+ = random-to-preset
-  //                    (planned, see TODO.md).
+  //                    randomizePartial()); the result becomes the new
+  //                    "stable state".
+  // 2 = kRndModeOrbi : re-roll a random SUBSET (2..6) exactly like Part, but
+  //                    drawn from the LAST STABLE STATE (stable_value_), not
+  //                    the current one (a partial "development" that never
+  //                    drifts away from the stable sound, see
+  //                    randomizeOrbi()); does NOT create a new stable state.
   // Written from the K-rate thread (unit_set_param_value slot 4) / the UI
   // thread (web sim); read by rndTick() on the audio thread. A 1-byte aligned
   // store/load is atomic on Cortex-M7 and x86-64, so no lock is needed (the
   // worst case is rndTick using a mode that is a few ms stale).
   static constexpr uint8_t kRndModeAll  = 0U;
   static constexpr uint8_t kRndModePart = 1U;
+  static constexpr uint8_t kRndModeOrbi = 2U;
   volatile uint8_t rnd_mode_ = kRndModeAll;
 
   uint8_t getRndMode() const { return rnd_mode_; }
-  void setRndMode(uint8_t mode) { rnd_mode_ = (mode <= kRndModePart) ? mode : kRndModeAll; }
+  void setRndMode(uint8_t mode) { rnd_mode_ = (mode <= kRndModeOrbi) ? mode : kRndModeAll; }
 
   // The header slot 5 "Rnd" (0..15, enum) is the randomization TRIGGER (it
   // fires on any value 1..15, debounced). This is only for display/getter
@@ -429,7 +465,7 @@ public:
   //   * rnd_fire_ (immediate, from a fresh change) always fires.
   //   * rnd_armed_ (a change inside the window) fires once the window elapses.
   // The re-roll itself honours the current rnd_mode_ (All -> randomizeAll,
-  // Part -> randomizePartial).
+  // Part -> randomizePartial, Orbi -> randomizeOrbi).
   void rndTick(uint32_t frames)
   {
     rnd_now_ += frames;
@@ -446,6 +482,8 @@ public:
     {
       if (rnd_mode_ == kRndModePart)
         randomizePartial();
+      else if (rnd_mode_ == kRndModeOrbi)
+        randomizeOrbi();
       else
         randomizeAll();
     }
@@ -630,6 +668,12 @@ public:
     rnd_cooldown_until_ = 0;
     rnd_fire_ = 0;
     rnd_armed_ = 0;
+    // Stable state (ORBI reference): the factory default is the first stable
+    // state (stable_value_'s default initializer already matches edit_value_,
+    // but copy explicitly so the invariant holds even if the initializers
+    // ever diverge).
+    for (uint8_t i = 0; i < kEditParamCount; i++)
+      stable_value_[i] = edit_value_[i];
 #ifdef __EMSCRIPTEN__
     // Clear any pending direct edit-parameter request (the UI may have
     // already sent one before init ran on the worklet thread).

@@ -81,14 +81,23 @@ The randomization is a **two-slot multiplexer** (edit-menu, device-only):
 
 * **Slot 4 RndM** -- the randomization **TYPE** (a persistent setting):
   * `All`  -- re-roll **every** edit parameter to a fresh audition-friendly
-    random preset (the original Rnd behaviour).
+    random preset (the original Rnd behaviour). The result becomes the new
+    **stable state** (the ORBI reference).
   * `Part` -- re-roll a **random subset (2..6)** of parameters to fresh values
     from the same "safe windows", leaving the rest untouched -- a *development
     around the current sound*, not a reset. Each changed parameter is
     guaranteed a **significant step** (new raw >= `kRndMinStepRaw` = 102, ~10%
     of the 10-bit range, from the current raw; re-drawn up to 5 times) so the
-    change is actually audible -- no "FOLD 53 -> 56" no-ops.
-  * (reserved `2+`: random-to-preset, planned -- see TODO.md.)
+    change is actually audible -- no "FOLD 53 -> 56" no-ops. The result becomes
+    the new **stable state**.
+  * `ORBI` -- the same 2..6-subset re-roll as Part, but **anchored to the last
+    stable state** (`Osc::stable_value_`, `osc_randomize.h`), not the current
+    sound: the subset is drawn from the stable values, the significant step is
+    measured from the stable raw, and the result is applied to the live DSP
+    **without** creating a new stable state. Factory defaults are the stable
+    state at startup; every All/Part re-roll rewrites it. Firing ORBI again
+    (or after manual edits) always develops from the SAME stable sound.
+  * (reserved `3+`: random-to-preset, planned -- see TODO.md.)
 * **Slot 5 Rnd** -- the **trigger** (0..15, enum): like the old Rnd, changing it
   to any value 1..15 fires the re-roll **per the current RndM type**.
 
@@ -105,11 +114,14 @@ Re-rolls therefore happen at most once per 0.5 s. The window is
 `Osc::kRndDebounceSamples = 24000` samples (0.5 s at the fixed 48 kHz rate).
 
 **The web simulator** has a *Random* block mirroring this: a **Type** selector
-(All/Part, `Module.setRndMode`), a **Trigger** slider (0..15, `Module.setRndRun`)
-and a **Fire** button (`Module.rndTrigger()`), which re-rolls on the audio
-worklet thread per the selected type (NOT debounced -- a single click fires
-immediately). The separate **Random** preset button is a UI-thread convenience
-that does a full All re-roll via `applyPresetRaw(randomRaw())`.
+(All/Part/ORBI, `Module.setRndMode`), a **Trigger** slider (0..15,
+`Module.setRndRun`) and a **Fire** button (`Module.rndTrigger()`), which
+re-rolls on the audio worklet thread per the selected type (NOT debounced -- a
+single click fires immediately). The preset row has an **Orbi Random** button
+(`Module.setRndMode(2)` + `Module.rndTrigger()`, audio-worklet path like the
+device) next to **All Random** / **Partial Random** / **Reset** (UI-thread
+conveniences via `applyPresetRaw`, which call `Module.stableSync()` after the
+apply so the C++ ORBI reference matches what the sim is showing).
 
 ---
 
@@ -124,7 +136,7 @@ two physical knobs:
   parameter. Each parameter maps 0..1023 onto its own range; the raw value is
   cached per parameter, so re-selecting one restores its last value.
 * **Slots 2/3 PARAM/VALUE** -- full duplicates of 0/1 (edit-menu visibility).
-* **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part), see above.
+* **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
 All 44 editable DSP parameters (select_ index -> name), with range, factory

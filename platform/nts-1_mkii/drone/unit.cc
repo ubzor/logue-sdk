@@ -98,8 +98,9 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
   // cache value for unit_get_param_value(id)
   cached_values[id] = value;
 
-  // Slot 4 (RndM) is the randomization TYPE selector (0 = All, 1 = Part). It
-  // is a persistent setting (not a trigger): just store it in the processor.
+  // Slot 4 (RndM) is the randomization TYPE selector (0 = All, 1 = Part,
+  // 2 = ORBI). It is a persistent setting (not a trigger): just store it in
+  // the processor.
   if (id == 4U)
   {
     s_osc_instance.setRndMode(static_cast<uint8_t>(value));
@@ -108,7 +109,7 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
 
   // Slot 5 (Rnd) is a one-shot RANDOMIZE TRIGGER, not a DSP parameter. Any
   // value 0..15 arms the Rnd debounce (rndArm): the first change re-rolls
-  // (per the current RndM type: All or Part) immediately (next process()
+  // (per the current RndM type: All, Part or ORBI) immediately (next process()
   // block), and further changes within the 0.5 s window only reset the timer
   // -- one final re-roll fires after 0.5 s of silence. The value itself carries
   // no sound, so there is no per-knob DSP state to set -- just arm the debounce
@@ -136,7 +137,8 @@ __unit_callback int32_t unit_get_param_value(uint8_t id)
   // last raw value written via unit_set_param_value for that slot.
   if (id == 1U || id == 3U)
     return s_osc_instance.getValue();
-  // Slot 4 (RndM) reports the current randomization TYPE (0 = All, 1 = Part).
+  // Slot 4 (RndM) reports the current randomization TYPE (0 = All, 1 = Part,
+  // 2 = ORBI).
   if (id == 4U)
     return static_cast<int32_t>(s_osc_instance.getRndMode());
   // Slot 5 (Rnd) is a trigger, not DSP state: report the cached slot value
@@ -150,7 +152,7 @@ __unit_callback const char *unit_get_param_str_value(uint8_t id, int32_t value)
   // Slot 5 (Rnd) is a type_enum parameter: the platform renders the integer
   // natively (1..16), so we return "" here (the minimal-cost path -- no custom
   // formatter needed). Slot 4 (RndM) is type_strings and is formatted by the
-  // processor ("All" / "Part").
+  // processor ("All" / "Part" / "ORBI").
   if (id == 5U)
     return "";
   return s_osc_instance.getParameterStrValue(id, value);

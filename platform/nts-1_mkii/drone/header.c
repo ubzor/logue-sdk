@@ -108,15 +108,19 @@ const __unit_header unit_header_t unit_header = {
         // The single old "Rnd" trigger knob is split into TWO slots: a TYPE
         // selector (slot 4 "RndM") and a TRIGGER (slot 5 "Rnd").
         //
-        // Slot 4 (RndM): randomization TYPE, 0..1 (type_strings so the name is
+        // Slot 4 (RndM): randomization TYPE, 0..2 (type_strings so the name is
         // shown via unit_get_param_str_value -> Osc::getParameterStrValue):
-        //   0 = "All"  - re-roll EVERY edit parameter (the old Rnd behaviour)
+        //   0 = "All"  - re-roll EVERY edit parameter (the old Rnd behaviour).
         //   1 = "Part" - re-roll a RANDOM SUBSET (2..6) of parameters to fresh
         //                audition-friendly "safe window" values, leaving the rest
         //                (a "development" around the current sound, not a reset).
-        //   (Reserved 2+ : random-to-preset, planned -- see TODO.md.)
+        //   2 = "ORBI" - the same 2..6-subset re-roll, but drawn from the LAST
+        //                STABLE STATE (factory defaults at startup, or the
+        //                result of the last All/Part re-roll), not the current
+        //                sound; does NOT create a new stable state (All/Part do).
         // Default 0 (All). This is a persistent setting, not a trigger.
-        {0, 1, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"RndM"}},
+        // (Reserved 3+ : random-to-preset, planned -- see TODO.md.)
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"RndM"}},
 
         // Slot 5 (Rnd): randomization TRIGGER (0..15, type_enum). Like the old
         // Rnd, this is NOT an edit parameter with DSP state -- it is a one-shot
