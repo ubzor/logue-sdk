@@ -10,12 +10,16 @@
  *  Osc::randomizeOrbi() -- the re-roll routines. randomizeAll() re-rolls EVERY
  *  edit parameter to a fresh audition-friendly random preset;
  *  randomizePartial() re-rolls a random SUBSET (2..6) to fresh safe-window
- *  values (a "development", not a reset), each with a guaranteed significant
- *  step (>= kRndMinStepRaw from current); randomizeOrbi() is the same partial
- *  re-roll but anchored to the last STABLE state (stable_value_): the subset
- *  is drawn from stable_value_, the step is measured from the stable value,
- *  and the result is applied to the live edit_value_ without updating the
- *  stable state (see the function comments below).
+ *  values (a loose "development"), each with a guaranteed significant step
+ *  (>= kRndMinStepRaw from current); randomizeOrbi() ("Orbit") is a TIGHT,
+ *  SHORT development anchored to the last STABLE state (stable_value_): it
+ *  nudges 2..4 parameters, each picked from ONE weighted family (core/timbre/
+ *  motion/extra) so a single fire develops one "sphere" of the sound, and the
+ *  whole fire morphs over a SHORT phrase (a quarter bar, not Part's full bar)
+ *  so the shift lands quickly. Each nudge is a few % .. ~30% of range,
+ *  not a fresh re-draw) so the result is recognizably the same sound. The
+ *  result is applied to the live edit_value_ WITHOUT updating the stable state
+ *  (see the function comments below).
  *
  *  All/Part re-rolls end by STABILIZING: their result becomes the new
  *  stable_value_ snapshot (the ORBI reference). ORBI never stabilizes.
@@ -182,8 +186,78 @@ static RndWindow rnd_window_for(uint8_t idx)
 static constexpr uint32_t kRndMinStepRaw = 102U; // ~10% of 1024
 static constexpr uint32_t kRndRedrawMax  = 5U;
 
+// ---- Orbit Random (RndM = ORBI) tuning: a "development", not a mutation ----
+// Part (kRndModePart) is the LOOSE dev: it re-rolls a random SUBSET (2..6) of
+// the 44 parameters, each to a FRESH safe-window value (a guaranteed >= 10%
+// step from the current raw). That is a real mutation: a few of the 44 knobs
+// can each jump up to ~50% of their range, so the result can be a different
+// sound entirely.
+//
+// Orbit (kRndModeOrbi) is the TIGHT dev -- the same "pick a subset and nudge it"
+// idea, but tuned so the result is recognizably the same sound, developed:
+//   * A MODERATE number of parameters move per fire: 2..4
+//     (kRndOrbiMinCount..kRndOrbiMaxCount), not Part's 2..6.
+//   * A MINIMUM step (kRndOrbiMinStepRaw, ~6% of the 10-bit range) and a
+//     MAXIMUM step (kRndOrbiMaxStepRaw, ~30%), so each parameter moves a few
+//     percent to ~30%, not up to half its range -- but it is still always
+//     audible.
+//   * The whole fire morphs over a SHORT phrase (kRndOrbiBeats/kRndOrbiBeatDiv
+//     = a quarter bar, ~0.5 s at 120 BPM) instead of Part's full bar, so the
+//     development lands quickly and reads as a clear shift, not a slow fade.
+//   * ONE "sphere" of the sound moves per fire (the weighted families below):
+//     a single fire develops the harmony, or the timbre, or the motion -- not
+//     all three at once. That is what keeps Orbit feeling like "the same sound,
+//     explored", whereas Part can reach across the whole 44-param space.
+//   * A small "surprise" chance (kRndOrbiSurpriseChance of 100) still lets a fire
+//     escape the chosen family and touch any parameter (a bigger discovery).
+// The families group the edit parameters by what a move there affects:
+//   core (the harmonic core: detune/subs, A/B/C wavetables, chord, intervals),
+//   timbre (the color: saturation/fold, filter, ring-mod, comb),
+//   motion (the movement: RATE, the wander streams and walk depths, breath, FM),
+//   extra  (the enrichment layers, default OFF -- a low-weight "surprise").
+// Any parameter not in a family is still reachable via the surprise draw, so
+// no parameter is ever permanently excluded from Orbit.
+// Orbit fires SHORT and DENSE, not slow and spread-out: the whole re-roll
+// morphs over kRndOrbiBeats of a bar (0.25 = ~0.5 s at 120 BPM) instead of
+// Part's full bar, and each moved parameter takes a BIGGER step (a few % to
+// ~30% of range) across 2..4 parameters. This is what makes an Orbit fire
+// audibly "happen" instead of dissolving into the drone's constant breathing
+// (the old full-bar / small-step version read as "nothing changed"). Part and
+// All keep their original full-bar morph and 2..6 params -- Orbit is the
+// quicker, punchier development.
+static constexpr uint32_t kRndOrbiBeats          = 1U;  // numerator; beats = kRndOrbiBeats / kRndOrbiBeatDiv
+static constexpr uint32_t kRndOrbiBeatDiv        = 4U;  // 1/4 of a bar = 0.5 s @ 120 BPM
+static constexpr uint32_t kRndOrbiMinCount       = 2U;  // 2..4 params per Orbit fire
+static constexpr uint32_t kRndOrbiMaxCount       = 4U;  // (inclusive ceiling)
+static constexpr uint32_t kRndOrbiMinStepRaw     = 64U; // ~6% of 1024 (the nudge floor)
+static constexpr uint32_t kRndOrbiMaxStepRaw     = 307U; // ~30% of 1024 (the nudge cap)
+static constexpr uint32_t kRndOrbiSurpriseChance = 4U;  // ~4% of fires escape the family
+static constexpr uint32_t kRndOrbiFamilyCount    = 4U;  // core / timbre / motion / extra
+static constexpr uint8_t  kRndOrbiFamilyW[kRndOrbiFamilyCount] = {50U, 20U, 20U, 10U};
+
+// The weighted families: a flat list of edit-param indices, one per family
+// (order = kRndOrbiFamilyCount). C++11-safe plain static initializers.
+static const uint8_t kRndOrbiFamCore[12]   = {1, 8, 9, 13, 14, 15, 16, 17, 18, 30, 31, 32};
+static const uint8_t kRndOrbiFamTimbre[10] = {10, 11, 12, 22, 23, 28, 29, 37, 38, 41};
+static const uint8_t kRndOrbiFamMotion[16] = {0, 2, 3, 4, 5, 6, 7, 19, 20, 21, 24, 25, 26, 27, 33, 34};
+static const uint8_t kRndOrbiFamExtra[3]   = {9, 35, 40};
+
+// The family's parameter list + length for an Orbit fire (family 0..3).
+static const uint8_t *rnd_orbi_family(uint8_t fam, uint32_t &n)
+{
+  switch (fam)
+  {
+    case 0:  n = sizeof(kRndOrbiFamCore) / sizeof(kRndOrbiFamCore[0]);   return kRndOrbiFamCore;
+    case 1:  n = sizeof(kRndOrbiFamTimbre) / sizeof(kRndOrbiFamTimbre[0]); return kRndOrbiFamTimbre;
+    case 2:  n = sizeof(kRndOrbiFamMotion) / sizeof(kRndOrbiFamMotion[0]); return kRndOrbiFamMotion;
+    case 3:  n = sizeof(kRndOrbiFamExtra) / sizeof(kRndOrbiFamExtra[0]);  return kRndOrbiFamExtra;
+    default: n = 0; return kRndOrbiFamCore;
+  }
+}
+
 // Draw a fresh raw value for one edit parameter from its safe window (see
-// rnd_window_for()). Used by both randomizeAll() and randomizePartial().
+// rnd_window_for()). Used by randomizeAll() (every param) and
+// randomizePartial() (a subset).
 inline int32_t Osc::rnd_draw(uint8_t idx)
 {
   const RndWindow w = rnd_window_for(idx);
@@ -194,6 +268,52 @@ inline int32_t Osc::rnd_draw(uint8_t idx)
   if (w.kind == 2)
     return drone_cents_raw(kRndCintSet[rnd_int((uint32_t)(sizeof(kRndCintSet) / sizeof(kRndCintSet[0])))]);
   return 0;
+}
+
+// Pick a random edit parameter for one ORBIT fire. On the small "surprise"
+// chance (kRndOrbiSurpriseChance of 100) take ANY of the kEditParamCount
+// parameters (a bigger discovery); otherwise draw the FAMILY (0..3) with the
+// kRndOrbiFamilyW weights (sum 100: 50/20/20/10) and a parameter inside it.
+// Returns the edit index (0..kEditParamCount-1). Audio-thread only.
+inline uint8_t Osc::rnd_pick_orbi_param()
+{
+  if (rnd_int(100U) < kRndOrbiSurpriseChance)
+    return (uint8_t)rnd_int(kEditParamCount); // surprise: any parameter
+  const uint32_t r = rnd_int(100U);
+  uint8_t fam = 0;
+  if (r < 50U)      fam = 0;
+  else if (r < 70U) fam = 1;
+  else if (r < 90U) fam = 2;
+  else              fam = 3;
+  uint32_t n = 0;
+  const uint8_t *list = rnd_orbi_family(fam, n);
+  return list[rnd_int(n ? n : 1U)];
+}
+
+// Draw an ORBIT raw value for one edit parameter: a gentle NUDGE of `base`
+// rather than a fresh window draw. Take the window draw (rnd_draw), re-draw up
+// to kRndRedrawMax times aiming for a step within [kRndOrbiMinStepRaw,
+// kRndOrbiMaxStepRaw] of `base`, then clamp the accepted draw to that band so a
+// single Orbit fire never moves a parameter more than a few percent of its range
+// (but always by at least the minimum nudge). Audio-thread only.
+inline int32_t Osc::rnd_draw_orbi(uint8_t idx, int32_t base)
+{
+  int32_t v = rnd_draw(idx);
+  for (uint32_t t = 0; t < kRndRedrawMax; ++t)
+  {
+    int32_t d = v - base;
+    if (d < 0)
+      d = -d;
+    if (d >= (int32_t)kRndOrbiMinStepRaw && d <= (int32_t)kRndOrbiMaxStepRaw)
+      break;
+    v = rnd_draw(idx);
+  }
+  int32_t d = v - base;
+  if (d > (int32_t)kRndOrbiMaxStepRaw)
+    v = base + (int32_t)kRndOrbiMaxStepRaw;
+  else if (d < -(int32_t)kRndOrbiMaxStepRaw)
+    v = base - (int32_t)kRndOrbiMaxStepRaw;
+  return v;
 }
 
 // ---- The re-roll itself ------------------------------------------------------
@@ -282,50 +402,48 @@ inline void Osc::randomizePartial()
     stable_value_[i] = edit_value_[i];
 }
 
-// ---- Orbi re-roll (RndM = Orbi) --------------------------------------------
-// A partial re-roll (same 2..6-subset count, same safe windows, same
-// significant-step rule and the same LCG draw order as randomizePartial())
-// anchored to the LAST STABLE STATE instead of the current sound:
-//   * the base for every step is stable_value_[idx] (the last stable state --
+// ---- Orbit re-roll (RndM = ORBI) --------------------------------------------
+// A TIGHT "development" of the LAST STABLE STATE, deliberately far gentler than
+// a Part re-roll (see the Orbit tuning comment near kRndOrbiMaxCount above):
+//   * the base for every nudge is stable_value_[idx] (the last stable state --
 //     factory defaults at startup, or the result of the last All/Part re-roll);
-//   * the result is written to the LIVE edit_value_ and applied to the DSP,
-//     but stable_value_ is NOT touched -- an ORBI re-roll does not create a
-//     new stable state, so every ORBI fire develops from the same stable
-//     sound no matter how many times it is fired (or how much the live sound
-//     has drifted in the meantime).
+//   * A MODERATE number of parameters move: 2..4 (kRndOrbiMinCount..kRndOrbiMaxCount),
+//     each picked from ONE weighted family (core / timbre / motion / extra) so a
+//     single fire develops one "sphere" of the sound (with a small surprise
+//     chance to touch any param);
+//   * each moved parameter is NUDGED by a step: at least kRndOrbiMinStepRaw
+//     (~6%, still audible) but at most kRndOrbiMaxStepRaw (~30%), so it moves a
+//     few percent to ~30% of its range, not up to half;
+//   * the whole fire morphs over a SHORT phrase (kRndOrbiBeats/kRndOrbiBeatDiv
+//     of a bar, ~0.5 s at 120 BPM), not Part's full bar -- so the shift lands
+//     quickly and is clearly audible;
+//   * the result is written to the LIVE edit_value_ and applied to the DSP, but
+//     stable_value_ is NOT touched -- an ORBI fire does not create a new stable
+//     state, so every ORBI fire develops from the same stable sound no matter
+//     how many times it is fired (or how much the live sound has drifted).
 // Manual PARAM/VALUE edits of the live parameters also leave stable_value_
 // untouched by design.
 inline void Osc::randomizeOrbi()
 {
   // Work on a temp copy seeded from the stable state; edit_value_ is committed
-  // only once, at the end. (Keeps the LCG draw order identical to
-  // randomizePartial(): one count draw, then per-slot idx + value draws.)
+  // only once, at the end.
   int32_t target[kEditParamCount];
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     target[i] = stable_value_[i];
 
-  const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
+  const uint32_t count = kRndOrbiMinCount + (uint32_t)rnd_int(kRndOrbiMaxCount - kRndOrbiMinCount + 1U); // 2..4
   for (uint32_t c = 0; c < count; ++c)
   {
-    const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
-    const int32_t base = target[idx];
-    int32_t x = rnd_draw(idx);
-    for (uint32_t t = 0; t < kRndRedrawMax; ++t)
-    {
-      int32_t d = x - base;
-      if (d < 0)
-        d = -d;
-      if (d >= (int32_t)kRndMinStepRaw)
-        break;
-      x = rnd_draw(idx);
-    }
-    target[idx] = x;
+    const uint8_t idx = rnd_pick_orbi_param();
+    target[idx] = rnd_draw_orbi(idx, target[idx]); // nudge from the stable value
   }
 
   // Morph toward the targets (the live sound glides from its CURRENT values to
-  // the ORBI result, not from the stable state). stable_value_ is intentionally
-  // left untouched: ORBI never stabilizes.
-  rndMorphStart(target);
+  // the Orbit result, not from the stable state). Orbit uses a SHORTER phrase
+  // (kRndOrbiBeats/kRndOrbiBeatDiv of a bar) so the shift lands quickly and is
+  // clearly audible, unlike Part/All's full-bar morph. stable_value_ is
+  // intentionally left untouched: Orbit never stabilizes.
+  rndMorphStart(target, kRndOrbiBeats / kRndOrbiBeatDiv);
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     edit_value_[i] = target[i];
 }

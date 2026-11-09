@@ -70,7 +70,7 @@ Key facts about the path:
 ### Rnd re-roll (BPM-synced smooth morph)
 
 The Rnd re-rolls do **not** jump: when a re-roll fires (from the **Rnd**
-header slot, or the web sim's **All / Part / Orbi** buttons) the affected
+header slot, or the web sim's **All / Part / Orbit** buttons) the affected
 parameters **morph** from their old values to the new ones over a BPM-synced
 phrase, each with its own random start delay (stagger) and a **smoothstep**
 (`3t² − 2t³`) curve, so the parameters "roll in" one after another instead of
@@ -92,8 +92,8 @@ all at once.
   every active parameter's start delay at 0..2 s and the re-roll would feel
   "unresponsive". The anchor is only applied on a FRESH morph (not on a
   re-aim mid-morph), so an in-flight morph is never disrupted.
-* **What morphs**: the parameters selected by the re-roll (All → all 11,
-  Part/Orbi → the 2..6 re-drawn ones), each through the same
+* **What morphs**: the parameters selected by the re-roll (All → all 44,
+  Part → the 2..6 re-drawn ones, Orbit → the 2..4 nudged ones), each through the same
   `apply_edit_param()` path a manual PARAM_VAL edit uses, so the derived-voice
   caches (wavetables, chords, SVF coefficients, formant combs) stay consistent
   with the moving raw values. Discrete parameters morph in their native space
@@ -101,7 +101,7 @@ all at once.
   fractional chord cents glide the interval continuously.
 * **Re-fire mid-morph (C1-continuous re-aim)**: a new fire while a morph is in
   flight does NOT restart the morph. It re-aims **every** parameter (not just
-  the currently-active ones), because a new fire (especially Orbi/Part) often
+  the currently-active ones), because a new fire (especially Orbit/Part) often
   re-rolls a *different* subset of parameters than the one in flight. For each
   parameter:
   - **already active AND re-targeted, safely mid-flight (0<t<1)**: the segment
@@ -145,14 +145,14 @@ all at once.
   `rndTick`. To bridge the gap, `Osc::simRndRequest(mode)` (a 32-bit packed
   slot: bit 31 = valid, bits 0..2 = mode, consumed in `process()` by
   `osc_mix.h`) carries the request from the UI thread to the worklet. The
-  **All Random / Partial Random / Orbi Random** buttons all go through
+  **All Random / Partial Random / Orbit Random** buttons all go through
   `fireRandom(mode)` (websim/osc.html) → `Module.setRndMode(mode)` +
   `Module.rndTrigger()` → worklet `rndTick` → `randomizeAll/Partial/Orbi` →
   `rndMorphStart` — i.e. the SAME code path as the hardware, so all three
   morph identically. **Reset** is the only button that bypasses the worklet
   path: it is a "snap to factory defaults" action (no morph) and uses the
   UI-thread `applyPresetRaw(DEFAULT_RAW)` path (one `setEditParam` per 8 ms,
-  followed by `Module.stableSync()` so the C++ ORBI reference matches the
+  followed by `Module.stableSync()` so the C++ Orbit reference matches the
   freshly-reset sound).
 
 ### Envelope / key behaviour
@@ -178,13 +178,28 @@ The randomization is a **two-slot multiplexer** (edit-menu, device-only):
     of the 10-bit range, from the current raw; re-drawn up to 5 times) so the
     change is actually audible -- no "FOLD 53 -> 56" no-ops. The result becomes
     the new **stable state**.
-  * `ORBI` -- the same 2..6-subset re-roll as Part, but **anchored to the last
-    stable state** (`Osc::stable_value_`, `osc_randomize.h`), not the current
-    sound: the subset is drawn from the stable values, the significant step is
-    measured from the stable raw, and the result is applied to the live DSP
-    **without** creating a new stable state. Factory defaults are the stable
-    state at startup; every All/Part re-roll rewrites it. Firing ORBI again
-    (or after manual edits) always develops from the SAME stable sound.
+  * `ORBI` -- a **tight, short "development"** of the last **stable state**
+    (`Osc::stable_value_`, `osc_randomize.h`), deliberately gentler than Part so
+    the result is recognizably the *same* sound, developed. Per fire it:
+    * nudges **2..4** parameters (vs Part's 2..6);
+    * picks each from **ONE weighted family** -- *core* (harmonic core: detune,
+      subs, A/B/C wavetables, chord, intervals), *timbre* (color: saturation,
+      fold, filter, ring-mod, comb), *motion* (movement: RATE, the wander
+      streams, walk depths, breath, FM) or *extra* (enrichment layers, default
+      OFF -- a low-weight "surprise") -- so a single fire develops one "sphere"
+      of the sound rather than reaching across all 44 parameters (a small
+      ~4% "surprise" chance still lets a fire touch any parameter);
+    * moves each by a step: at least `kRndOrbiMinStepRaw` (64, ~6%, still
+      audible) but at most `kRndOrbiMaxStepRaw` (307, ~30%) of the 10-bit range
+      -- a clear nudge, **not** a fresh re-draw of up to half the range;
+    * morphs the whole fire over a **short phrase** (`kRndOrbiBeats`/
+      `kRndOrbiBeatDiv` = a quarter bar, ~0.5 s at 120 BPM), not Part's full bar
+      -- so the shift lands quickly and is clearly audible.
+    The nudge is anchored to the **stable** values (not the current sound) and
+    is applied to the live DSP **without** creating a new stable state. Factory
+    defaults are the stable state at startup; every All/Part re-roll rewrites
+    it. Firing ORBI again (or after manual edits) always develops from the SAME
+    stable sound.
   * (reserved `3+`: random-to-preset, planned -- see TODO.md.)
 * **Slot 5 Rnd** -- the **trigger** (0..15, enum): like the old Rnd, changing it
   to any value 1..15 fires the re-roll **per the current RndM type**.
@@ -205,11 +220,11 @@ Re-rolls therefore happen at most once per 0.5 s. The window is
 (All/Part/ORBI, `Module.setRndMode`), a **Trigger** slider (0..15,
 `Module.setRndRun`) and a **Fire** button (`Module.rndTrigger()`), which
 re-rolls on the audio worklet thread per the selected type (NOT debounced -- a
-single click fires immediately). The preset row has an **Orbi Random** button
+single click fires immediately). The preset row has an **Orbit Random** button
 (`Module.setRndMode(2)` + `Module.rndTrigger()`, audio-worklet path like the
 device) next to **All Random** / **Partial Random** / **Reset** (UI-thread
 conveniences via `applyPresetRaw`, which call `Module.stableSync()` after the
-apply so the C++ ORBI reference matches what the sim is showing).
+apply so the C++ Orbit reference matches what the sim is showing).
 
 ---
 

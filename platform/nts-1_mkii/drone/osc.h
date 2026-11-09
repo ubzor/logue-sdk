@@ -305,15 +305,20 @@ public:
   // Only ever called from the audio-worklet thread (rndTick), at block rate.
   void randomizePartial();
 
-  // Orbi re-roll (RndM = ORBI): the SAME partial re-roll as
-  // randomizePartial() (a random subset 2..6, same safe windows, same
-  // significant-step rule), but the step is measured from the LAST STABLE
-  // STATE (stable_value_) instead of the current edit_value_, and the result
-  // is applied to the live edit_value_ WITHOUT touching stable_value_ -- so
-  // repeated ORBI re-rolls always develop from the same stable sound. The
-  // stable state is set by init() (factory defaults) and by every All/Part
-  // re-roll. Only ever called from the audio-worklet thread (rndTick), at
-  // block rate.
+  // Orbit re-roll (RndM = ORBI): a TIGHT, SHORT "development" of the LAST STABLE
+  // STATE (stable_value_), deliberately gentler than randomizePartial(): it
+  // nudges 2..4 parameters, each picked from ONE weighted family
+  // (core/timbre/motion/extra, with a small surprise chance) so a single fire
+  // develops one "sphere" of the sound, and each nudge is a few % .. ~30% of
+  // range (see kRndOrbi* in osc_randomize.h) rather than a fresh re-draw -- so
+  // the result is recognizably the same sound, developed. The whole fire morphs
+  // over a SHORT phrase (a quarter bar, not Part's full bar) so the shift lands
+  // quickly and is clearly audible. The base for every nudge is stable_value_
+  // (not the current edit_value_), and the result is applied to the live
+  // edit_value_ WITHOUT touching stable_value_ -- so repeated ORBI re-rolls
+  // always develop from the same stable sound. The stable state is set by
+  // init() (factory defaults) and by every All/Part re-roll. Only ever called
+  // from the audio-worklet thread (rndTick), at block rate.
   void randomizeOrbi();
 
   // Re-copy the live edit_value_ into the stable-state snapshot. Used by the
@@ -324,9 +329,17 @@ public:
   void stableSync();
 
   // Draw one edit parameter's fresh raw value from its safe window (see
-  // kRndWindows in osc_randomize.h). Shared by randomizeAll() (every param) and
-  // randomizePartial() (a subset). Audio-thread only.
+  // rnd_window_for() in osc_randomize.h). Shared by randomizeAll() (every
+  // param) and randomizePartial() (a subset). Audio-thread only.
   int32_t rnd_draw(uint8_t idx);
+
+  // Orbit helpers (see the Orbit tuning comment in osc_randomize.h): pick a
+  // random edit parameter for one ORBIT fire (from ONE weighted family, with a
+  // small "surprise" chance to touch any parameter), and draw a gentle NUDGE of
+  // `base` (a step within kRndOrbiMinStepRaw..kRndOrbiMaxStepRaw, not a fresh
+  // window draw). Audio-thread only.
+  uint8_t  rnd_pick_orbi_param();
+  int32_t  rnd_draw_orbi(uint8_t idx, int32_t base);
 
   // Randomizer primitive used by randomizeAll(): returns a uniform integer in
   // 0..count-1 from one osc_white() sample (integer math, no float/libm --
@@ -434,15 +447,21 @@ public:
   // the new targets instead of restarting from scratch. The tempo at fire
   // time sets the phrase length (a tempo change mid-morph does NOT re-aim an
   // in-flight morph -- it affects the NEXT fire only).
-  void rndMorphStart(const int32_t *target)
+  // `phrase_beats` overrides the morph's length in beats for this fire (0 =
+  // use the default kRndMorphBeats). Orbit passes a shorter phrase (a quarter
+  // bar) so its development reads as a quick, audible shift instead of
+  // dissolving over a full bar; All/Part leave it 0 (unchanged default).
+  void rndMorphStart(const int32_t *target, uint32_t phrase_beats = 0U)
   {
     float bpm = tempo_bpm_;
     if (bpm < kRndMorphBpmMin)
       bpm = kRndMorphBpmMin;
     else if (bpm > kRndMorphBpmMax)
       bpm = kRndMorphBpmMax;
-    // Phrase length in samples: kRndMorphBeats beats at `bpm` (1 beat = 60/bpm s).
-    const uint32_t total = (uint32_t)(kRndMorphBeats * 60.0f / bpm * 48000.0f);
+    // Phrase length in samples: `phrase_beats` (or the default kRndMorphBeats)
+    // beats at `bpm` (1 beat = 60/bpm s).
+    const uint32_t beats = (phrase_beats > 0U) ? phrase_beats : kRndMorphBeats;
+    const uint32_t total = (uint32_t)((float)beats * 60.0f / bpm * 48000.0f);
 
     const bool reaim = morph_active_;
     if (!reaim)
