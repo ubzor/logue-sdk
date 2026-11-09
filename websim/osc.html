@@ -1086,16 +1086,49 @@
       // worklet copy; the UI reads the main-thread copy, which the worklet
       // mirrors into shared state on each apply. So after a fire we poll
       // getEditParamValue() every frame (rAF) and move the slider + span when
-      // its value changed, stopping after 2 s or once every value matches the
-      // worklet's result (a full re-roll changes <= 6 of the 48 params, so the
-      // settle is detected quickly). This is the same "UI reads the main
-      // thread" convention as getEditParamValue-based slider init.
+      // its value changed.
+      //
+      // The re-roll is now a BPM-synced MORPH (Osc::rndMorphStart /
+      // rndMorphTick): instead of a single jump, each affected parameter
+      // glides from its old value to the new one over a 4-bar phrase (8 s at
+      // the default 120 BPM) with a random per-parameter start delay (stagger)
+      // and a smoothstep curve. getEditParamValue() returns the CURRENT
+      // interpolated value while the morph is in flight (see wasm.cc), so the
+      // poll below makes the sliders travel with the morph in real time. The
+      // sync window is therefore the morph length + the max stagger + a margin:
+      // 4 bars @ 120 BPM = 8 s, plus ~8 s of stagger (64 subdivisions), plus a
+      // 2 s settle margin = ~18 s (kRndMorphBeats/kRndMorphStaggerDivs in
+      // osc_constants.h). The poll stops early (the "dirty" check) as soon as
+      // no value changes between two frames, which usually happens well before
+      // the 18 s hard timeout.
       let fireSyncTimer = null;
+      // Sliders currently highlighted as "in motion" during a morph (their
+      // thumb/track is recolored via the plain "range" class -- which uses
+      // --range-color: var(--color-base-content), a lighter neutral -- so the
+      // user can see which parameters are still traveling toward their re-roll
+      // target. The default class is "range range-primary" (accent color);
+      // during the morph the accent is stripped and the lighter neutral shows.
+      // Cleared when the morph finishes (or on the hard timeout).
+      const morphingSliders = new Set();
+      function clearMorphHighlights() {
+        for (const el of morphingSliders) {
+          el.classList.add("range-primary");
+        }
+        morphingSliders.clear();
+      }
+      function highlightSlider(i) {
+        const el = document.getElementById("editparam_" + i);
+        if (el && !morphingSliders.has(el)) {
+          el.classList.remove("range-primary");
+          morphingSliders.add(el);
+        }
+      }
       function fireRandom(mode) {
         if (fireSyncTimer) clearInterval(fireSyncTimer);
         Module.setRndMode(mode);
         Module.rndTrigger();
         const t0 = performance.now();
+        const MORPH_SYNC_MS = 5000; // 1-bar morph (2 s @120) + max stagger (~2 s) + 1 s margin
         fireSyncTimer = setInterval(() => {
           let dirty = false;
           for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
@@ -1106,11 +1139,31 @@
               const span = el.parentElement.querySelector("span");
               if (span) span.textContent = formatParamValue(i, v);
               dirty = true;
+              // Recolor the slider so the user can see which parameters are
+              // still traveling toward their re-roll target (the morph is
+              // BPM-synced with per-parameter stagger, so different sliders
+              // light up at different times across the 4-bar phrase).
+              highlightSlider(i);
             }
           }
-          if (!dirty || performance.now() - t0 > 2000) {
+          // Stop only when the morph is DONE (getMorphActive() === 0) AND no
+          // value changed this tick, OR on the hard timeout. The stagger
+          // window (up to kRndMorphStaggerDivs-1 = 63 subdivisions of the
+          // phrase, ~8 s at 120 BPM) can be longer than a single 33 ms tick,
+          // so a "no value changed this frame" tick during the stagger would
+          // otherwise stop the poll prematurely and the sliders would never
+          // move even though the worklet's morph was still running. The
+          // morph-active check keeps the poll alive until rndMorphTick
+          // disarms morph_active_ (all parameters have reached their targets).
+          const morphDone = Module.getMorphActive === undefined
+            ? true
+            : (Module.getMorphActive() === 0);
+          if ((dirty === false && morphDone) || performance.now() - t0 > MORPH_SYNC_MS) {
             clearInterval(fireSyncTimer);
             fireSyncTimer = null;
+            // The morph is finished (or timed out): restore the default
+            // slider colors for every parameter that was highlighted.
+            clearMorphHighlights();
           }
         }, 33);
       }
@@ -1118,56 +1171,61 @@
       // Build the preset buttons (after the sliders exist, so apply can touch
       // them). All styled like Reset (btn btn-outline btn-primary) and slightly
       // smaller (btn-sm):
-      //   * "All Random"     -- re-roll EVERY parameter (a full reset to a fresh
-      //                         audition-friendly preset). Runs on the UI thread
-      //                         via applyPresetRaw(randomRaw()) so every slider
-      //                         visibly moves (the main-thread path).
+      //   * "All Random"     -- re-roll EVERY parameter to a fresh audition-
+      //                         friendly preset. Runs on the AUDIO worklet
+      //                         thread via fireRandom(0) -> Module.setRndMode(0)
+      //                         + Module.rndTrigger() -- the same Osc::rndArm /
+      //                         rndTick / randomizeAll path the device uses.
+      //                         The re-roll is a BPM-synced MORPH (4 bars @
+      //                         current tempo, per-param stagger + smoothstep),
+      //                         and the fireSyncTimer poll makes the sliders
+      //                         travel with the morph in real time.
       //   * "Partial Random" -- re-roll a RANDOM SUBSET (2..6) of parameters to
       //                         fresh safe-window values, leaving the rest (a
       //                         "development" around the current sound). Each
-      //                         changed param gets a significant step (>=102 raw).
-      //                         Runs on the AUDIO worklet thread via
-      //                         Module.setRndMode(1) + Module.rndTrigger() -- the
-      //                         same Osc::rndArm/rndTick path the device uses.
-      //   * "Reset"          -- always restore the factory defaults.
+      //                         changed param gets a significant step (>=102
+      //                         raw). Runs on the AUDIO worklet thread via
+      //                         fireRandom(1) -> Osc::randomizePartial -> the
+      //                         same morph engine.
+      //   * "Orbi Random"    -- re-roll a random SUBSET (2..6) of parameters
+      //                         from the LAST STABLE state (defaults at
+      //                         startup, or the result of the last All/Partial
+      //                         re-roll) -- a development that never drifts
+      //                         away from that stable sound. Does not create a
+      //                         new stable state. Runs on the AUDIO worklet
+      //                         thread via fireRandom(2) -> Osc::randomizeOrbi.
+      //   * "Reset"          -- always restore the factory defaults. Instant
+      //                         (no morph): this is a "snap to the known good"
+      //                         action, so it uses the UI-thread
+      //                         applyPresetRaw(DEFAULT_RAW) path (one
+      //                         setEditParam per 8 ms) and finishes with
+      //                         Module.stableSync() so the C++ ORBI reference
+      //                         (stable_value_) matches the freshly-reset sound.
       const presetGrid = document.getElementById("Presets");
       {
         const b = document.createElement("button");
         b.textContent = PRESET_RANDOM; // "All Random"
         b.className = "btn btn-outline btn-primary btn-sm";
-        b.title = "Re-roll EVERY parameter to a fresh audition-friendly preset.";
+        b.title = "Re-roll EVERY parameter to a fresh audition-friendly preset (BPM-synced morph).";
         b.dataset.name = PRESET_RANDOM;
-        b.onclick = () => applyPresetRaw(randomRaw(), PRESET_RANDOM);
+        b.onclick = () => fireRandom(0);
         presetGrid.appendChild(b);
       }
       {
         const b = document.createElement("button");
         b.textContent = "Partial Random";
         b.className = "btn btn-outline btn-primary btn-sm";
-        b.title = "Re-roll a random SUBSET (2..6) of parameters to fresh safe values (a development around the current sound). Sliders move to show the new values.";
+        b.title = "Re-roll a random SUBSET (2..6) of parameters to fresh safe values (a development around the current sound). BPM-synced morph.";
         b.dataset.name = "Partial Random";
-        // Runs on the UI thread through applyPresetRaw (the same path All
-        // Random / Reset use): partialRandomRaw() reads the current sliders as
-        // the base, picks 2..6 random params, draws fresh safe values for them
-        // (re-rolling until the step >= 102 raw), and applyPresetRaw writes
-        // each result to both the slider DOM and the DSP (paced 8 ms apart),
-        // so the sliders visibly move to the new values AND the sound changes.
-        b.onclick = () => applyPresetRaw(partialRandomRaw(), "Partial Random");
+        b.onclick = () => fireRandom(1);
         presetGrid.appendChild(b);
       }
       {
         const b = document.createElement("button");
         b.textContent = "Orbi Random";
         b.className = "btn btn-outline btn-primary btn-sm";
-        b.title = "Re-roll a random SUBSET (2..6) of parameters from the LAST STABLE state (defaults at startup, or the result of the last All/Partial/Reset) -- a development that never drifts away from that stable sound. Does not create a new stable state. Sliders move to show the new values.";
+        b.title = "Re-roll a random SUBSET (2..6) of parameters from the LAST STABLE state (defaults at startup, or the result of the last All/Partial) -- a development that never drifts away from that stable sound. Does not create a new stable state. BPM-synced morph.";
         b.dataset.name = "Orbi Random";
-        // Runs on the AUDIO worklet thread via Module.setRndMode(2) +
-        // Module.rndTrigger() -- the same Osc::rndArm/rndTick path the device
-        // uses (RndM = ORBI -> Osc::randomizeOrbi): draws the 2..6-subset from
-        // the worklet's stable_value_ snapshot and applies it to the worklet's
-        // live DSP. The main-thread processor (a separate copy, see wasm.cc)
-        // mirrors the result via the slider-sync loop below (rAF poll of
-        // getEditParamValue) so the sliders show the new values.
         b.onclick = () => fireRandom(2);
         presetGrid.appendChild(b);
       }
@@ -1175,7 +1233,7 @@
         const b = document.createElement("button");
         b.textContent = PRESET_RESET;
         b.className = "btn btn-outline btn-primary btn-sm";
-        b.title = "Always restore the factory default parameters.";
+        b.title = "Always restore the factory default parameters (instant, no morph).";
         b.dataset.name = PRESET_RESET;
         b.onclick = () => applyPresetRaw(DEFAULT_RAW.slice(), PRESET_RESET);
         presetGrid.appendChild(b);

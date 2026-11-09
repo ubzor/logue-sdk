@@ -188,6 +188,34 @@
   // smoothly. The length is a fixed constant (per design: 1 s).
   static constexpr uint32_t kGlideSamples = 1U * 48000U; // 1 s @ 48 kHz
 
+ // ---- Rnd re-roll morph (BPM-synced smooth transition) -----------------------
+ // When a Rnd re-roll fires (All / Part / Orbi), the affected parameters do NOT
+ // jump to their new values: they morph from the OLD raw value to the NEW one,
+ // each with its own START DELAY (stagger, so the params do not all move at
+ // once) and its own SMOOTHSTEP curve (3t^2 - 2t^3) over the morph duration.
+ // The morph is clocked by the tempo (setTempo -> tempo_bpm_, default 120):
+ //   * total morph length = kRndMorphBeats beats (default 120 BPM -> 8 s,
+ //     i.e. 4 bars of 4/4). A new fire while a morph is running re-anchors the
+ //     in-flight params to the CURRENT interpolated value (no jump).
+ //   * stagger: the per-parameter start delay is a random 0..N subdivisions of
+ //     the morph length (N = kRndMorphStaggerDivs), so the params "roll in"
+ //     one after another across the whole phrase.
+ // Discrete params (WA1/2/3, INT/INT2) morph in their own native space for
+ // free: a fractional wavetable index is crossfaded by resolve_wave() (already
+ // interpolates between adjacent tables) and fractional chord cents glide the
+ // interval continuously (chord_.update() takes a continuous cents value).
+ // The breathing (RATE walk streams) is untouched: its targets regenerate on
+ // their own (0.1..10 s) periods, so morphing RATE/SMTx is inaudible.
+ // The morph duration / stagger are computed ONCE at fire time from the
+ // current tempo (a tempo change mid-morph does not re-aim an in-flight
+ // morph -- it only affects the NEXT fire).
+ // These constants are self-contained (no enum/class references), so this
+ // block may live in osc_constants.h, which does NOT include osc.h.
+  static constexpr uint32_t kRndMorphBeats       = 1U * 4U;  // 1 bar of 4/4 (2 s @ 120 BPM)
+  static constexpr uint32_t kRndMorphStaggerDivs = 16U;      // random start-delay granularity (0..15 of the morph length)
+  static constexpr float    kRndMorphBpmMin      = 40.f;     // tempo clamp (48 s morph = still slow but not absurd)
+  static constexpr float    kRndMorphBpmMax      = 240.f;    // tempo clamp (1 s morph)
+
 // ---- Display scaling (raw 10-bit <-> DSP float) -------------------------------
 // Single source of truth for the ranges each editable parameter maps onto,
 // used by BOTH apply_edit_param() (raw -> DSP float) and

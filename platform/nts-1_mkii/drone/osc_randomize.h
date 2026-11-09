@@ -197,23 +197,34 @@ inline int32_t Osc::rnd_draw(uint8_t idx)
 }
 
 // ---- The re-roll itself ------------------------------------------------------
-// All-mode re-roll: draw a fresh safe value for EVERY edit parameter, then apply
-// all of them to the live DSP (see the tail loop). This is the original Rnd
-// behaviour (a full reset to a fresh audition-friendly preset).
+// All-mode re-roll: draw a fresh safe value for EVERY edit parameter. The new
+// values become the MORPH TARGETS (rndMorphStart): the live sound then glides
+// from the current raw values to the new ones over a BPM-synced phrase with
+// per-parameter stagger (see Osc::rndMorphStart / rndMorphTick in osc.h). The
+// OLD apply-all loop is gone -- the morph engine re-applies the in-flight
+// parameters through the same apply_edit_param() path each audio block, so the
+// derived-voice caches (wavetables, chords, SVF, formant) stay consistent
+// while the values move. edit_value_ is written to the TARGETS immediately
+// (the display / stable state show the destination; the morph drives the DSP
+// toward it) -- but rndMorphStart must run BEFORE that write so it can read
+// the OLD values as the morph's `from` (it falls back to morph_cur_ for
+// in-flight params, which already hold the current interpolated value).
 inline void Osc::randomizeAll()
 {
+  int32_t target[kEditParamCount];
   for (uint8_t i = 0; i < kEditParamCount; ++i)
-    edit_value_[i] = rnd_draw(i);
+    target[i] = rnd_draw(i);
 
-  // ---- Apply every edit parameter to the live DSP ---------------------------
-  // Re-run the same apply path init() uses, so params_ (and the derived phasor
-  // caches / SVF coefficients) are fully consistent with the new raw values.
-  // apply_edit_param() is idempotent per-parameter.
+  // Start the morph toward the fresh targets (reads the current values as
+  // `from`). Must run BEFORE edit_value_ is overwritten below.
+  rndMorphStart(target);
+
   for (uint8_t i = 0; i < kEditParamCount; ++i)
-    apply_edit_param(kEditParamFirst + i, edit_value_[i]);
+    edit_value_[i] = target[i];
 
   // STABILIZE: an All re-roll is a fresh stable state -- the ORBI reference
-  // (stable_value_) now points at this result.
+  // (stable_value_) now points at this result (the morph target, not the
+  // in-flight value: an ORBI fire mid-morph develops from the destination).
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     stable_value_[i] = edit_value_[i];
 }
@@ -228,6 +239,15 @@ inline void Osc::randomizeAll()
 // randomizeAll() are used, so All/Part share the same distribution.
 inline void Osc::randomizePartial()
 {
+  // Draw the fresh targets into a temp array (seeded from the CURRENT live
+  // state, so the untouched params keep their exact values -- the morph engine
+  // then only activates the params that actually changed). The LCG draw order
+  // is unchanged from the pre-morph version: one count draw, then per-slot
+  // idx + value draws.
+  int32_t target[kEditParamCount];
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    target[i] = edit_value_[i];
+
   const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
   for (uint32_t c = 0; c < count; ++c)
   {
@@ -246,12 +266,15 @@ inline void Osc::randomizePartial()
         break;
       v = rnd_draw(idx);
     }
-    edit_value_[idx] = v;
-    // Apply just this parameter immediately (idempotent). Applying per-parameter
-    // (rather than the full tail loop) keeps the other 40+ untouched params
-    // out of the apply path and matches the "only these changed" semantics.
-    apply_edit_param(kEditParamFirst + idx, v);
+    target[idx] = v;
   }
+
+  // Morph toward the targets (reads the current values as `from`; unchanged
+  // params have target == old target, so the engine skips them). Then commit
+  // the targets to edit_value_ (display / stable state show the destination).
+  rndMorphStart(target);
+  for (uint8_t i = 0; i < kEditParamCount; ++i)
+    edit_value_[i] = target[i];
 
   // STABILIZE: a Part re-roll is a fresh stable state too -- the ORBI
   // reference (stable_value_) now points at this result.
@@ -277,15 +300,15 @@ inline void Osc::randomizeOrbi()
   // Work on a temp copy seeded from the stable state; edit_value_ is committed
   // only once, at the end. (Keeps the LCG draw order identical to
   // randomizePartial(): one count draw, then per-slot idx + value draws.)
-  int32_t v[kEditParamCount];
+  int32_t target[kEditParamCount];
   for (uint8_t i = 0; i < kEditParamCount; ++i)
-    v[i] = stable_value_[i];
+    target[i] = stable_value_[i];
 
   const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
   for (uint32_t c = 0; c < count; ++c)
   {
     const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
-    const int32_t base = v[idx];
+    const int32_t base = target[idx];
     int32_t x = rnd_draw(idx);
     for (uint32_t t = 0; t < kRndRedrawMax; ++t)
     {
@@ -296,15 +319,15 @@ inline void Osc::randomizeOrbi()
         break;
       x = rnd_draw(idx);
     }
-    v[idx] = x;
+    target[idx] = x;
   }
 
-  // Commit to the live state + DSP. stable_value_ is intentionally left
-  // untouched: ORBI never stabilizes.
+  // Morph toward the targets (the live sound glides from its CURRENT values to
+  // the ORBI result, not from the stable state). stable_value_ is intentionally
+  // left untouched: ORBI never stabilizes.
+  rndMorphStart(target);
   for (uint8_t i = 0; i < kEditParamCount; ++i)
-    edit_value_[i] = v[i];
-  for (uint8_t i = 0; i < kEditParamCount; ++i)
-    apply_edit_param(kEditParamFirst + i, v[i]);
+    edit_value_[i] = target[i];
 }
 
 // Re-copy the live edit_value_ into the stable-state snapshot (see

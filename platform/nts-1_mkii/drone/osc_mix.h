@@ -28,6 +28,26 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 {
   (void)in; // drone generator does not use the audio input
 
+#ifdef __EMSCRIPTEN__
+  // ---- Web-sim Rnd re-roll request (main-thread UI -> audio worklet) --------
+  // The web simulator's All / Part / Orbi buttons run on the MAIN thread and
+  // call Osc::simRndRequest(mode), which packs (mode, valid) into
+  // sim_rnd_request_ (see osc.h). The main-thread and worklet-thread
+  // processors are SEPARATE COPIES (wasm.cc), so the main thread cannot arm
+  // the worklet's rnd_fire_ directly -- this is the bridge. Consume the
+  // request here (worklet thread) by arming the worklet's own debounce with
+  // the requested mode, NOT debounced (a single click is a single event,
+  // exactly like the hardware Fire-button path). The consumption must happen
+  // BEFORE rndTick() below so the re-roll fires in the very same block.
+  if (sim_rnd_request_ & (1U << 31))
+  {
+    const uint8_t mode = static_cast<uint8_t>(sim_rnd_request_ & 0x7U);
+    sim_rnd_request_ = 0; // clear before arming (no re-fire)
+    rnd_mode_ = (mode <= kRndModeOrbi) ? mode : kRndModeAll;
+    rndArm(false);
+  }
+#endif
+
   // ---- Rnd debounce tick (audio clock) --------------------------------------
   // Advance the audio clock and consume any pending Rnd re-roll (immediate or
   // the final one after a 0.5 s silence window). Runs in BOTH builds: the
@@ -35,6 +55,16 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // arm the debounce (rndArm / rndRequest), and this is the single place the
   // re-roll actually fires. See the Rnd debounce comment block in osc.h.
   rndTick(frames);
+
+  // ---- Rnd re-roll morph (BPM-synced smooth transition) --------------------
+  // A re-roll that fired this block (rndTick above) started a morph toward
+  // its fresh targets; advance the morph clock here and re-apply the
+  // in-flight parameters (smoothstep-interpolated raw values) through the
+  // same apply_edit_param() path a manual PARAM_VAL edit uses. Runs AFTER
+  // rndTick so a fresh fire is picked up in the very same block. When no
+  // morph is active this is a single branch check (zero cost). See
+  // Osc::rndMorphStart / rndMorphTick in osc.h.
+  rndMorphTick(frames);
 
   // ---- Pitch glide (portamento) ---------------------------------------------
   // If a note change is in flight, advance the base phase increment LINEARLY

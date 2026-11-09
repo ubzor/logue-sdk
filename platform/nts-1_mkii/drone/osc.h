@@ -424,6 +424,146 @@ public:
     rnd_cooldown_until_ = until;
   }
 
+  // Start a morph toward a fresh set of targets (see the state block above).
+  // Called from the audio thread by randomizeAll/Partial/Orbi() with the new
+  // raw values (target[i]) for ALL kEditParamCount parameters; only the params
+  // that actually CHANGE become active (target != the param's current target).
+  // If a morph is already in flight, the in-flight params are RE-AIMED: their
+  // `from` becomes the CURRENT interpolated value (seamless re-target, no
+  // jump) and their stagger is kept, so the whole sound keeps flowing toward
+  // the new targets instead of restarting from scratch. The tempo at fire
+  // time sets the phrase length (a tempo change mid-morph does NOT re-aim an
+  // in-flight morph -- it affects the NEXT fire only).
+  void rndMorphStart(const int32_t *target)
+  {
+    float bpm = tempo_bpm_;
+    if (bpm < kRndMorphBpmMin)
+      bpm = kRndMorphBpmMin;
+    else if (bpm > kRndMorphBpmMax)
+      bpm = kRndMorphBpmMax;
+    // Phrase length in samples: kRndMorphBeats beats at `bpm` (1 beat = 60/bpm s).
+    const uint32_t total = (uint32_t)(kRndMorphBeats * 60.0f / bpm * 48000.0f);
+
+    const bool reaim = morph_active_;
+    if (!reaim)
+    {
+      // Fresh morph: clean slate (nothing active until the loop below adds).
+      morph_cnt_ = 0;
+      morph_elapsed_ = 0;
+    }
+    for (uint8_t i = 0; i < kEditParamCount; ++i)
+    {
+      const bool has_target = (target != nullptr) && (target[i] != morph_to_[i]);
+      if (!has_target)
+      {
+        if (reaim)
+          continue; // mid-morph, unchanged by this fire: keep its old target
+        continue;   // fresh morph, no new target: nothing to do
+      }
+      // Active: morph from the CURRENT interpolated value to the new target.
+      // Fresh morph: `from` = edit_value_ (still the OLD value -- the caller
+      // sets edit_value_ AFTER rndMorphStart, see osc_randomize.h). Re-aim:
+      // `from` = morph_cur_ (the in-flight value, so the handoff is seamless).
+      morph_from_[i] = reaim ? morph_cur_[i] : edit_value_[i];
+      morph_to_[i] = target[i];
+      morph_cur_[i] = morph_from_[i];
+      if (!reaim)
+        // Random stagger: 0..(kRndMorphStaggerDivs-1) subdivisions of the
+        // phrase, so the params roll in across the whole 4-bar window.
+        morph_start_[i] = (uint32_t)((uint32_t)rnd_int(kRndMorphStaggerDivs) * total / kRndMorphStaggerDivs);
+      // else: keep the original start delay (already mid-flight).
+      morph_idx_[morph_cnt_] = i;
+      ++morph_cnt_;
+    }
+    // ANCHOR: guarantee that at least ONE parameter starts IMMEDIATELY
+    // (morph_start_ = 0), so the user sees/hears a change on the very first
+    // audio block after the fire. Without this, the random stagger could put
+    // every active parameter's start delay at 1..8 s, and the user would click
+    // the button and wait several seconds before anything moves -- the re-roll
+    // would feel "unresponsive" even though the morph is in progress. The
+    // anchor is the active parameter with the LARGEST raw delta (the most
+    // audible change); if the morph has only one active parameter, that one is
+    // the anchor. The other parameters keep their random stagger, so the
+    // musical "roll-in" effect is preserved. On a re-aim (mid-morph fire) the
+    // anchor logic is skipped: the in-flight parameters already have their
+    // original start delays (some may have already started, some are still in
+    // their stagger), and re-anchoring would disrupt the in-flight morph.
+    if (!reaim && (morph_cnt_ > 0U))
+    {
+      uint8_t anchor = morph_idx_[0];
+      int32_t max_delta = 0;
+      for (uint8_t s = 1U; s < morph_cnt_; ++s)
+      {
+        const uint8_t i = morph_idx_[s];
+        int32_t d = morph_to_[i] - morph_from_[i];
+        if (d < 0)
+          d = -d;
+        if (d > max_delta)
+        {
+          max_delta = d;
+          anchor = i;
+        }
+      }
+      morph_start_[anchor] = 0;
+    }
+    morph_total_smp_ = total;
+    morph_active_ = (morph_cnt_ > 0U) ? 1 : 0;
+  }
+
+  // Audio-thread tick, called once per process() block with the block's frame
+  // count, AFTER the re-rolls (rndTick) so a fresh fire this block is picked
+  // up in the very same block. Advances the morph clock and, for each active
+  // parameter whose start delay has elapsed, applies the smoothstep-
+  // interpolated raw value through apply_edit_param() (the same path as a
+  // manual PARAM_VAL edit, so all derived-voice caches stay consistent). When
+  // a param reaches its end it snaps exactly to the target (kills float-lerp
+  // residue) and retires from the active list; when the last param retires the
+  // morph disarms (the idle path is a single branch check from then on).
+  void rndMorphTick(uint32_t frames)
+  {
+    if (!morph_active_)
+      return;
+    morph_elapsed_ += frames;
+    bool any_left = false;
+    for (uint8_t s = 0; s < morph_cnt_; ++s)
+    {
+      const uint8_t i = morph_idx_[s];
+      const uint32_t end = morph_start_[i] + morph_total_smp_;
+      if (morph_elapsed_ >= end)
+      {
+        // Done: snap exactly to the target and retire (swap with the last).
+        if (morph_cur_[i] != morph_to_[i])
+        {
+          edit_value_[i] = morph_to_[i];
+          apply_edit_param(kEditParamFirst + i, morph_to_[i]);
+        }
+        morph_cur_[i] = morph_to_[i];
+        morph_idx_[s] = morph_idx_[morph_cnt_ - 1U];
+        --morph_cnt_;
+        --s; // re-process the swapped-in slot
+        continue;
+      }
+      if (morph_elapsed_ < morph_start_[i])
+      {
+        any_left = true; // start delay not elapsed yet
+        continue;
+      }
+      // In flight: smoothstep over [start, start+total).
+      const float t = (float)(morph_elapsed_ - morph_start_[i]) / (float)morph_total_smp_;
+      const float tt = t * t * (3.0f - 2.0f * t); // smoothstep 3t^2 - 2t^3
+      const int32_t raw = (int32_t)(morph_from_[i] + (morph_to_[i] - morph_from_[i]) * tt + 0.5f);
+      if (raw != morph_cur_[i])
+      {
+        morph_cur_[i] = raw;
+        edit_value_[i] = raw; // keep the display (PARAM VAL) tracking the morph
+        apply_edit_param(kEditParamFirst + i, raw);
+      }
+      any_left = true;
+    }
+    if (!any_left)
+      morph_active_ = 0;
+  }
+
   // Audio-thread tick, called once per process() block with the block's frame
   // count. Advances the audio clock, then consumes pending re-rolls:
   //   * rnd_fire_ (immediate, from a fresh change) always fires.
@@ -459,6 +599,65 @@ public:
   uint8_t getRndRun() const { return rnd_run_; }
   void setRndRun(uint8_t v) { rnd_run_ = v; }
   volatile uint8_t rnd_run_ = 0;
+
+  // ---- Rnd re-roll MORPH (BPM-synced smooth transition) ----------------------
+  // The Rnd re-rolls (All / Part / Orbi) do not apply their new values
+  // instantly: every affected edit parameter morphs from its OLD raw value to
+  // the NEW one over a BPM-synced phrase (kRndMorphBeats beats, 4 bars of 4/4
+  // = 8 s at the default 120 BPM), each with its own random START DELAY
+  // (stagger, 0..kRndMorphStaggerDivs-1 subdivisions of the phrase) and a
+  // smoothstep (3t^2 - 2t^3) curve, so the parameters "roll in" one after
+  // another instead of all at once (see the constants in osc_constants.h and
+  // rndMorphStart/rndMorphTick below). The morph runs in the AUDIO thread
+  // (rndMorphTick, once per process() block, K-rate): it re-applies the
+  // in-flight parameters through the SAME apply_edit_param() path a manual
+  // PARAM_VAL edit uses, so the derived-voice caches (wavetables, chords, SVF
+  // coefficients, formant combs) stay consistent with the moving raw values,
+  // exactly as during a knob turn. Discrete parameters morph in their own
+  // native space for free (a fractional wavetable index crossfades via
+  // resolve_wave(); fractional chord cents glide continuously).
+  //
+  //   morph_active_     0/1: a morph is in flight (rndMorphTick early-outs on
+  //                       a single branch check when idle).
+  //   morph_elapsed_    samples since the morph started (audio clock).
+  //   morph_total_smp_  morph phrase length in samples (kRndMorphBeats at the
+  //                       fire-time tempo).
+  //   morph_from_[i]    raw value the param morphs FROM (the old value, or the
+  //                       current interpolated value on a re-aim mid-morph).
+  //   morph_to_[i]      raw value the param morphs TO (the re-roll target).
+  //   morph_start_[i]   per-parameter start delay in samples (stagger).
+  //   morph_cur_[i]     raw value currently applied (for re-aim + UI read).
+  //   morph_idx_[i]     i if param i is active in this morph, else 0xFF.
+  //   morph_cnt_        number of active params (<= kEditParamCount).
+  int32_t  morph_from_[kEditParamCount];
+  int32_t  morph_to_[kEditParamCount];
+  uint32_t morph_start_[kEditParamCount];
+  int32_t  morph_cur_[kEditParamCount];
+  uint8_t  morph_idx_[kEditParamCount];
+  uint8_t  morph_cnt_ = 0;
+  uint32_t morph_total_smp_ = 0;
+  uint32_t morph_elapsed_ = 0;
+  uint8_t  morph_active_ = 0;
+
+  // Raw value of edit parameter i as the web simulator's UI thread reads it
+  // (the slider-sync loop): while a morph is in flight this is the CURRENT
+  // interpolated raw value, so the sim's sliders visibly "travel" toward the
+  // re-roll target instead of jumping. Returns the plain edit_value_ when no
+  // morph is active. Read-only for the UI (audio thread writes morph_cur_).
+  int32_t getEditMorphValue(uint8_t idx) const
+  {
+    return (morph_active_ && (idx < kEditParamCount)) ? morph_cur_[idx] : getEditValue(idx);
+  }
+
+  // True while a Rnd re-roll morph is in flight (any parameter still moving
+  // or still in its stagger delay). The web simulator's UI thread uses this
+  // to know when to stop the post-fire slider-sync poll: the poll must NOT
+  // stop on a "no value changed this frame" tick during the stagger window
+  // (before any parameter has started moving), because the morph is still in
+  // progress -- it must wait until rndMorphTick disarms morph_active_ (all
+  // parameters have reached their targets). Inlined branch, zero cost on ARM;
+  // only called from the UI thread in the web build.
+  bool isMorphActive() const { return morph_active_ != 0U; }
 
   // Audio-thread tick, called once per process() block with the block's frame
   // count. Advances the audio clock, then consumes pending re-rolls:
@@ -535,6 +734,32 @@ public:
   void rndRequest()
   {
     rndArm(false);
+  }
+
+  // ---- Rnd re-roll request channel (main-thread UI -> audio worklet) --------
+  // The web simulator's All/Part/Orbi buttons run on the MAIN thread (UI) but
+  // must fire the re-roll on the AUDIO-WORKLET thread (rndTick, in process()),
+  // because the worklet's processor is a SEPARATE COPY (see wasm.cc) that
+  // owns the live DSP state (edit_value_, stable_value_, morph_*). A plain
+  // rndRequest() on the main-thread processor would set its own rnd_fire_
+  // flag, which the worklet never reads -- so the re-roll would never fire.
+  //
+  // This channel packs (mode, valid) into a single 32-bit slot the worklet
+  // consumes once per process() block:
+  //   * bit 31   = valid flag
+  //   * bits 0..2 = mode (kRndModeAll=0 / kRndModePart=1 / kRndModeOrbi=2)
+  //   * bits 3..30 = reserved (0)
+  // A 32-bit aligned store on x86 is atomic (same argument as sim_edit_request_).
+  volatile uint32_t sim_rnd_request_ = 0;
+
+  // Write an Rnd re-roll request from the main thread (UI). Mode is 0..2
+  // (kRndModeAll/kRndModePart/kRndModeOrbi); out-of-range values fall back to
+  // kRndModeAll. Safe to call from any thread; the worklet picks it up on the
+  // next block (see the consumption block in osc_mix.h::process).
+  void simRndRequest(uint8_t mode)
+  {
+    const uint8_t m = (mode <= kRndModeOrbi) ? mode : kRndModeAll;
+    sim_rnd_request_ = (1U << 31) | static_cast<uint32_t>(m);
   }
 #endif
 
@@ -678,6 +903,10 @@ public:
     // Clear any pending direct edit-parameter request (the UI may have
     // already sent one before init ran on the worklet thread).
     sim_edit_request_ = 0;
+    // Also clear any pending Rnd re-roll request (same race: a UI click that
+    // landed before the worklet's init would otherwise fire a phantom re-roll
+    // on the very first process() block after init).
+    sim_rnd_request_ = 0;
 #endif
     // First-order relaxation coefficients (per sample) for the exponential
     // attack/release. alpha = 1 - exp(-5 / N) where N is the phase length in

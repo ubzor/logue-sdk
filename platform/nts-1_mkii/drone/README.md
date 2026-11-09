@@ -67,6 +67,72 @@ Key facts about the path:
   sub-2, chord, chord-2, wavetable morph) is recomputed from it, so the whole
   sound slides in pitch together.
 
+### Rnd re-roll (BPM-synced smooth morph)
+
+The Rnd re-rolls do **not** jump: when a re-roll fires (from the **Rnd**
+header slot, or the web sim's **All / Part / Orbi** buttons) the affected
+parameters **morph** from their old values to the new ones over a BPM-synced
+phrase, each with its own random start delay (stagger) and a **smoothstep**
+(`3t² − 2t³`) curve, so the parameters "roll in" one after another instead of
+all at once.
+
+* **Duration**: `kRndMorphBeats` = **1 bar of 4/4 = 4 beats** (constants in
+  `osc_constants.h`). At the default 120 BPM that is **2 s**; the actual length
+  is computed at fire time from the current tempo (`setTempo()`, default 120,
+  clamped to 40–240 BPM), so at 60 BPM the same re-roll takes 4 s. A tempo
+  change mid-morph does **not** re-aim an in-flight morph — it only affects the
+  next fire.
+* **Stagger**: each active parameter gets a random start delay of
+  `0..(kRndMorphStaggerDivs − 1)` subdivisions of the phrase
+  (`kRndMorphStaggerDivs` = 16), so a 1-bar re-roll "unrolls" across the whole
+  window. **Anchor**: at least one parameter (the one with the largest raw
+  delta, i.e. the most audible change) always starts immediately
+  (`morph_start_ = 0`), so the user sees/hears a change on the very first
+  audio block after the fire -- without this, the random stagger could put
+  every active parameter's start delay at 0..2 s and the re-roll would feel
+  "unresponsive". The anchor is only applied on a FRESH morph (not on a
+  re-aim mid-morph), so an in-flight morph is never disrupted.
+* **What morphs**: the parameters selected by the re-roll (All → all 11,
+  Part/Orbi → the 2..6 re-drawn ones), each through the same
+  `apply_edit_param()` path a manual PARAM_VAL edit uses, so the derived-voice
+  caches (wavetables, chords, SVF coefficients, formant combs) stay consistent
+  with the moving raw values. Discrete parameters morph in their native space
+  for free: a fractional wavetable index crossfades via `resolve_wave()` and
+  fractional chord cents glide the interval continuously.
+* **Re-fire mid-morph**: a new fire re-anchors the in-flight parameters to the
+  CURRENT interpolated value (no jump) and keeps their stagger, so the sound
+  keeps flowing toward the new targets instead of restarting.
+* **Where it runs**: audio thread, K-rate — `rndMorphTick()` is called once per
+  `process()` block (in `osc_mix.h`), right after the re-roll `rndTick()`.
+  When no morph is active it is a single branch check (zero cost).
+* **Web sim UI**: `getEditParamValue()` (wasm.cc) returns the CURRENT
+  interpolated value while a morph is in flight, so the sim's sliders travel
+  with the morph in real time. The post-fire sync poll window in
+  `websim/osc.html` is `kRndMorphBeats` @ 120 BPM + max stagger + margin
+  (≈ 5 s). The poll stops early when **both** (a) no value changed on this
+  tick **and** (b) `getMorphActive()` (wasm.cc, exposed from
+  `Osc::isMorphActive()`) reports the morph is done. The morph-active check is
+  essential: the stagger window (up to `kRndMorphStaggerDivs-1` = 15
+  subdivisions of the phrase, ~2 s at 120 BPM) can be longer than a single
+  33 ms poll tick, so a "no value changed this frame" tick during the stagger
+  would otherwise stop the poll prematurely and the sliders would never move
+  even though the worklet's morph was still running.
+* **Web sim buttons**: in the web simulator the main-thread and the
+  audio-worklet processors are **separate copies** (wasm.cc), so a plain
+  `rndRequest()` on the main-thread copy would never reach the worklet's
+  `rndTick`. To bridge the gap, `Osc::simRndRequest(mode)` (a 32-bit packed
+  slot: bit 31 = valid, bits 0..2 = mode, consumed in `process()` by
+  `osc_mix.h`) carries the request from the UI thread to the worklet. The
+  **All Random / Partial Random / Orbi Random** buttons all go through
+  `fireRandom(mode)` (websim/osc.html) → `Module.setRndMode(mode)` +
+  `Module.rndTrigger()` → worklet `rndTick` → `randomizeAll/Partial/Orbi` →
+  `rndMorphStart` — i.e. the SAME code path as the hardware, so all three
+  morph identically. **Reset** is the only button that bypasses the worklet
+  path: it is a "snap to factory defaults" action (no morph) and uses the
+  UI-thread `applyPresetRaw(DEFAULT_RAW)` path (one `setEditParam` per 8 ms,
+  followed by `Module.stableSync()` so the C++ ORBI reference matches the
+  freshly-reset sound).
+
 ### Envelope / key behaviour
 
 The unit runs its own **A-H-R** envelope (the platform EG is set to *open*):

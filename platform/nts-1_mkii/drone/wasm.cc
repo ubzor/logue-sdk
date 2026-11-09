@@ -416,7 +416,27 @@ extern "C" int getSelectParam()
 
 extern "C" int getEditParamValue(int idx)
 {
-  return static_cast<int>(processor.getEditValue(static_cast<uint8_t>(idx)));
+  // While a Rnd re-roll morph is in flight (Osc::rndMorphTick), return the
+  // CURRENT interpolated raw value (getEditMorphValue) so the sim's sliders
+  // and display visibly "travel" toward the re-roll target instead of
+  // jumping to it on the first poll. getEditMorphValue falls back to the
+  // plain edit_value_ when no morph is active (the common case).
+  return static_cast<int>(processor.getEditMorphValue(static_cast<uint8_t>(idx)));
+}
+
+// 1 while a Rnd re-roll morph is in flight (any parameter still moving or
+// still in its stagger delay), 0 otherwise. The web simulator's post-fire
+// slider-sync poll (websim/osc.html fireRandom) uses this to know when to
+// STOP: the poll must NOT stop on a "no value changed this frame" tick during
+// the stagger window (before any parameter has started moving), because the
+// morph is still in progress -- it must wait until rndMorphTick disarms
+// morph_active_ (all parameters have reached their targets). Without this
+// check the poll stopped after the very first tick (all 44 parameters were
+// in their stagger delay, so edit_value_ had not changed yet), and the
+// sliders never moved even though the worklet's morph was still running.
+extern "C" int getMorphActive()
+{
+  return processor.isMorphActive() ? 1 : 0;
 }
 
 // Write one edit-parameter (index 0..kEditParamCount-1, raw 0..1023) DIRECTLY
@@ -442,13 +462,20 @@ extern "C" void setEditParam(int idx, int raw)
 
 // Fire the random re-roll on the audio-worklet thread (mirrors the hardware's
 // "Rnd" trigger slot, but NOT debounced -- a single click is a single event).
-// Arms Osc::rndRequest() -> rndArm(false): every click re-rolls immediately on
-// the next process() block, honouring the CURRENT RndM type (All, Part or
-// ORBI) -- so the web sim's Fire button re-rolls per the selected type. Same
-// random windows (osc_rand() LCG) as the device.
+// The web simulator's main-thread and audio-worklet processors are SEPARATE
+// COPIES (see the comment in setEditParam), so a plain rndRequest() on the
+// main-thread processor would only set its OWN rnd_fire_ flag, which the
+// worklet never reads -- the re-roll would never fire. Instead, write the
+// request to the main-thread processor's sim_rnd_request_ (a 32-bit packed
+// slot: bit 31 = valid, bits 0..2 = mode); the worklet's process() consumes
+// it on the next block (see osc_mix.h) by arming the worklet's own debounce
+// with the requested mode. The mode is read from the main-thread processor
+// (the UI keeps it in sync via setRndMode), so the trigger honours the
+// CURRENT RndM type (All / Part / Orbi) without a separate mode argument.
+// Same random windows (osc_rand() LCG) as the device.
 extern "C" void rndTrigger()
 {
-  processor.rndRequest();
+  processor.simRndRequest(static_cast<uint8_t>(processor.getRndMode()));
 }
 
 // ---- Rnd randomization-type accessors (web-sim "Random" block) --------------
@@ -498,4 +525,5 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("getRndRun", &getRndRun);
   emscripten::function("setRndRun", &setRndRun);
   emscripten::function("stableSync", &stableSync);
+  emscripten::function("getMorphActive", &getMorphActive);
 }
