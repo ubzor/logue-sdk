@@ -100,16 +100,30 @@ all at once.
   for free: a fractional wavetable index crossfades via `resolve_wave()` and
   fractional chord cents glide the interval continuously.
 * **Re-fire mid-morph (C1-continuous re-aim)**: a new fire while a morph is in
-  flight does NOT restart the morph. Each in-flight parameter **continues from
-  its current progress** (`morph_t_[i]`, 0.0..1.0) toward whatever target the
-  new fire gives it; untouched parameters keep gliding to their old target.
-  Re-targeted parameters have their segment start (`morph_from_`) **re-solved**
-  so the smoothstep passes through the current value at the current progress
-  and reaches the new target at progress 1 — this keeps both the **value** and
-  the **velocity** continuous (no click, no phase jump). This also fixes the
-  "aging" bug where parameters not re-targeted by the new fire would snap to
-  their old target part-way through (a hard discontinuity). The anchor is NOT
-  applied on a re-aim (parameters already have their start delays).
+  flight does NOT restart the morph. It re-aims **every** parameter (not just
+  the currently-active ones), because a new fire (especially Orbi/Part) often
+  re-rolls a *different* subset of parameters than the one in flight. For each
+  parameter:
+  - **already active AND re-targeted, safely mid-flight (0<t<1)**: the segment
+    start (`morph_from_`) is **re-solved** so the smoothstep passes through the
+    current value at the current progress AND reaches the new target at
+    progress 1 — both **value** and **velocity** stay continuous (no click, no
+    phase jump).
+  - **already active but in its stagger (t~0) or already at/over its target
+    (t~1)**: the C1 solve is degenerate there (division by `1-st`→∞ near
+    `st=1`; a stagger-delayed param's `morph_cur_` is not a live point), so it
+    does a **plain re-start** from its current value (`from = cur`, `start =
+    now`, `t = 0`) — click-free, no division, no garbage read.
+  - **NOT yet active but re-targeted by the new fire**: it is **added to the
+    morph now** (`from = edit_value_` [still the old value — the caller
+    overwrites `edit_value_` *after* `rndMorphStart`], `to = new target`,
+    `cur = from`, `t = 0`, `start = now`). Without this, such a parameter's
+    slider would jump instantly to the new target (and the DSP would snap)
+    because `edit_value_` is committed immediately by the caller. Starting it
+    now (no stagger on a re-aim — the user already clicked) makes it glide.
+  - **unchanged** (`new_to == current value`): skipped — nothing to morph.
+  The anchor is NOT applied on a re-aim (parameters already have their start
+  delays; newly-added ones start immediately).
 * **Where it runs**: audio thread, K-rate — `rndMorphTick()` is called once per
   `process()` block (in `osc_mix.h`), right after the re-roll `rndTick()`.
   When no morph is active it is a single branch check (zero cost).

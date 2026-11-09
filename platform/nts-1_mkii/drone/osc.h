@@ -453,34 +453,82 @@ public:
     }
     if (reaim)
     {
-      // RE-AIM: every currently-active param continues from its current
-      // (t, cur) point toward whatever target the new fire gives it (unchanged
-      // params keep their target). This kills AGING (no stale snaps) and keeps
-      // value + velocity continuous (no click). Re-targeted params get their
-      // `from` re-solved for C1 continuity; untouched params simply keep
-      // gliding (their from/to/t are already consistent).
+      // RE-AIM: handle EVERY parameter (not just the currently-active ones).
+      // The new fire may change parameters that were NOT in the previous
+      // morph (e.g. Orbi re-rolls a different 2..6-subset each time). For
+      // those, edit_value_ is about to be overwritten by the caller (see
+      // osc_randomize.h) with the new target -- if we don't add them to the
+      // morph here, their slider jumps instantly to the target (no glide)
+      // and the DSP snaps (a hard discontinuity). So:
+      //   * param already active in this morph AND re-targeted:
+      //       - safely mid-flight (0<t<1): C1-continuous re-aim (re-solve from).
+      //       - in stagger (t~0) or at/over target (t~1): plain re-start from
+      //         the current value (start NOW, from = cur, t = 0). No division,
+      //         no garbage read, no jump.
+      //   * param NOT active in this morph but re-targeted by the new fire:
+      //       add it to the morph NOW (from = edit_value_ [still the OLD value
+      //       -- the caller overwrites edit_value_ AFTER rndMorphStart],
+      //       to = new target, cur = from, t = 0, start = elapsed [no stagger
+      //       on a re-aim -- the user already clicked, start immediately]).
+      //   * param unchanged (new_to == current edit_value_): skip (nothing to
+      //       morph; it keeps its value, active or not).
+      //
+      // "current edit_value_" for the from-value: for an ACTIVE param the
+      // live value is morph_cur_[i] (the in-flight interpolation); for an
+      // INACTIVE param it is edit_value_[i] (which is still the old value --
+      // the caller has not overwritten it yet). We pick the source based on
+      // whether the param is in morph_idx_[0..cnt-1].
+
+      // First pass: mark which params are already active (for O(1) lookup).
+      bool active_in_morph[kEditParamCount];
+      for (uint8_t i = 0; i < kEditParamCount; ++i) active_in_morph[i] = false;
       for (uint8_t s = 0; s < morph_cnt_; ++s)
+        active_in_morph[morph_idx_[s]] = true;
+
+      for (uint8_t i = 0; i < kEditParamCount; ++i)
       {
-        const uint8_t i = morph_idx_[s];
-        const float t = morph_t_[i]; // current progress 0.0..1.0
-        const float st = t * t * (3.0f - 2.0f * t); // smoothstep s(t)
-        const int32_t new_to = (target != nullptr) ? target[i] : morph_to_[i];
-        if (new_to == morph_to_[i])
-          continue; // untouched: keep gliding to the old target (consistent)
-        // Steer to `new_to` from the current point with C1 continuity: solve
-        // from_new so the smoothstep passes through `cur` at progress st and
-        // reaches new_to at progress 1. Value is continuous (cur unchanged);
-        // velocity is continuous because the curve shape s'(t) is unchanged at
-        // this t. Guard st near 0 (param barely started): plain re-start.
-        if (st < 0.001f)
-          morph_from_[i] = morph_cur_[i];
+        if (target == nullptr)
+          continue; // no new targets (shouldn't happen; rndTrigger always draws)
+        const int32_t new_to = target[i];
+        // The param's CURRENT value (what the sound is at RIGHT NOW):
+        const int32_t cur_val = active_in_morph[i] ? morph_cur_[i] : edit_value_[i];
+        if (new_to == cur_val)
+          continue; // not actually changing: nothing to morph
+        if (new_to == morph_to_[i] && active_in_morph[i])
+          continue; // already gliding to this exact target: leave it be
+
+        if (active_in_morph[i])
+        {
+          // Already in this morph: re-aim it in place.
+          const uint32_t end = morph_start_[i] + morph_total_smp_;
+          const bool in_flight = (morph_elapsed_ >= morph_start_[i]) &&
+                                 (morph_elapsed_ <  end);
+          if (in_flight && (morph_t_[i] > 0.001f) && (morph_t_[i] < 0.999f))
+          {
+            const float t  = morph_t_[i];
+            const float st = t * t * (3.0f - 2.0f * t);
+            morph_from_[i] = (int32_t)((morph_cur_[i] - new_to * st) / (1.0f - st) + 0.5f);
+          }
+          else
+          {
+            morph_from_[i] = morph_cur_[i];
+            morph_start_[i] = morph_elapsed_;
+            morph_t_[i] = 0.0f;
+          }
+          morph_to_[i] = new_to;
+        }
         else
-          morph_from_[i] = (int32_t)((morph_cur_[i] - new_to * st) / (1.0f - st) + 0.5f);
-        morph_to_[i] = new_to;
-        // morph_cur_ / morph_t_ / morph_start_ are left unchanged: the param
-        // keeps its progress and stagger, so nothing snaps.
+        {
+          // New to this morph: seat it and append to the active list.
+          morph_from_[i] = edit_value_[i]; // still the OLD value (pre-overwrite)
+          morph_to_[i] = new_to;
+          morph_cur_[i] = morph_from_[i];
+          morph_t_[i] = 0.0f;
+          morph_start_[i] = morph_elapsed_; // start NOW (no stagger on re-aim)
+          morph_idx_[morph_cnt_] = i;
+          ++morph_cnt_;
+        }
       }
-      // No anchor on a re-aim (params already have their start delays).
       morph_total_smp_ = total;
       morph_active_ = (morph_cnt_ > 0U) ? 1 : 0;
       return;
