@@ -978,7 +978,8 @@
         set("Comb Res", rRange(0, 307));
         // FOLD2: 0..30% (raw 0..307) -- a light "worn" edge.
         set("Fold 2", rRange(0, 307));
-        // DCK: 0..25% (raw 0..256) -- a gentle low-end "breathing".
+        // DCK: 0..25% (raw 0..256) -- a gentle sidechain: the SUB1+SUB2
+        // envelope follower ducks the MAIN voice a few dB (floor 0.7).
         set("Duck", rRange(0, 256));
         return raws;
       }

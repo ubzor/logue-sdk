@@ -77,7 +77,7 @@ const __unit_header unit_header_t unit_header = {
         //   40: FLVL - formant stage dry/wet (0..100%), default 0 (off / transparent)
         //   41: COMB - comb resonator feedback (0..100% -> 0..0.9 fb), default 0 (off)
         //   42: FLD2 - second (cascaded) wavefolder depth (0..100%), default 0 (off)
-        //   43: DCK  - envelope-follower self-ducking amount (0..100%), default 0 (off)
+        //   43: DCK  - sidechain-duck amount of the MAIN voice by SUB1/SUB2 (0..100%), default 0 (off)
         {0, 43, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected

@@ -317,6 +317,27 @@ wasm: $(WASMOBJS)
 	@cd "$(SANDBOXDIR)" && npx vite build
 	@cp -p "$(SANDBOXDIR)/sim/flyon.css" "$(WASMDIR)/flyon.css"
 	@cp -p "$(SANDBOXDIR)/sim/flyon.js" "$(WASMDIR)/flyon.js"
+	# Vercel deploy config: the wasm build uses -s SHARED_MEMORY=1 (see above),
+	# which needs SharedArrayBuffer, i.e. the page must be cross-origin isolated.
+	# Vercel does not send these headers by default (unlike serve.sh, which adds
+	# them in the Python handler), so without vercel.json the simulator's
+	# drone.js fails at startup and the generated parameter UI never appears.
+	# sim/ is git-ignored and wiped on rebuild, so this file must be generated
+	# after the build, not kept in the repo.
+	@echo 'Writing Vercel config (COOP/COEP headers) to $(WASMDIR)/vercel.json'
+	@printf '%s\n' \
+	'{' \
+	'  "headers": [' \
+	'    {' \
+	'      "source": "/(.*)",' \
+	'      "headers": [' \
+	'        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },' \
+	'        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },' \
+	'        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" }' \
+	'      ]' \
+	'    }' \
+	'  ]' \
+	'}' > "$(WASMDIR)/vercel.json"
 	@echo Done
 
 $(WASMOBJDIR):

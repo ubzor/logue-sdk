@@ -38,6 +38,25 @@ npx vite build
 mkdir -p "$SIM_DIR"
 cp -p "$SANDBOX_DIR/sim/flyon.css" "$SIM_DIR/flyon.css"
 cp -p "$SANDBOX_DIR/sim/flyon.js"  "$SIM_DIR/flyon.js"
+# Vercel deploy config (COOP/COEP headers, see the same block in the Makefile
+# wasm: target): the wasm build uses -s SHARED_MEMORY=1, so the deployed page
+# must be cross-origin isolated for SharedArrayBuffer. sim/ is git-ignored and
+# wiped on rebuild, so regenerate vercel.json here even when the wasm build
+# below is skipped (up-to-date), keeping it available for `vercel deploy sim`.
+cat > "$SIM_DIR/vercel.json" <<'VERCELEOF'
+{
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },
+        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" }
+      ]
+    }
+  ]
+}
+VERCELEOF
 echo ""
 
 # Build the WASM simulator if it's missing or stale

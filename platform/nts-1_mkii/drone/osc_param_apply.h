@@ -322,12 +322,13 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.fold2_depth = param_10bit_to_f32(value);
       break;
 
-    // ---- Enrichment-2: envelope-follower self-ducking (DCK) ----
+    // ---- Enrichment-2: sidechain ducking of the main voice (DCK) ----
     // The knob maps 0..1023 -> 0..1 (ducking amount). The audio path computes
-    // a one-pole abs-peak envelope follower of the main A+B output (only when
-    // DCK > 0) and uses it to duck the two sub voices (SUB1 / SUB2) so the low
-    // end "breathes out" of the way of the main voice's peaks. The duck gain
-    // is floored at kDuckFloor (0.2) so the subs are never fully silenced.
+    // a one-pole abs-peak envelope follower of the combined SUB1 + SUB2
+    // output (only when DCK > 0) and uses it to duck the MAIN voice (A+B +
+    // RMOD): the low end is the constant anchor of the drone, the main tone
+    // "sinks" out of the way of the low end. The duck gain is floored at
+    // kDuckFloor (0.7, ~-3 dB) so the main voice never disappears.
     // At 0 the duck gain is 1.0 (regression-safe).
     case DCK:
       params_.duck_amt = param_10bit_to_f32(value);

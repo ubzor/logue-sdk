@@ -724,12 +724,14 @@ private:
   float    comb_buf_[kCombDelayMaxSmp];  // ring buffer (zeroed in init())
   uint32_t comb_w_  = 0;                 // write cursor
 
-  // Envelope follower / self-ducking: a one-pole abs-peak follower of the main
-  // A+B output, and the per-sample duck gain (1.0 when DCK == 0). The follower
-  // only advances when duck_amt > 0 (otherwise duck_ stays 1.0 = transparent).
+  // Envelope follower / sidechain ducking: a one-pole abs-peak follower of
+  // the combined SUB1+SUB2 output energy, and the per-sample duck gain
+  // (1.0 when DCK == 0). The follower only advances when duck_amt > 0
+  // (otherwise the duck gain stays 1.0 = transparent, see duck_gain in
+  // osc_mix.h). The duck gain applies to the MAIN voice (A+B + RMOD), NOT
+  // the subs: the low end is the constant anchor, the main tone yields.
   float duck_alpha_ = 0.f;     // one-pole follower coefficient (1 - exp(-1/tau))
-  float env_follower_ = 0.f;   // smoothed |main| energy
-  float duck_ = 1.f;           // per-sample duck gain (1.0 = no ducking)
+  float env_follower_ = 0.f;   // smoothed |sub1 + sub2| energy
 
   // Formant: TWO parallel one-pole IIR comb resonators (F1 + F2), each a
   // ring-buffer delay line with a single feedback tap (ALWAYS STABLE, |fb| < 1).

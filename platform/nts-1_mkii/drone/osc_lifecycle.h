@@ -110,13 +110,13 @@ inline void Osc::init(float *)
     }
     formant_comb_w1_ = 0U;
     formant_comb_w2_ = 0U;
-    // Envelope follower / self-ducking: zero the follower, set duck = 1.0
-    // (no ducking), and precompute the one-pole follower coefficient
-    // (1 - exp(-1/tau) at 48 kHz). duck_amt defaults to 0 so the follower
-    // never advances and duck_ stays 1.0 (regression-safe).
+    // Envelope follower / sidechain ducking: zero the follower and precompute
+    // the one-pole follower coefficient (1 - exp(-1/tau) at 48 kHz). The duck
+    // gain itself is local to process() (duck_gain, defaults to 1.0 when DCK
+    // == 0, so the follower never advances and the main voice is untouched --
+    // regression-safe).
     env_follower_ = 0.f;
-    duck_ = 1.f;
-    duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.039
+    duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.013
     // Chord interval fades (INT / INT2 on-off): start SILENT -- the interval
     // level only ramps up from 0 over 2 s once its cents value is > 0. This
     // makes the first note-on fade the chord in (no instant "start

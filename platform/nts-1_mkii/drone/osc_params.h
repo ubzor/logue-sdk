@@ -166,7 +166,7 @@ struct OscParamsData
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
   float fold2_depth;  // 0.f .. 1.f, edit FOLD2 (second cascaded wavefolder)
-  float duck_amt;     // 0.f .. 1.f, edit DCK (self-ducking amount, 0 = off)
+  float duck_amt;     // 0.f .. 1.f, edit DCK (sidechain-duck amount of MAIN by SUB1/SUB2, 0 = off)
 
   void reset()
   {
@@ -239,7 +239,7 @@ struct OscParamsData
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
       fold2_depth  = 0.f;   // default: second (cascaded) fold off
-      duck_amt     = 0.f;   // default: self-ducking off
+      duck_amt     = 0.f;   // default: sidechain ducking off
   }
 
   OscParamsData() { reset(); }

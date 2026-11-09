@@ -18,7 +18,7 @@ Five parallel branches are mixed, then lifted by a makeup gain and passed
 through a shared tanh soft-clip:
 
 ```
-out = tanh( kOutSat * kOutDrive * ( y_main*MAIN + y_chord + y_sub1*DUCK + y_sub2*DUCK + y_ring ) )
+out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK + y_chord + y_sub1 + y_sub2 + y_ring*DUCK ) )
 
 MAIN voice (osc A + osc B)
   phasor A  ->  wavetable A (WA1)   [ DET, FM1, FMAB, JIT, + walk detune ]
@@ -39,12 +39,13 @@ CHORD voice (osc C at INT, osc C2 at INT2)
   y_chord = (c1 + c2) * CHRD * lvl_c * fade    (lvl_c = Breath stream,
                                                fade = 2 s one-pole on INT / INT2)
 
-SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub * DUCK   <-- new
-SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2 * DUCK   <-- new
+SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub   <-- new
+SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2   <-- new
 RING voice : (wavA * wavB) * RMOD * MAIN   (A*B ring-mod, ducked by MAIN)
 
-DUCK: envelope follower of |y_main| (one-pole abs-peak) ducks SUB1/SUB2
-      (floor 0.2) so the low end "breathes out" on dense settings. DCK=0 off.
+DUCK: envelope follower of |SUB1 + SUB2| (one-pole abs-peak) ducks y_main + y_ring
+      (floor 0.7 = ~-3 dB, ~75 ms tau): the low end is the constant anchor
+      of the drone, the main tone "sinks" out of the way of the low end. DCK=0 off.
 
 The A-H-R envelope (2 s / 2 s) multiplies the whole sum (note attack/release).
 ```
@@ -302,7 +303,7 @@ default and effect:
 | 40 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 41 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
 | 42 | FLD2 | % | 0..100% | 0% (off) | Second (cascaded) wavefolder on the A+B chain (denser "worn" edge). |
-| 43 | DCK | % | 0..100% | 0% (off) | Envelope-follower self-ducking of SUB1/SUB2 (floor 0.2, ~25 ms tau). |
+| 43 | DCK | % | 0..100% | 0% (off) | Sidechain ducking: a \|SUB1+SUB2\| envelope follower ducks the MAIN voice (A+B + RMOD), floor 0.7 (~-3 dB), ~75 ms tau. The low end stays constant; the main tone sinks. |
 
 ### The four random-walk streams
 
@@ -336,7 +337,7 @@ independent of the period, so the walk depth does not depend on speed.
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
-| Duck follower | 25 ms tau, floor 0.2 | One-pole abs-peak follower of \|main\|; ducks SUB1/SUB2 (DCK amount). |
+| Duck follower | 75 ms tau, floor 0.7 | One-pole abs-peak follower of \|SUB1+SUB2\|; ducks the MAIN voice (A+B + RMOD) by the DCK amount. |
 
 ---
 
