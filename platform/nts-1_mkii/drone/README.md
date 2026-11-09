@@ -368,11 +368,13 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 |------|------|
 | header.c | Unit header: name, the 6 parameter slots (4 multiplexer + RndM type + Rnd trigger). |
 | unit.cc | Runtime entry points; maps the 4 multiplexer slots onto PARAM_SEL/PARAM_VAL (slots 2->0, 3->1); slot 4 -> setRndMode, slot 5 -> rndArm (trigger). |
-| osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, pitch/glide/envelope/legato handling, note callbacks, and the Rnd debounce (rndArm/rndTick, 0.5 s). |
+| osc.h | Thin Osc class skeleton: parameter enum, multiplexer state, note callbacks, and the K-rate caches; method bodies live in the out-of-line headers below. |
 | osc_params.h | OscParamsData -- the live DSP parameter struct (raw -> float) + reset() defaults. |
 | osc_param_apply.h | apply_edit_param() -- the single raw-10-bit -> DSP-float converter (source of truth for ranges). |
 | osc_param_display.h | getParameterStrValue() -- raw -> display string. |
-| osc_mix.h | process() -- the per-sample audio path (see Sound path above). |
+| osc_rnd.h | Rnd re-roll + morph engine: rndArm/rndTick (0.5 s debounce), rndMorphStart/rndMorphTick (BPM-synced morph), RndM mode state, web-sim request channels. |
+| osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle, legato note handling, 2 s pitch glide. |
+| osc_mix.h | process() -- the per-sample audio path; blockPrepass() -- the K-rate per-block prepass (edit/Rnd request consumption, rndTick, rndMorphTick, glide). |
 | osc_waves.h | Wavetable bank scanning + pitch-shifted morph + LFO-morph crossfade. |
 | osc_saturator.h | Stateless wavefolder (fold) + asymmetric tanh saturator (saturate). |
 | osc_svf.h | 12 dB/oct state-variable low-pass (cutoff/resonance/dry-wet + stability clamps). |

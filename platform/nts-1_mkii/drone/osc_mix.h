@@ -28,113 +28,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 {
   (void)in; // drone generator does not use the audio input
 
-#ifdef __EMSCRIPTEN__
-  // ---- Web-sim Rnd re-roll request (main-thread UI -> audio worklet) --------
-  // The web simulator's All / Part / Orbi buttons run on the MAIN thread and
-  // call Osc::simRndRequest(mode), which packs (mode, valid) into
-  // sim_rnd_request_ (see osc.h). The main-thread and worklet-thread
-  // processors are SEPARATE COPIES (wasm.cc), so the main thread cannot arm
-  // the worklet's rnd_fire_ directly -- this is the bridge. Consume the
-  // request here (worklet thread) by arming the worklet's own debounce with
-  // the requested mode, NOT debounced (a single click is a single event,
-  // exactly like the hardware Fire-button path). The consumption must happen
-  // BEFORE rndTick() below so the re-roll fires in the very same block.
-  if (sim_rnd_request_ & (1U << 31))
-  {
-    const uint8_t mode = static_cast<uint8_t>(sim_rnd_request_ & 0x7U);
-    sim_rnd_request_ = 0; // clear before arming (no re-fire)
-    rnd_mode_ = (mode <= kRndModeOrbi) ? mode : kRndModeAll;
-    rndArm(false);
-  }
-#endif
-
-  // ---- Rnd debounce tick (audio clock) --------------------------------------
-  // Advance the audio clock and consume any pending Rnd re-roll (immediate or
-  // the final one after a 0.5 s silence window). Runs in BOTH builds: the
-  // hardware Rnd slot (unit.cc) and the web simulator's *Random* button both
-  // arm the debounce (rndArm / rndRequest), and this is the single place the
-  // re-roll actually fires. See the Rnd debounce comment block in osc.h.
-  rndTick(frames);
-
-  // ---- Rnd re-roll morph (BPM-synced smooth transition) --------------------
-  // A re-roll that fired this block (rndTick above) started a morph toward
-  // its fresh targets; advance the morph clock here and re-apply the
-  // in-flight parameters (smoothstep-interpolated raw values) through the
-  // same apply_edit_param() path a manual PARAM_VAL edit uses. Runs AFTER
-  // rndTick so a fresh fire is picked up in the very same block. When no
-  // morph is active this is a single branch check (zero cost). See
-  // Osc::rndMorphStart / rndMorphTick in osc.h.
-  rndMorphTick(frames);
-
-  // ---- Pitch glide (portamento) ---------------------------------------------
-  // If a note change is in flight, advance the base phase increment LINEARLY
-  // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
-  // detuned pair, sub-1, sub-2, chord, chord-2, wavetable morph position) so
-  // the WHOLE sound slides in pitch together. Runs per sample while active so
-  // the 2 s glide is sample-accurate at any block size. When it completes, w0_
-  // snaps exactly to the target and the derived voices settle to their final
-  // values; the glide is then disarmed so the rest of the block (and every
-  // later block) uses the plain cached path with zero extra work.
-  //
-  // Note: this runs BEFORE the params_ / w0_ caches below, so the block picks
-  // up the (possibly gliding) w0_ immediately. A re-target from setPitch()
-  // (mid-glide) is picked up on the next block (K-rate -> audio thread), which
-  // is the natural ~2.9 ms latency of every parameter in this unit.
-  if (glide_active_)
-  {
-    const uint32_t elapsed = glide_elapsed_ + frames;
-    if (elapsed >= kGlideSamples)
-    {
-      w0_ = glide_to_; // snap to the target
-      recalc_pitch_derived();
-      glide_active_ = false;
-      glide_elapsed_ = 0;
-    }
-    else
-    {
-      glide_elapsed_ = elapsed;
-      const float t = (float)elapsed / (float)kGlideSamples; // 0..1, linear
-      w0_ = glide_from_ + (glide_to_ - glide_from_) * t;
-      // Use the FRESH params_ for this frame: if a K-rate edit (CINT / CINT2 /
-      // DETUNE / WAV*) landed in the same block it already updated params_ on
-      // the worklet thread before this sample, so reading it here (not the
-      // stale `p` cache built below) avoids a one-frame stale derived voice.
-      {
-        const Params p = params_;
-        const float w = w0_;
-        update_w0_det();
-        chord_.update(w, p.chord_cents);
-        chord2_.update(w, p.chord2_cents);
-        update_w0_sub();
-        update_w0_sub2();
-        waves_.update(w);
-      }
-    }
-  }
-
-#ifdef __EMSCRIPTEN__
-  // Consume any pending direct edit-parameter request from the UI thread
-  // (see simEditRequest). The (select_, PARAM_VAL) pair is applied
-  // atomically here so the DSP never sees an intermediate select_ value --
-  // the hardware's unit_set_param_value() path does the same thing (K-rate,
-  // one knob turn = one apply).
-  {
-    const uint32_t req = sim_edit_request_;
-    if (req & (1U << 31))
-    {
-      const uint8_t idx = (uint8_t)(req & 0x3FU);
-      const int32_t raw = (int32_t)((req >> 8) & 0x3FFU);
-      if (idx < kEditParamCount)
-      {
-        edit_value_[idx] = raw;
-        select_ = idx;
-        apply_edit_param(kEditParamFirst + idx, raw);
-      }
-      sim_edit_request_ = 0;
-    }
-  }
-#endif
-
+  // ---- K-rate prepass (see blockPrepass) -------------------------------------
+  // Consume the (sim-only) Rnd re-roll request, advance the Rnd debounce
+  // clock (rndTick) and the Rnd re-roll morph (rndMorphTick), and advance
+  // the pitch glide. Everything here runs at K-rate (once per block, before
+  // the per-sample loop) and is extracted from process() so that this file
+  // stays a pure per-sample audio path (see the file header comment).
+  blockPrepass(frames);
   // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
   const Params p = params_;
 
@@ -804,4 +704,96 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
   }
 }
+// K-rate per-block prepass extracted from process() (see the call site there):
+// web-sim edit-parameter request consumption (K-rate atomic apply of the
+// select_/PARAM_VAL pair), rndTick() (Rnd debounce + re-roll), rndMorphTick()
+// (BPM-synced re-roll morph), and the pitch-glide advance. All of it runs
+// once per block, before the per-sample loop, so osc_mix.h keeps its
+// "pure audio path" property.
+inline void Osc::blockPrepass(uint32_t frames)
+{
 
+#ifdef __EMSCRIPTEN__
+  // ---- Web-sim Rnd re-roll request (main-thread UI -> audio worklet) --------
+  // The web simulator's All / Part / Orbi buttons run on the MAIN thread and
+  // call Osc::simRndRequest(mode), which packs (mode, valid) into
+  // sim_rnd_request_ (see osc.h). The main-thread and worklet-thread
+  // processors are SEPARATE COPIES (wasm.cc), so the main thread cannot arm
+  // the worklet's rnd_fire_ directly -- this is the bridge. Consume the
+  // request here (worklet thread) by arming the worklet's own debounce with
+  // the requested mode, NOT debounced (a single click is a single event,
+  // exactly like the hardware Fire-button path). The consumption must happen
+  // BEFORE rndTick() below so the re-roll fires in the very same block.
+  if (sim_rnd_request_ & (1U << 31))
+  {
+    const uint8_t mode = static_cast<uint8_t>(sim_rnd_request_ & 0x7U);
+    sim_rnd_request_ = 0; // clear before arming (no re-fire)
+    rnd_mode_ = (mode <= kRndModeOrbi) ? mode : kRndModeAll;
+    rndArm(false);
+  }
+#endif
+
+  // ---- Rnd debounce tick (audio clock) --------------------------------------
+  // Advance the audio clock and consume any pending Rnd re-roll (immediate or
+  // the final one after a 0.5 s silence window). Runs in BOTH builds: the
+  // hardware Rnd slot (unit.cc) and the web simulator's *Random* button both
+  // arm the debounce (rndArm / rndRequest), and this is the single place the
+  // re-roll actually fires. See the Rnd debounce comment block in osc.h.
+  rndTick(frames);
+
+  // ---- Rnd re-roll morph (BPM-synced smooth transition) --------------------
+  // A re-roll that fired this block (rndTick above) started a morph toward
+  // its fresh targets; advance the morph clock here and re-apply the
+  // in-flight parameters (smoothstep-interpolated raw values) through the
+  // same apply_edit_param() path a manual PARAM_VAL edit uses. Runs AFTER
+  // rndTick so a fresh fire is picked up in the very same block. When no
+  // morph is active this is a single branch check (zero cost). See
+  // Osc::rndMorphStart / rndMorphTick in osc.h.
+  rndMorphTick(frames);
+
+  // ---- Pitch glide (portamento) ---------------------------------------------
+  // If a note change is in flight, advance the base phase increment LINEARLY
+  // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
+  // detuned pair, sub-1, sub-2, chord, chord-2, wavetable morph position) so
+  // the WHOLE sound slides in pitch together. Runs per sample while active so
+  // the 2 s glide is sample-accurate at any block size. When it completes, w0_
+  // snaps exactly to the target and the derived voices settle to their final
+  // values; the glide is then disarmed so the rest of the block (and every
+  // later block) uses the plain cached path with zero extra work.
+  //
+  // Note: this runs BEFORE the params_ / w0_ caches below, so the block picks
+  // up the (possibly gliding) w0_ immediately. A re-target from setPitch()
+  // (mid-glide) is picked up on the next block (K-rate -> audio thread), which
+  // is the natural ~2.9 ms latency of every parameter in this unit.
+  if (glide_active_)
+  {
+    const uint32_t elapsed = glide_elapsed_ + frames;
+    if (elapsed >= kGlideSamples)
+    {
+      w0_ = glide_to_; // snap to the target
+      recalc_pitch_derived();
+      glide_active_ = false;
+      glide_elapsed_ = 0;
+    }
+    else
+    {
+      glide_elapsed_ = elapsed;
+      const float t = (float)elapsed / (float)kGlideSamples; // 0..1, linear
+      w0_ = glide_from_ + (glide_to_ - glide_from_) * t;
+      // Use the FRESH params_ for this frame: if a K-rate edit (CINT / CINT2 /
+      // DETUNE / WAV*) landed in the same block it already updated params_ on
+      // the worklet thread before this sample, so reading it here (not the
+      // stale `p` cache built below) avoids a one-frame stale derived voice.
+      {
+        const Params p = params_;
+        const float w = w0_;
+        update_w0_det();
+        chord_.update(w, p.chord_cents);
+        chord2_.update(w, p.chord2_cents);
+        update_w0_sub();
+        update_w0_sub2();
+        waves_.update(w);
+      }
+    }
+  }
+}
