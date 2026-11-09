@@ -408,6 +408,18 @@
           // its next block, so the DSP never sees an intermediate select_
           // value (the old path's phantom-LFO bug).
           if (Module.setEditParam) Module.setEditParam(index, raw);
+          // Keep the Orbit "stable state" (C++ stable_value_) anchored to the
+          // live values the user is actually hearing. A manual slider edit
+          // IS a new stable state, so the next Orbit Random must develop from
+          // the just-set values, not from the previous All/Part/Reset
+          // snapshot. Guarded by getMorphActive(): while an All/Part/Orbit
+          // morph is in flight (and this very apply() call is the
+          // fireRandom poll writing the interpolated morph values), a sync
+          // would drag stable_value_ along the glide and break the
+          // C++-side stabilize at morph end (randomizeAll/Partial rewrite it
+          // there anyway -- the authoritative write).
+          if (Module.stableSync && Module.getMorphActive && Module.getMorphActive() === 0)
+            Module.stableSync();
         };
 
         input.oninput = () => apply(parseInt(input.value, 10));

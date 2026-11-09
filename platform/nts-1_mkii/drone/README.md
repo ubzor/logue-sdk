@@ -211,9 +211,7 @@ The randomization is a **two-slot multiplexer** (edit-menu, device-only):
     The nudge is anchored to the **stable** values (not the current sound) and
     is applied to the live DSP **without** creating a new stable state. Factory
     defaults are the stable state at startup; every All/Part re-roll rewrites
-    it. Firing ORBI again (or after manual edits) always develops from the SAME
-    stable sound.
-  * (reserved `3+`: random-to-preset, planned -- see TODO.md.)
+    it. Firing ORBI again always develops from the SAME stable sound.
 * **Slot 5 Rnd** -- the **trigger** (0..15, enum): like the old Rnd, changing it
   to any value 1..15 fires the re-roll **per the current RndM type**.
 
@@ -238,6 +236,22 @@ single click fires immediately). The preset row has an **Orbit Random** button
 device) next to **All Random** / **Partial Random** / **Reset** (UI-thread
 conveniences via `applyPresetRaw`, which call `Module.stableSync()` after the
 apply so the C++ Orbit reference matches what the sim is showing).
+
+**Manual slider edits update the Orbit stable state** (web simulator only):
+each slider's `apply()` (the `oninput` handler in `createEditableParam`,
+`websim/osc.html`) calls `Module.stableSync()` after writing the value -- a
+manual edit is by definition the user's new "stable" sound, so the next
+Orbit Random must develop from the just-set values, not from the previous
+All/Part/Reset snapshot. The call is guarded by `getMorphActive() === 0`
+(benignly racing read of the worklet's `morph_active_`, same as the
+poll's dirty-check): while an All/Part/Orbit morph is in flight -- including
+the `fireRandom` slider-sync poll, which itself routes through the same
+`apply()` to write the interpolated morph values -- a sync would drag
+`stable_value_` along the glide and clobber the C++-side stabilize
+(`randomizeAll`/`randomizePartial` rewrite it at the end of their re-roll).
+On hardware, manual PARAM/VALUE edits do NOT touch the stable state (the
+Orbit reference only moves on All/Part re-rolls or reset), keeping the
+device's "develop from the last confirmed preset" behaviour intact.
 
 ---
 
