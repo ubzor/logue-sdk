@@ -60,10 +60,10 @@ tools/gcc/gcc-arm-none-eabi-*
 *.ntkdigunit
 *.drmlgunit
 *.nts1mkiiunit
-# Ship the drone NTS-1 mkII unit: it is committed so the exact loadable
-# artifact can be audited and re-loaded without a rebuild (see drone/README
+# Ship the drone-osc NTS-1 mkII unit: it is committed so the exact loadable
+# artifact can be audited and re-loaded without a rebuild (see drone-osc/README
 # or the commit that introduces it).
-!platform/nts-1_mkii/drone/drone.nts1mkiiunit
+!platform/nts-1_mkii/drone-osc/drone-osc.nts1mkiiunit
 *.nts3unit
 *.mk2unit
 
