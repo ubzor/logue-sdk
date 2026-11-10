@@ -2,7 +2,7 @@
 # Configuration for Makefile
 #
 
-PROJECT := drone
+PROJECT := drone_osc
 PROJECT_TYPE := osc
 
 ##############################################################################

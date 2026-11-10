@@ -1,11 +1,12 @@
 #!/bin/bash
 # Serve the WASM web simulator for the drone NTS-1 mkII units.
 #
-# Currently serves the drone-osc (oscillator) simulator. In the future this
-# script will serve all 4 modules (drone-osc / drone-modfx / drone-delfx /
-# drone-revfx) on a single page; the common serving root and the build helpers
-# below are already structured so that only the module list and the landing
-# page need to change when the multi-module UI is added.
+# Serves the "drone-chain" simulator: the full DRONE audio path
+# OSC -> MOD -> DEL -> REV -> out running as a SINGLE wasm audio worklet
+# (drone-chain/), with the MOD/DEL/REV TIME+DEPTH knobs and the full 44-
+# parameter OSC UI. The simulator page is sim/index.html, so the landing URL
+# is the document root (http://host:8000/). The pure-oscillator simulator
+# (drone-osc/sim/drone.html) is still available by its own path if needed.
 #
 # Usage:
 #   ./serve.sh [PORT] [BIND]      # default: 8000 0.0.0.0
@@ -18,8 +19,9 @@ PLATFORM_DIR="$SCRIPT_DIR"
 # so the shared web-simulator project is two levels up from this script.
 SANDBOX_DIR="$(cd "$PLATFORM_DIR/../../websim" && pwd)"
 
-# The module to serve now (oscillator). Its sim/ dir is the document root.
-SERVE_MODULE="drone-osc"
+# The module to serve: the chained (osc -> mod -> del -> rev) web simulator.
+# Its sim/ dir is the document root; the page is index.html (served at /).
+SERVE_MODULE="drone-chain"
 SIM_DIR="$PLATFORM_DIR/$SERVE_MODULE/sim"
 
 # ---- FlyonUI (Tailwind v4) assets (Vite) -------------------------------------
@@ -58,15 +60,23 @@ VERCELEOF
 echo ""
 
 # ---- Build the WASM simulator if missing or stale -----------------------------
-# Stale if any source is newer than drone.html, or if the generated assets are
+# Stale if any source is newer than index.html, or if the generated assets are
 # incomplete (html exists but wasm/js are missing -> interrupted build).
-if [ ! -f "$SIM_DIR/drone.html" ] || [ ! -f "$SIM_DIR/drone.wasm" ] || [ ! -f "$SIM_DIR/drone.js" ] || \
-   [ "$PLATFORM_DIR/$SERVE_MODULE/wasm.cc" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$PLATFORM_DIR/$SERVE_MODULE/header.c" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$PLATFORM_DIR/$SERVE_MODULE/osc.h" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$PLATFORM_DIR/$SERVE_MODULE/Makefile" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$PLATFORM_DIR/$SERVE_MODULE/config.mk" -nt "$SIM_DIR/drone.html" ] || \
-   [ "$SANDBOX_DIR/osc.html" -nt "$SIM_DIR/drone.html" ]; then
+# drone-chain's DSP spans the sibling drone-* module dirs, so any of those
+# headers changing (e.g. the FX DSP in drone-modfx/modfx.h) must also rebuild.
+M=$PLATFORM_DIR/$SERVE_MODULE
+if [ ! -f "$SIM_DIR/index.html" ] || [ ! -f "$SIM_DIR/index.wasm" ] || [ ! -f "$SIM_DIR/index.js" ] || \
+   [ "$M/wasm.cc" -nt "$SIM_DIR/index.html" ] || \
+   [ "$M/chain.h" -nt "$SIM_DIR/index.html" ] || \
+   [ "$M/chain.cc" -nt "$SIM_DIR/index.html" ] || \
+   [ "$M/header.c" -nt "$SIM_DIR/index.html" ] || \
+   [ "$M/Makefile" -nt "$SIM_DIR/index.html" ] || \
+   [ "$M/config.mk" -nt "$SIM_DIR/index.html" ] || \
+   [ "$PLATFORM_DIR/drone-osc/osc.h" -nt "$SIM_DIR/index.html" ] || \
+   [ "$PLATFORM_DIR/drone-modfx/modfx.h" -nt "$SIM_DIR/index.html" ] || \
+   [ "$PLATFORM_DIR/drone-delfx/delay.h" -nt "$SIM_DIR/index.html" ] || \
+   [ "$PLATFORM_DIR/drone-revfx/reverb.h" -nt "$SIM_DIR/index.html" ] || \
+   [ "$SANDBOX_DIR/index.html" -nt "$SIM_DIR/index.html" ]; then
   echo "============================================"
   echo "Building WASM simulator ($SERVE_MODULE)..."
   echo "============================================"
@@ -77,7 +87,7 @@ fi
 echo "============================================"
 echo "Serving $SERVE_MODULE web simulator"
 echo "============================================"
-echo "URL:       http://localhost:${1:-8000}/drone.html"
+echo "URL:       http://localhost:${1:-8000}/"
 echo "Directory: $SIM_DIR"
 echo ""
 echo "Press Ctrl+C to stop the server"
