@@ -173,10 +173,6 @@ static constexpr float kModInputGain = 1.0f;
 // quieter than dry. 0.9x leaves 1 dB of headroom.
 static constexpr float kModMakeup = 0.9f;
 
-// ---- DC-blocker (one-pole HPF, ~20 Hz) --------------------------------------
-// Removes any DC offset that accumulates in the one-pole filters.
-static constexpr float kDcBlockHz = 20.f;
-
 // ---- Pre/post LPF for ENSE chorus (aliasing suppression, Juno-style) --------
 // Pre-LPF: one-pole, ~2 kHz cutoff, applied to the input BEFORE the chorus
 // delay lines. Softens the high end to emulate the Juno-60 chip's 12 dB/oct

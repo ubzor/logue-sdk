@@ -294,6 +294,29 @@ extern "C" int getStageBypass(int stage)
   return static_cast<int>(processor.getStageBypass(stage));
 }
 
+// Diagnostic: read MOD input/output peaks (scaled to 0..1000 for 10-bit resolution)
+extern "C" int getModInputPeak()
+{
+  float peak = processor.getModInputPeak();
+  if (peak > 1.f) peak = 1.f;
+  return static_cast<int>(peak * 1000.f);
+}
+
+extern "C" int getModOutputPeak()
+{
+  float peak = processor.getModOutputPeak();
+  if (peak > 1.f) peak = 1.f;
+  return static_cast<int>(peak * 1000.f);
+}
+
+// Diagnostic: read OSC output peak (to verify the oscillator is running)
+extern "C" int getOscOutputPeak()
+{
+  float peak = processor.getOscOutputPeak();
+  if (peak > 1.f) peak = 1.f;
+  return static_cast<int>(peak * 1000.f);
+}
+
 // ---- OSC edit-parameter accessors (the 44-parameter UI) ----------------------
 // Mirror drone-osc/wasm.cc: the main-thread `processor` and the worklet-thread
 // `processor` are the SAME object (shared linear memory), so writing through
@@ -412,6 +435,9 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   // Per-stage bypass (diagnostic A/B). stage: 0=MOD, 1=DEL, 2=REV.
   emscripten::function("setStageBypass", &setStageBypass);
   emscripten::function("getStageBypass", &getStageBypass);
+  emscripten::function("getModInputPeak", &getModInputPeak);
+  emscripten::function("getModOutputPeak", &getModOutputPeak);
+  emscripten::function("getOscOutputPeak", &getOscOutputPeak);
 }
 
 // ---- Audio worklet (runs on the dedicated audio thread) ----------------------

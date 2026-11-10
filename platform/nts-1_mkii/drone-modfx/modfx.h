@@ -232,23 +232,27 @@ public:
     flng_hp_ = 0.f;
     flng_fb_ = 0.f;
     ense_pre_lpf_ = 0.f;
+    ense_delay_l_ = 0.f;
+    ense_delay_r_ = 0.f;
     ense_post_lpf_l_ = 0.f;
     ense_post_lpf_r_ = 0.f;
     ense_ap_l_ = 0.f;
     ense_ap_r_ = 0.f;
-    dc_block_l_ = 0.f;
-    dc_block_r_ = 0.f;
 
     recompute_formant_comb(); // seed the formant delays/feedback from the defaults
   }
 
   void teardown() override final { buffer_ = nullptr; }
 
-  // audio processing callbacks (per-sample path lives in modfx_dsp.h)
+  // audio processing callbacks (per-sample path lives inline below in this class)
   void process(const float *__restrict in, float *__restrict out, uint32_t frames) override final
   {
     modfx_process_impl(in, out, frames);
   }
+
+  // Diagnostic: public peak variables (for debugging gain issues).
+  volatile float mod_input_peak_ = 0.f;
+  volatile float mod_output_peak_ = 0.f;
 
   // K-rate: recompute the formant comb delays (F1/F2) and shared feedback
   // from the FORM / FLVL knobs. Same math as drone-osc's recompute_formant_comb
@@ -320,12 +324,15 @@ private:
   float flng_fb_;     // flanger feedback delay state
   // ENSE chorus pre/post LPF (Juno-style aliasing suppression).
   float ense_pre_lpf_;   // pre-delay LPF (~2 kHz), shared mono (L and R are identical)
+  // ENSE one-pole "delay" voices: DEDICATED state (NOT tremo_low_/tremo_high_,
+  // which are also the L/R scratch carriers consumed by TREMO/FLNG/TAPE;
+  // sharing them corrupted the delay state with the chorus output each sample).
+  float ense_delay_l_;   // voice 1 one-pole delay state (L)
+  float ense_delay_r_;   // voice 2 one-pole delay state (R)
   float ense_post_lpf_l_; // post-chorus LPF (~6 kHz), left channel
   float ense_post_lpf_r_; // post-chorus LPF (~6 kHz), right channel
   float ense_ap_l_;       // allpass filter state, left channel (unit gain diffusion)
   float ense_ap_r_;       // allpass filter state, right channel
-  float dc_block_l_;      // DC-blocker one-pole LPF state, left channel
-  float dc_block_r_;      // DC-blocker one-pole LPF state, right channel
 
   float *buffer_; // SDRAM: formant_buf1_ + formant_buf2_ + comb_buf_ (sliced in init)
   float *formant_buf1_ = nullptr;  // kFormantDelayMaxSmp
@@ -334,7 +341,7 @@ private:
 
   // ---- Per-sample DSP helper functions (static inline, no libm) ----
   // These are defined here (inside the class scope) so that the inline
-  // modfx_process_impl() below can call them without needing modfx_dsp.h.
+  // modfx_process_impl() below can call them directly (no separate dsp header).
 
   // Advance one LFO phase accumulator by (2*pi*freq/sr) and return its sine
   // (4th-order Taylor; no libm).
@@ -371,13 +378,17 @@ private:
   }
 
   // First-order allpass filter (unit gain, phase shift only). No libm.
-  // y = x + g * (state - x); state += g * (x - state)
-  // For |g| < 1, the filter is stable and has a flat magnitude response.
+  // Canonical form: y = x - g * state'; state' = state + g * (x - state).
+  // H(z) = (1 - g*z^-1) / (1 + g*z^-1), |H| = 1 for all frequencies (flat
+  // magnitude, pure phase shift). For |g| < 1 the filter is stable.
+  // (The previous implementation `y = x + g*(state - x)` was NOT an allpass:
+  // it resonated the DC component and attenuated AC, which -- combined with
+  // the DC-leaning output of the ENSE one-pole delays -- cancelled the audio
+  // band and left the stage outputting near-silence.)
   static float allpass(float &state, float x, float g)
   {
-    const float y = x + g * (state - x);
     state += g * (x - state);
-    return y;
+    return x - g * state;
   }
 
   // The per-sample audio path (upmix -> ENSE -> TREMO -> FLNG -> TAPE -> FORM
@@ -388,6 +399,7 @@ private:
   inline void modfx_process_impl(const float *__restrict in, float *__restrict out, uint32_t frames)
 {
   const Params p = params_;
+  float in_peak = 0.f, out_peak = 0.f;
   const float sr = modfx_consts::kSr;
 
   // ---- K-rate LFO frequencies (from TIME; Taylor exp, no libm) --------------
@@ -402,8 +414,6 @@ private:
   // ENSE chorus pre/post LPF alphas (one-pole, Juno-style aliasing suppression).
   const float ense_pre_lpf_alpha  = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kEnsePreLpfHz  / sr);
   const float ense_post_lpf_alpha = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kEnsePostLpfHz / sr);
-  // DC-blocker alpha (one-pole HPF, ~20 Hz): removes DC offset.
-  const float dc_block_alpha = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kDcBlockHz / sr);
   float flng_fb = p.flng > 0.f ? (p.depth * modfx_consts::kFlngFbMax) : 0.f;
   if (flng_fb > 0.85f) flng_fb = 0.85f;
 
@@ -427,6 +437,8 @@ private:
   for (uint32_t n = 0; n < frames; ++n)
   {
     const float in_mono = in[n]; // `in` is the mono OSC output (frames samples)
+    const float in_abs = (in_mono < 0.f) ? -in_mono : in_mono;
+    if (in_abs > in_peak) in_peak = in_abs;
 
     // ---- ENSE: stereo chorus (2 detuned voices, modulated one-pole delays) --
     // Wet amounts are NON-const: the DRIFT random-walk nudges them below
@@ -517,11 +529,11 @@ private:
       const float spread1 = ense_spread_smp * (0.5f + 0.5f * ense_lfo);
       const float len1 = ense_base1_smp + spread1;
       const float a1 = 1.f / (1.f + len1 * 0.02f); // one-pole length -> alpha
-      const float v1 = onelpf(tremo_low_, pre, a1);
+      const float v1 = onelpf(ense_delay_l_, pre, a1);
       const float spread2 = ense_spread_smp * (0.5f - 0.5f * ense_lfo);
       const float len2 = ense_base2_smp + spread2;
       const float a2 = 1.f / (1.f + len2 * 0.02f);
-      float v2 = onelpf(tremo_high_, pre, a2);
+      float v2 = onelpf(ense_delay_r_, pre, a2);
       v2 *= modfx_consts::kEnseVoice2; // voice 2 "pitch" (detune stand-in)
 
       // Allpass diffusion (unit gain, no level change). g = 0.5 (stable, |g| < 1).
@@ -549,6 +561,8 @@ private:
       tremo_low_ = in_scaled;
       tremo_high_ = in_scaled;
       ense_pre_lpf_ = in_scaled;
+      ense_delay_l_ = in_scaled;
+      ense_delay_r_ = in_scaled;
       ense_post_lpf_l_ = in_scaled;
       ense_post_lpf_r_ = in_scaled;
       ense_ap_l_ = in_scaled;
@@ -658,16 +672,30 @@ private:
       R += tint;
     }
 
-    // ---- DC-block + makeup gain + write the stereo output --------------------
-    // DC-block (one-pole HPF, ~20 Hz) removes any DC offset that accumulates
-    // in the one-pole filters (ENSE/TREMO/FLNG/TAPE). Then apply makeup gain.
-    const float dc_l = onehpf(dc_block_l_, L, dc_block_alpha);
-    const float dc_r = onehpf(dc_block_r_, R, dc_block_alpha);
-    out[2 * n]     = dc_l * modfx_consts::kModMakeup;
-    out[2 * n + 1] = dc_r * modfx_consts::kModMakeup;
+    // ---- Makeup gain + write the stereo output -------------------------------
+    // NO DC-block here: a ~20 Hz one-pole HPF (tau ~2 s) ate the entire
+    // low-frequency DRONE signal (the ENSE chorus voices are long one-pole
+    // delays whose outputs carry a DC-leaning envelope; the HPF let only the
+    // slow level modulation through, so MOD-on sounded near-silent). The
+    // DC offset that can accumulate in the one-pole stages is small and is
+    // removed by the platform's / sim's output stage; kModMakeup (0.9) keeps
+    // headroom against it.
+    out[2 * n]     = L * modfx_consts::kModMakeup;
+    out[2 * n + 1] = R * modfx_consts::kModMakeup;
+    const float out_abs = (out[2 * n] < 0.f) ? -out[2 * n] : out[2 * n];
+    const float out_abs2 = (out[2 * n + 1] < 0.f) ? -out[2 * n + 1] : out[2 * n + 1];
+    if (out_abs > out_peak) out_peak = out_abs;
+    if (out_abs2 > out_peak) out_peak = out_abs2;
   }
+
+  // Publish the block peaks (diagnostic: chain.h exposes them via
+  // getModInputPeak()/getModOutputPeak()).
+  mod_input_peak_ = in_peak;
+  mod_output_peak_ = out_peak;
 }
 
   Params params_;
 };
-// in after this header so the out-of-line method is defined exactly once.
+// (The per-sample path modfx_process_impl lives INLINE in this class above,
+// so no separate modfx_dsp.h include is needed; the legacy modfx_dsp.h is
+// dead code and not included anywhere.)

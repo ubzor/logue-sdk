@@ -40,6 +40,13 @@ runs the cascade in series:
       -> makeup gain (0.9)
       -> out (stereo)
 
+Note: there is deliberately NO DC-blocker on the output. The ENSE chorus
+voices are long one-pole delays whose outputs carry a DC-leaning envelope at
+low DRONE frequencies; a ~20 Hz one-pole HPF there (tau ~2 s) let only the
+slow level modulation through and ate the entire signal (MOD-on sounded
+near-silent). The residual DC offset of the one-pole stages is small and the
+0.9 makeup leaves headroom against it.
+
 Every level stage (ENSE / TREMO / FLNG / TAPE / FLVL / COMB) is a dry/wet 0..1
 blend: at 0 the stage is a pure wire (regression-safe). FORM is a morph
 parameter (not a level); FLVL gates the formant stage's wet. The DEL/REV
@@ -99,9 +106,10 @@ not libm) — fine.
 
 - `modfx.h` — the `Modfx : Processor` class (Params, LFO phase accumulators,
   DRIFT walk state, formant/comb ring buffers, LCG state, first-order filter
-  states, `setParameter`, `getParameterStrValue`, `recompute_formant_comb`).
-- `modfx_dsp.h` — the per-sample audio path (`Modfx::modfx_process_impl`),
-  #included at the bottom of `modfx.h` after the class is complete.
+  states, `setParameter`, `getParameterStrValue`, `recompute_formant_comb`)
+  AND the full per-sample audio path (`Modfx::modfx_process_impl`, defined
+  INLINE in the class so it can be compiled into both the ARM unit and the
+  web-simulator chain without a separate TU).
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget,
   formant stops, comb delay, LCG constants) + the libm-free helpers.
 - `header.c` — the 10 parameter slots (TIME/DEPTH/DRIFT/ENSE/TREMO/FLNG/TAPE/

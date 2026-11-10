@@ -145,6 +145,14 @@ public:
 
     // 1. OSC -> mono.
     osc_.process(nullptr, osc_mono_, frames);
+    
+    // Diagnostic: track the peak of the OSC output
+    float osc_peak = 0.f;
+    for (uint32_t i = 0; i < frames; ++i) {
+      const float abs = (osc_mono_[i] < 0.f) ? -osc_mono_[i] : osc_mono_[i];
+      if (abs > osc_peak) osc_peak = abs;
+    }
+    osc_output_peak_ = osc_peak;
 
     // 2. mono -> stereo (duplicate), the input to the first FX stage.
     for (uint32_t i = 0; i < frames; ++i)
@@ -270,6 +278,14 @@ public:
       return 0;
     return sim_stage_bypass_[stage];
   }
+
+  // Diagnostic: read MOD input/output peaks (for debugging gain issues).
+  float getModInputPeak() const { return mod_.mod_input_peak_; }
+  float getModOutputPeak() const { return mod_.mod_output_peak_; }
+
+  // Diagnostic: read the OSC output peak (to verify the oscillator is running).
+  volatile float osc_output_peak_ = 0.f;
+  float getOscOutputPeak() const { return osc_output_peak_; }
 
   // Called from the worklet thread once per block (top of process()): apply the
   // cached FX values to the live DSP. `w` (FX_TIME=0 / FX_DEPTH=1) maps 1:1 onto
