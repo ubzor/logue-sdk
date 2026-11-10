@@ -145,6 +145,28 @@ if [ "$TARGET" != "arm" ]; then
   done
 fi
 
+# ---- Publish ARM unit binaries to $PLATFORM_DIR/build ------------------------
+# After a fully successful ARM build, refresh the shared build/ folder with the
+# .nts1mkiiunit files so they can be loaded/inspected in one place. Only the
+# units built in THIS run are touched: each unit's previous copy in build/ is
+# removed before being re-copied; any other files in build/ are left alone.
+# build/ is gitignored (root .gitignore: **/build).
+if [ "$BUILD_OK" -eq 1 ] && [ "$TARGET" != "sim" ]; then
+  PUBLISH_DIR="$PLATFORM_DIR/build"
+  mkdir -p "$PUBLISH_DIR"
+  echo "============================================"
+  echo "Publishing unit binaries -> $PUBLISH_DIR"
+  echo "============================================"
+  for MOD in "${ARM_MODULES[@]}"; do
+    FOUND=$(ls "$PLATFORM_DIR/$MOD/"*.nts1mkiiunit 2>/dev/null | head -1)
+    [ -n "$FOUND" ] || continue
+    rm -f "$PUBLISH_DIR/$(basename "$FOUND")"
+    cp "$FOUND" "$PUBLISH_DIR/"
+    echo "  $(basename "$FOUND")"
+  done
+  echo ""
+fi
+
 echo "============================================"
 echo "Build complete!"
 echo "============================================"
