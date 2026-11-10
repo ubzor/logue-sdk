@@ -1,21 +1,34 @@
 # Правила проекта Logue SDK
 
 ## Основная папка проекта
-Основная папка нашего проекта — `/var/www/logue-sdk/platform/nts-1_mkii/drone`.
-Код мы ищем в первую очередь именно в ней.
+Основная папка проекта — `/var/www/logue-sdk/platform/nts-1_mkii/drone-osc`
+(юнит DRONE-осциллятор: ARM + standalone web-симулятор).
 
-## Структура основной папки
+С 2026-11-10 проект DRONE разбит на 5 модулей в `platform/nts-1_mkii/`:
+
+| Каталог            | Роль                                                        |
+|--------------------|-------------------------------------------------------------|
+| `drone-osc/`       | **OSCMOD** — DRONE-осциллятор (ARM-юнит + legacy standalone web-sim) |
+| `drone-modfx/`     | **MODFX** — модулятор (ARM-юнит)                            |
+| `drone-delfx/`     | **DELFx** — delay (ARM-юнит)                                |
+| `drone-revfx/`     | **REVFX** — reverb (ARM-юнит)                               |
+| `drone-chain/`     | **WEB-ONLY** — единый web-sим OSC→MOD→DEL→REV (итоговый UI) |
+
+Код DSP ищем в первую очередь в `drone-osc/`; ARM-юниты — в `drone-*/`;
+UI симулятора — в `drone-chain/` (shell — `websim/index.html`).
+
+## Структура `drone-osc/`
 - `header.c` — заголовок юнита (имя, параметры, инициализация, callback'и).
-- `osc.h` — DSP-логика (осцилляторы, сатурация и т.д.).
+- `osc.h` + `osc_*.h` — DSP-логика (осцилляторы, сатурация, random-walk и т.д.).
 - `unit.cc` — исходный код юнита.
 - `wasm.cc` — исходник web-симулятора (embind).
-- `Makefile` — сборка: ARM-юнит (`make`) и web-симулятор (`make wasm`).
+- `Makefile` — сборка: ARM-юнит (`make`) и standalone web-симулятор (`make wasm`).
 - `config.mk` — конфигурация сборки.
-- `build.sh` — сборка ARM-юнита через Docker.
-- `serve.sh` — запуск локального сервера симулятора.
-- `sim/` — результат сборки web-симулятора (`drone.html`, `drone.js`, `drone.wasm`).
+- `build.sh` / `serve.sh` — сборка ARM-юнита через Docker / запуск локального сервера.
+- `sim/` — результат сборки web-симулятора (`drone_osc.html`, `drone_osc.js`, `drone_osc.wasm`).
 - `build/` — артефакты сборки.
-- `drone.nts1mkiiunit` — собранный ARM-юнит.
+- `drone_osc.nts1mkiiunit` — собранный ARM-юнит.
+- `README.md` — эталонная документация DRONE (параметры, sound path).
 
 ## Соседние каталоги (вторичный поиск)
 Если код не найден в основной папке, смотри также:
@@ -75,16 +88,26 @@ int32_t unit_get_param_value(uint8_t id) {
 - `id == 1 || id == 3` → форматированное значение (`"50%"`, `"+25 c"`, `42`).
 
 ### Web-симулятор
-**ВАЖНО:** `make wasm` использует `websim/osc.html` как shell (см. `SANDBOXDIR` в Makefile), а **не** `sim/drone.html`. `sim/drone.html` — это **результат** сборки, перезаписывается при каждом `make wasm`. **Все правки UI делать в `websim/osc.html`.**
+С 2026-11-10 **итоговый** web-симулятор — `drone-chain/` (единая страница,
+полный путь OSC→MOD→DEL→REV). Shell — **`websim/index.html`** (chain-simulator,
+см. `drone-chain/Makefile`, `--shell-file $(SANDBOXDIR)/index.html`).
+**Все правки UI итогового симулятора делать в `websim/index.html`.**
 
-- `ProcessAudio` (wasm.cc): **пропускает** индексы 2 и 3, чтобы не применять дубликаты дважды.
+`websim/osc.html` — **legacy standalone-шелл для `drone-osc/sim/`**,
+откатан к аутентичной KORG-версии (commit `58dc94f`), **не редактируется**:
+наш дрон-UI больше там нет. Если standalone `drone-osc/sim/drone_osc.html`
+нужен — правки идут в `drone-osc/wasm.cc` (embind-интерфейс) и в
+`drone-chain/wasm.cc`/`drone-chain/chain.cc` по аналогии; UI в `osc.html`
+не расширяем.
+
+- `ProcessAudio` (drone-osc/wasm.cc): **пропускает** индексы 2 и 3, чтобы не применять дубликаты дважды.
 - `getParameterValueString` (wasm.cc): для всех 4 индексов делегирует в `processor.getParameterStrValue`.
-- **UI симулятора = по 1 слайдеру на каждый edit-параметр** (не 4 header-слота). `createEditableParam(wasmProcessor, index)` (websim/osc.html): строка `label + <input type="range" min=0 max=1023 step=1 id="editparam_<i>"> + span`; цикл `for i in 0..EDIT_PARAM_COUNT` (=`kEditParamCount`, сейчас 11) — **не** по `getValidParameters()` (там 4 header-слота). Инициализация значения — из `Module.getEditParamValue(i)` (wasm.cc, main-thread).
-- **Ключевая механика записи** (`apply()` в `createEditableParam`): каждый слайдер пишет **оба** WebAudioParam'а мультиплексора в одном JS-тике — `parameters.get("0").value = index` (PARAM_SEL) **и** `parameters.get("1").value = raw` (PARAM_VAL). Тогда worklet всегда видит согласованную пару `(select_, edit_value_[select_])` — hiccup'ов нет. Слоты 2/3 не пишем (worklet их пропускает).
-- `formatParamValue` (websim/osc.html): принимает **edit-индекс** (0..10), **не** header-индекс: 0=DET1, 1=DET2, 2=RATE, 3=SPEE, 4=SUB1, 5=SUB2, 6=SATU, 7=ASYM, 8=FOLD, 9=WAV1, 10=WAV2.
+- **UI chain-симулятора = по 1 слайдеру на каждый edit-параметр** (не 4 header-слота): `label + <input type="range" min=0 max=1023 step=1 id="editparam_<i>"> + span`; цикл `for i in 0..EDIT_PARAM_COUNT` (=`kEditParamCount`, сейчас 11) — **не** по `getValidParameters()` (там 4 header-слота). Инициализация значения — из `Module.getEditParamValue(i)` (drone-chain/wasm.cc, main-thread).
+- **Ключевая механика записи** (`apply()` в createEditableParam, `websim/index.html`): каждый слайдер пишет **оба** WebAudioParam'а мультиплексора в одном JS-тике — `parameters.get("0").value = index` (PARAM_SEL) **и** `parameters.get("1").value = raw` (PARAM_VAL). Тогда worklet всегда видит согласованную пару `(select_, edit_value_[select_])` — hiccup'ов нет. Слоты 2/3 не пишем (worklet их пропускает).
+- `formatParamValue` (`websim/index.html`): принимает **edit-индекс** (0..10), **не** header-индекс: 0=DET1, 1=DET2, 2=RATE, 3=SPEE, 4=SUB1, 5=SUB2, 6=SATU, 7=ASYM, 8=FOLD, 9=WAV1, 10=WAV2.
 
 ### Частые ошибки (не повторять)
-1. **Править `sim/drone.html`** — правки потеряются при `make wasm`. Править `websim/osc.html`.
+1. **Править `sim/*` (результаты сборки)** — теряются при `make wasm`. Править `websim/index.html` (chain-UI) и исходники `drone-*/wasm.cc`. **Не** расширять `websim/osc.html` — он legacy/откатан.
 2. **Считать edit-параметры = слотам `header.c`** — их 11, слотов 4.
 3. **Забывать маппинг 2→0, 3→1** в `unit_set_param_value` — `Osc::setParameter` упадёт в `default: break;`.
 4. **Считать DET1/DET2 в 50-cent** в `formatParamValue` — DSP использует 100-cent.
@@ -95,12 +118,12 @@ int32_t unit_get_param_value(uint8_t id) {
 ### Как добавить новый edit-параметр
 1. `osc.h`: `enum` (после `WAV2`), `Params` struct, `Params::reset()`, `edit_value_[kEditParamCount]` (увеличить `kEditParamCount`), `apply_edit_param` (новый `case`), `names[]` в `getParameterStrValue`, `formatParamValue`-логика.
 2. `header.c`: **не менять** — мультиплексор подхватит автоматически.
-3. `websim/osc.html`: новый `if (idx === N)` в `formatParamValue` + имя в `EDIT_PARAM_NAMES[N]`. **Слайдер создаётся автоматически** — `EDIT_PARAM_COUNT` равен `kEditParamCount`, цикл `for i in 0..EDIT_PARAM_COUNT` добавит строку сам; отдельный контрол писать не нужно.
-4. **Синхронизировать `platform/nts-1_mkii/drone/README.md`** — добавить/обновить строку параметра в таблице (индекс, имя, диапазон, default, влияние) и, если изменилась топология тракта, — раздел *Sound path*.
+3. `websim/index.html`: новый `if (idx === N)` в `formatParamValue` + имя в `EDIT_PARAM_NAMES[N]`. **Слайдер создаётся автоматически** — `EDIT_PARAM_COUNT` равен `kEditParamCount`, цикл `for i in 0..EDIT_PARAM_COUNT` добавит строку сам; отдельный контрол писать не нужно.
+4. **Синхронизировать `platform/nts-1_mkii/drone-osc/README.md`** — добавить/обновить строку параметра в таблице (индекс, имя, диапазон, default, влияние) и, если изменилась топология тракта, — раздел *Sound path*.
 5. `make install` + `make wasm`.
 
-### Синхронизация `drone/README.md` (строго)
-`platform/nts-1_mkii/drone/README.md` — эталонная документация звукового тракта и параметров юнита DRONE. При **любом** добавлении/удалении/переименовании/изменении диапазона/по умолчанию параметров, а также при изменении топологии звукового тракта, **в той же правке** обновить `drone/README.md`:
+### Синхронизация `drone-osc/README.md` (строго)
+`platform/nts-1_mkii/drone-osc/README.md` — эталонная документация звукового тракта и параметров юнита DRONE. При **любом** добавлении/удалении/переименовании/изменении диапазона/по умолчанию параметров, а также при изменении топологии звукового тракта, **в той же правке** обновить `drone-osc/README.md`:
 - таблицу edit-параметров (индекс, имя, формат дисплея, диапазон, default, влияние);
 - раздел *The four random-walk streams* (если тронуто RATE/SPDx/SMTx/RWAV/RDRV/RFLD/RWFC/RVLL/RVLS/RVLSM);
 - раздел *Sound path* (если изменилось соединение веток/обработчиков);
@@ -112,7 +135,7 @@ int32_t unit_get_param_value(uint8_t id) {
 3. `osc_param_apply.h` — диапазоны/маппинг (`apply_edit_param`).
 4. `osc_param_display.h` — имена и формат дисплея (`names[]`, `getParameterStrValue`).
 5. `header.c` — слоты `header.c` (Rnd/Legato/мультиплексор).
-6. `websim/osc.html` — `EDIT_PARAM_NAMES`, `PARAM_GROUPS`, `formatParamValue`, `EDIT_PARAM_COUNT`.
+6. `websim/index.html` — `EDIT_PARAM_NAMES`, `PARAM_GROUPS`, `formatParamValue`, `EDIT_PARAM_COUNT`.
 7. `osc_mix.h` / `osc_*` (топология тракта, фиксированные константы в `osc_constants.h`).
 
 Параметр не считается добавленным, пока README не отражает его.
