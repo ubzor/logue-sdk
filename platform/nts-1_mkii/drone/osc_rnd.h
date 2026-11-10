@@ -140,6 +140,22 @@ inline void Osc::rndMorphStart(const int32_t *target, uint32_t phrase_beats)
     {
       if (target == nullptr)
         continue; // no new targets (shouldn't happen; rndTrigger always draws)
+      // CINT (idx 17) / CINT2 (idx 30) are NOT morphed: the chord interval
+      // crossfades instead (old note fades out, new note fades in -- see the
+      // pitch crossfade in osc_mix.h). The new target is applied IMMEDIATELY
+      // here (not by the morph engine, which skips these two), through the
+      // same apply_edit_param() path a manual edit uses -- which resets the
+      // "new" phasor and starts the 2 s crossfade. edit_value_[i] is still the
+      // OLD value (the caller overwrites it AFTER rndMorphStart), so the
+      // != check detects a real change and avoids re-starting a crossfade for
+      // an unchanged interval. CINT/CINT2 are never active in the morph
+      // (skipped everywhere), so edit_value_ is their live value.
+      if (i == 17 || i == 30)
+      {
+        if (target[i] != edit_value_[i])
+          apply_edit_param(kEditParamFirst + i, target[i]);
+        continue;
+      }
       const int32_t new_to = target[i];
       // The param's CURRENT value (what the sound is at RIGHT NOW):
       const int32_t cur_val = active_in_morph[i] ? morph_cur_[i] : edit_value_[i];
@@ -188,6 +204,18 @@ inline void Osc::rndMorphStart(const int32_t *target, uint32_t phrase_beats)
   // ---- FRESH morph ---------------------------------------------------------
   for (uint8_t i = 0; i < kEditParamCount; ++i)
   {
+    // CINT (idx 17) / CINT2 (idx 30) are NOT morphed: the chord interval
+    // crossfades instead (see the re-aim loop above and osc_mix.h). Apply the
+    // new target IMMEDIATELY here (the morph engine skips these two): this
+    // resets the "new" phasor and starts the 2 s crossfade via apply_edit_param.
+    // edit_value_[i] is still the OLD value (the caller writes it AFTER
+    // rndMorphStart), so the != check applies only on a real change.
+    if (i == 17 || i == 30)
+    {
+      if (target != nullptr && target[i] != edit_value_[i])
+        apply_edit_param(kEditParamFirst + i, target[i]);
+      continue;
+    }
     const bool has_target = (target != nullptr) && (target[i] != edit_value_[i]);
     if (!has_target)
       continue; // unchanged: nothing to do

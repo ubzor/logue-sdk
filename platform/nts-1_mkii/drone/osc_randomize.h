@@ -88,6 +88,49 @@ inline int32_t Osc::rnd_int(uint32_t count) const
 // Mirrors CINT_SET in websim/osc.html exactly (same values, same order).
 // constexpr so it inlines into cint_raw() with no rodata / no static init.
 static constexpr int32_t kRndCintSet[9] = {0, 400, 500, 700, 900, 1000, 1200, 1500, 1900};
+static constexpr uint32_t kRndCintCount = 9;
+
+// Minimum separation in RAW (0..1023) between the two NON-zero chord intervals
+// (CINT / CINT2) after a re-roll. 94 raw ≈ 175 cents (175 * 1023 / 1900). If
+// both intervals land within this window they sound like one beating note; the
+// randomizer re-draws the second. A 0 (unison) on either side is allowed.
+static constexpr int32_t kRndCintMinSepRaw = 94;
+
+// Enforce minimum separation between CINT (idx 17) / CINT2 (idx 30) in `target`
+// after a re-roll. Works in raw domain (no float conversion). If both are
+// non-zero and |CINT-CINT2| < kRndCintMinSepRaw, re-draw CINT2 from
+// kRndCintSet (non-zero, far enough from CINT) until it fits (at most 9 tries,
+// then accept the last draw -- a small step is better than no step). Audio-thread
+// only (uses rnd_int / osc_rand). ~40 B in the binary.
+inline void Osc::ensure_cint_separation(int32_t* target)
+{
+  const int32_t a = target[17]; // CINT raw
+  int32_t b = target[30];       // CINT2 raw
+  if (a == 0 || b == 0)
+    return; // unison: no second voice to separate from
+  int32_t d = a - b;
+  if (d < 0)
+    d = -d;
+  if (d >= kRndCintMinSepRaw)
+    return; // already separated
+  // Too close: re-draw CINT2 until it's far enough from CINT.
+  for (uint32_t t = 0; t < 9U; ++t)
+  {
+    const int32_t cand = kRndCintSet[rnd_int(kRndCintCount)];
+    if (cand == 0)
+      continue; // skip unison: we need a non-zero second voice
+    int32_t dd = a - cand;
+    if (dd < 0)
+      dd = -dd;
+    if (dd >= kRndCintMinSepRaw)
+    {
+      target[30] = cand;
+      return;
+    }
+    b = cand; // keep the last draw as fallback
+  }
+  target[30] = b;
+}
 
 // raw for a WAV table index (0..kWavesTotal-1). Mirrors the sim's
 // Math.round(index * 1023 / 90). (kWavesTotal-1 == 90, a power-free divisor.)
@@ -101,6 +144,7 @@ static inline int32_t drone_cents_raw(int32_t cents)
 {
   return (int32_t)((float)cents * (float)kRawMax / ChordVoice::kMaxCents + 0.5f);
 }
+
 
 // ---- Shared "safe windows" (audition-friendly random ranges) -----------------
 // The single source of truth for the raw 0..1023 range each edit parameter is
@@ -335,6 +379,11 @@ inline void Osc::randomizeAll()
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     target[i] = rnd_draw(i);
 
+  // CINT / CINT2: enforce minimum separation so the two chord voices don't
+  // land within kRndCintMinSepRaw of each other (they'd sound like one beating
+  // note). Works in raw domain (no float conversion). ~20 B.
+  ensure_cint_separation(target);
+
   // Start the morph toward the fresh targets (reads the current values as
   // `from`). Must run BEFORE edit_value_ is overwritten below.
   rndMorphStart(target);
@@ -369,9 +418,12 @@ inline void Osc::randomizePartial()
     target[i] = edit_value_[i];
 
   const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
+  uint8_t touched_cint = 0; // was CINT (17) or CINT2 (30) re-rolled this pass?
   for (uint32_t c = 0; c < count; ++c)
   {
     const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
+    if (idx == 17U || idx == 30U)
+      touched_cint = 1;
     const int32_t current = edit_value_[idx];
     // First draw, then re-draw until the step is significant (or give up after
     // kRndRedrawMax tries and accept the last draw -- a small step is better
@@ -388,6 +440,11 @@ inline void Osc::randomizePartial()
     }
     target[idx] = v;
   }
+
+  // CINT / CINT2 separation: if this pass re-rolled at least one interval,
+  // enforce the minimum separation on the resulting pair. ~15 B.
+  if (touched_cint)
+    ensure_cint_separation(target);
 
   // Morph toward the targets (reads the current values as `from`; unchanged
   // params have target == old target, so the engine skips them). Then commit
@@ -432,11 +489,19 @@ inline void Osc::randomizeOrbi()
     target[i] = stable_value_[i];
 
   const uint32_t count = kRndOrbiMinCount + (uint32_t)rnd_int(kRndOrbiMaxCount - kRndOrbiMinCount + 1U); // 2..4
+  uint8_t touched_cint = 0; // was CINT (17) or CINT2 (30) nudged this fire?
   for (uint32_t c = 0; c < count; ++c)
   {
     const uint8_t idx = rnd_pick_orbi_param();
+    if (idx == 17U || idx == 30U)
+      touched_cint = 1;
     target[idx] = rnd_draw_orbi(idx, target[idx]); // nudge from the stable value
   }
+
+  // CINT / CINT2 separation: if this fire nudged at least one interval, keep the
+  // resulting pair at least kRndCintMinSepRaw apart (same rule as Part/All).
+  if (touched_cint)
+    ensure_cint_separation(target);
 
   // Morph toward the targets (the live sound glides from its CURRENT values to
   // the Orbit result, not from the stable state). Orbit uses a SHORTER phrase

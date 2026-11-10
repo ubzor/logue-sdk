@@ -498,6 +498,9 @@ extern "C" int getRndRun()
   return static_cast<int>(processor.getRndRun());
 }
 
+
+
+
 extern "C" void setRndRun(int v)
 {
   processor.setRndRun(static_cast<uint8_t>(v));
@@ -526,4 +529,5 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("setRndRun", &setRndRun);
   emscripten::function("stableSync", &stableSync);
   emscripten::function("getMorphActive", &getMorphActive);
+
 }

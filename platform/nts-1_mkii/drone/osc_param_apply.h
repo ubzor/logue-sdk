@@ -127,9 +127,28 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       // chord phasor's frequency ratio at K-rate (never in the audio path).
       // params_.chord_cents is the single source of truth (OscParamsData);
       // chord_.update() sets the phasor's w0 from the base pitch + interval.
+      //
+      // Pitch crossfade: the "new" phasor (chord_new_) takes the FRESH offset
+      // and the blend starts from 0 (all old). The OLD phasor (chord_) is NOT
+      // re-fretted to the new frequency here -- it keeps running at its current
+      // (old) w0, so the per-sample loop (osc_mix.h) genuinely blends the old
+      // note into the new one over 2 s instead of jumping. chord_old_cents_ is
+      // set to the PRE-CHANGE cents so that a base-pitch change MID-FADE
+      // (recalc_pitch_derived / noteOn) keeps the old note at its old frequency
+      // (the crossfade is not destroyed). When the crossfade completes,
+      // chord_old_cents_ is synced back to params_.chord_cents (osc_mix.h).
       {
-        params_.chord_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        chord_.update(w0_, params_.chord_cents);
+        const float new_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
+        if (new_cents != prev_chord_cents_)  // only crossfade on an actual change
+        {
+          chord_new_.update(w0_, new_cents);  // fresh offset, phasor unchanged
+          chord_old_cents_ = prev_chord_cents_; // old phasor tracks the pre-change cents
+          chord1_cross_ = 0.f;                // start from "all old"
+        }
+        params_.chord_cents = new_cents;      // single source of truth
+        prev_chord_cents_ = new_cents;
+        // NOTE: chord_.update() intentionally omitted -- the old phasor keeps
+        // its current w0 for the duration of the crossfade (see above).
       }
       break;
 
@@ -229,12 +248,28 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // A second chord-voice oscillator at a continuous interval above the base
     // (0..ChordVoice::kMaxCents = 1900 c). Shares the chord's level (CHRD),
     // wavetable (WAV3), folder/saturator (CHSAT/CHFLD), and the Breath stream's
-    // lvl_c (both intervals breathe in sync — the chord is one object). The
-    // phasor is recomputed at K-rate (chord2_.update) exactly like CHRD_INT.
+    // lvl_c (both intervals breathe in sync — the chord is one object).
     case CINT2:
+      // Same pitch crossfade as CINT (see the CHRD_INT case above): the "new"
+      // phasor (chord2_new_) takes the fresh offset, the blend starts from 0,
+      // and the OLD phasor (chord2_) is NOT touched -- it keeps its current
+      // (old) w0 for the duration of the crossfade. Do NOT call
+      // recalc_pitch_derived() here: it would re-fret chord2_ (the old phasor)
+      // to the new frequency and break the crossfade. chord2_old_cents_ is set
+      // to the PRE-CHANGE cents so a base-pitch change MID-FADE keeps the old
+      // note at its old frequency (synced back on completion in osc_mix.h).
       {
-        params_.chord2_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        recalc_pitch_derived(); // chord2 phasor + keep every derived voice consistent with the current w0_
+        const float new_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
+        if (new_cents != prev_chord2_cents_)
+        {
+          chord2_new_.update(w0_, new_cents);
+          chord2_old_cents_ = prev_chord2_cents_; // old phasor tracks the pre-change cents
+          chord2_cross_ = 0.f;
+        }
+        params_.chord2_cents = new_cents;      // single source of truth
+        update_w0_sub();
+        update_w0_sub2();
+        prev_chord2_cents_ = new_cents;
       }
       break;
 

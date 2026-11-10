@@ -908,13 +908,37 @@
         // set of consonant / musically-usable intervals so the chord voice is
         // always "in key" (never a random dissonant gap).
         const CINT_SET = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
-        set("Interval", Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900));
-        // CINT2 (Interval 2): the chord's SECOND interval. Uses the SAME
-        // CINT_SET as Interval so the two chord voices always land on
-        // consonant, "in key" intervals (e.g. 700+900 = fifth + major third).
-        // Random can pick 0 (unison) which silences the second voice —
-        // a musically-safe "single-interval chord" outcome.
-        set("Interval 2", Math.round((CINT_SET[Math.floor(Math.random() * CINT_SET.length)] * 1023) / 1900));
+        const MIN_SEP = 175; // cents — mirrors kRndCintMinSepCents in osc_randomize.h
+        const cintRaw = (c) => Math.round((c * 1023) / 1900);
+        const pickCint = () => CINT_SET[Math.floor(Math.random() * CINT_SET.length)];
+        // CINT: first chord interval (consonant set; 0 = unison / off).
+        const c1 = pickCint();
+        // CINT2: the chord's SECOND interval. Same set, so both voices land on
+        // consonant "in key" intervals. Enforce a minimum separation from CINT
+        // (mirrors Osc::rnd_separate_cint): if both are non-zero and closer than
+        // MIN_SEP they sound like one beating note, so re-draw (up to 3x) then
+        // snap to the nearest non-zero set element >= MIN_SEP away. A 0 (unison)
+        // on either side is allowed.
+        let c2 = pickCint();
+        if (c1 !== 0 && c2 !== 0 && Math.abs(c1 - c2) < MIN_SEP) {
+          let fixed = false;
+          for (let t = 0; t < 3 && !fixed; t++) {
+            const cand = pickCint();
+            if (cand !== 0 && Math.abs(c1 - cand) >= MIN_SEP) { c2 = cand; fixed = true; }
+          }
+          if (!fixed) {
+            let best = c2, bestD = -1;
+            for (const cand of CINT_SET) {
+              if (cand === 0) continue;
+              const d = Math.abs(c1 - cand);
+              if (d < MIN_SEP) continue;
+              if (bestD < 0 || d < bestD) { bestD = d; best = cand; }
+            }
+            c2 = best;
+          }
+        }
+        set("Interval", cintRaw(c1));
+        set("Interval 2", cintRaw(c2));
         // MAIN: main (A+B) voice level (0..100%). Window 55..100%
         // (raw 563..1023) — the main voice stays clearly present (never fully
         // ducked, which would leave only subs/chord and sound "hollow"), but
@@ -1054,6 +1078,29 @@
             step = Math.abs(v - base[idx]);
           }
           base[idx] = v;
+        }
+        // CINT / CINT2 separation (mirrors Osc::randomizePartial): if this pass
+        // re-rolled at least one of the two interval sliders, keep the resulting
+        // pair at least 175 cents apart. The re-draws above (which regenerate
+        // the full array) can leave the pair too close when only one was
+        // touched, so enforce it on the FINAL base values.
+        if (picked.has(17) || picked.has(30)) {
+          const raw2cents = (r) => Math.round((r * 1900) / 1023);
+          const MIN_SEP2 = 175;
+          const c1 = raw2cents(base[17]);
+          let c2 = raw2cents(base[30]);
+          if (c1 !== 0 && c2 !== 0 && Math.abs(c1 - c2) < MIN_SEP2) {
+            const CINT_SET2 = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
+            let best = c2, bestD = -1;
+            for (const cand of CINT_SET2) {
+              if (cand === 0) continue;
+              const d = Math.abs(c1 - cand);
+              if (d < MIN_SEP2) continue;
+              if (bestD < 0 || d < bestD) { bestD = d; best = cand; }
+            }
+            c2 = best;
+            base[30] = Math.round((c2 * 1023) / 1900);
+          }
         }
         return base;
       }

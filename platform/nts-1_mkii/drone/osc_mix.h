@@ -219,6 +219,26 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     chord1_fade_ += (chord1_target - chord1_fade_) * chord_fade_alpha;
     chord2_fade_ += (chord2_target - chord2_fade_) * chord_fade_alpha;
 
+    // Advance the chord pitch crossfade coefficients (one-pole toward 1, same
+    // alpha as the on/off level fade above). When a crossfade is active
+    // (cross < 0.999) the old and new phasors diverge in frequency; when it
+    // completes, sync the old phasor to the new one (same phasor + w0) so the
+    // next change-detection starts from a consistent state.
+    chord1_cross_ += (1.f - chord1_cross_) * chord_fade_alpha;
+    chord2_cross_ += (1.f - chord2_cross_) * chord_fade_alpha;
+    if (chord1_cross_ >= 0.999f)
+    {
+      chord_ = chord_new_;  // sync old → new (phasor + w0 + cents)
+      chord1_cross_ = 1.f;  // snap to exact (avoid infinite 0.001 drift)
+      chord_old_cents_ = params_.chord_cents;  // old now tracks the settled target
+    }
+    if (chord2_cross_ >= 0.999f)
+    {
+      chord2_ = chord2_new_;
+      chord2_cross_ = 1.f;
+      chord2_old_cents_ = params_.chord2_cents;
+    }
+
     if (rw_active)
     {
       // Advance all three streams (each draws its own random targets on its
@@ -349,9 +369,15 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // cents == 0) so the signal shape is continuous; the LEVEL is gated by
     // chord1_fade_ / chord2_fade_ (see the fade comment above).
     chord_.advance();
+    // "New" CINT phasor (target offset for the pitch crossfade). Advances at
+    // the FRESH w0 (set by chord_new_.update() in blockPrepass). When no
+    // crossfade is active, chord_new_ is synced to chord_ (identical w0),
+    // so this advance is a no-op cost-wise (one extra float add + floorf).
+    chord_new_.advance();
     // Second chord phasor (CINT2): same behavior as chord_. The phasor
     // always advances; chord2_gain * chord2_fade_ gates the level.
     chord2_.advance();
+    chord2_new_.advance();
 
     // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
     // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
@@ -427,9 +453,27 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // is active (chord_active) and the level is non-zero (chord_gain > 0)
     // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
     // wavetable lookup. See osc_chord.h for the interval table.
-    const float wav_c = (chord_gain * chord1_fade_) > 0.f
-        ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord_.phasor)
-        : 0.f;
+    // Chord pitch crossfade: when a cents change is in flight (cross < 0.999)
+    // TWO wavetable lookups are blended (old-offset phasor × (1-cross) +
+    // new-offset phasor × cross). When stable (cross >= 0.999) only the new
+    // phasor is read — one lookup, identical to the pre-crossfade code path.
+    // The AM blend is in the DOMAIN BEFORE the folder/saturator, so the
+    // saturation is shared (the blended signal drives the same saturator).
+    float wav_c = 0.f;
+    if ((chord_gain * chord1_fade_) > 0.f)
+    {
+      const float wave_idx = wave_base_c + lfo_morph;
+      if (chord1_cross_ < 0.999f)
+      {
+        const float wav_old = WaveTable::resolve_wave(wave_idx, chord_.phasor);
+        const float wav_new = WaveTable::resolve_wave(wave_idx, chord_new_.phasor);
+        wav_c = wav_old * (1.f - chord1_cross_) + wav_new * chord1_cross_;
+      }
+      else
+      {
+        wav_c = WaveTable::resolve_wave(wave_idx, chord_new_.phasor);
+      }
+    }
     // Second chord voice (CINT2): same wavetable (WAV3) + LFO morph as the
     // first chord, but at a different interval (chord2_.phasor). Gated by
     // chord2_active (interval > 0) AND chord2_gain > 0 (CHRD > 0) to keep the
@@ -437,9 +481,22 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // intervals share the CHRD level (chord_gain) and lvl_c (Breath stream
     // dev_c) in the final mix, so they breathe in sync. Each interval then
     // runs its OWN folder+saturator (CINT: CHSAT/CHFLD, CINT2: CHSAT2/CHFLD2).
-    const float wav_c2 = (chord2_gain * chord2_fade_) > 0.f
-        ? WaveTable::resolve_wave(wave_base_c + lfo_morph, chord2_.phasor)
-        : 0.f;
+    // Same pitch crossfade as CINT (see above).
+    float wav_c2 = 0.f;
+    if ((chord2_gain * chord2_fade_) > 0.f)
+    {
+      const float wave_idx = wave_base_c + lfo_morph;
+      if (chord2_cross_ < 0.999f)
+      {
+        const float wav_old = WaveTable::resolve_wave(wave_idx, chord2_.phasor);
+        const float wav_new = WaveTable::resolve_wave(wave_idx, chord2_new_.phasor);
+        wav_c2 = wav_old * (1.f - chord2_cross_) + wav_new * chord2_cross_;
+      }
+      else
+      {
+        wav_c2 = WaveTable::resolve_wave(wave_idx, chord2_new_.phasor);
+      }
+    }
 
     // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
     const float sub = osc_sinf(phasor_sub_);
@@ -762,6 +819,16 @@ inline void Osc::blockPrepass(uint32_t frames)
   // Osc::rndMorphStart / rndMorphTick in osc.h.
   rndMorphTick(frames);
 
+  // ---- Chord interval pitch crossfade ---------------------------------------
+  // NOTE: the crossfade is started EXCLUSIVELY by apply_edit_param(CHRD_INT /
+  // CINT2) -- the single path every interval change takes (manual slider edit,
+  // Rnd re-roll, and the Rnd morph all funnel through it). It resets the "new"
+  // phasor, sets chord_old_cents_ to the pre-change cents, and starts the blend
+  // from 0. The per-sample loop above advances chord1_cross_ / chord2_cross_
+  // toward 1 (2 s one-pole) and syncs the old phasor when the fade completes.
+  // There is NO separate change-detection here: a second detector would race
+  // with apply_edit_param and re-trigger / shorten the crossfade.
+
   // ---- Pitch glide (portamento) ---------------------------------------------
   // If a note change is in flight, advance the base phase increment LINEARLY
   // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
@@ -799,8 +866,14 @@ inline void Osc::blockPrepass(uint32_t frames)
         const Params p = params_;
         const float w = w0_;
         update_w0_det();
-        chord_.update(w, p.chord_cents);
-        chord2_.update(w, p.chord2_cents);
+        // OLD phasors track chord_old_cents_ (the pre-change cents during an
+        // active crossfade) so the glide does not destroy the fade; NEW phasors
+        // track params_.chord*_cents (the target). Identical when no fade is
+        // active (chord_old_cents_ == params_.chord*_cents).
+        chord_.update(w, chord_old_cents_);
+        chord_new_.update(w, p.chord_cents);
+        chord2_.update(w, chord2_old_cents_);
+        chord2_new_.update(w, p.chord2_cents);
         update_w0_sub();
         update_w0_sub2();
         waves_.update(w);

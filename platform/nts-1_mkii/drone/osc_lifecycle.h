@@ -126,6 +126,20 @@ inline void Osc::init(float *)
     chord1_fade_ = 0.f;
     chord2_fade_ = 0.f;
     chord_fade_alpha_ = one_minus_expf(-5.f / static_cast<float>(kChordFadeSamples));
+    // Chord interval pitch crossfade: start with "new" phasors synced to the
+    // current (old) phasors and crossfade position = 1 (all new, no active
+    // crossfade). The prev_* cents trackers start at 0 so the first cents
+    // change (from 0 to the init value) does NOT trigger a crossfade — the
+    // phasors are already consistent.
+    chord_new_ = chord_;   // sync "new" phasor to current (old) state
+    chord2_new_ = chord2_;
+    chord1_cross_ = 1.f;
+    chord2_cross_ = 1.f;
+    // No crossfade at init: the old phasors track the same cents as the new.
+    chord_old_cents_ = params_.chord_cents;
+    chord2_old_cents_ = params_.chord2_cents;
+    prev_chord_cents_ = params_.chord_cents;
+    prev_chord2_cents_ = params_.chord2_cents;
   }
 
 inline void Osc::reset() 

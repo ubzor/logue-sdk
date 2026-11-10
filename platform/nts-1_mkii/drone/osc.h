@@ -344,6 +344,13 @@ public:
   uint8_t  rnd_pick_orbi_param();
   int32_t  rnd_draw_orbi(uint8_t idx, int32_t base);
 
+  // Enforce minimum separation between CINT (idx 17) / CINT2 (idx 30) in
+  // `target` after a re-roll: if both are non-zero and closer than
+  // kRndCintMinSepRaw (94 raw ≈ 175 cents), re-draw CINT2 until it's far
+  // enough. A 0 (unison) on either side is allowed. Works in raw domain.
+  // Audio-thread only. ~40 B.
+  void ensure_cint_separation(int32_t* target);
+
   // Randomizer primitive used by randomizeAll(): returns a uniform integer in
   // 0..count-1 from one osc_white() sample (integer math, no float/libm --
   // see osc_randomize.h for the derivation).
@@ -581,8 +588,16 @@ public:
   void recalc_pitch_derived()
   {
     update_w0_det(); // A/B symmetric detune
-    chord_.update(w0_, params_.chord_cents);
-    chord2_.update(w0_, params_.chord2_cents);
+    // The OLD phasors track chord_old_cents_ (not params_.chord*_cents): during
+    // an active pitch crossfade the old note keeps its pre-change frequency
+    // even if the base note changes mid-fade, so the crossfade is preserved.
+    // The NEW phasors track params_.chord*_cents (the target). When no fade is
+    // active chord_old_cents_ == params_.chord*_cents, so both are identical
+    // (regression-safe / zero difference).
+    chord_.update(w0_, chord_old_cents_);
+    chord_new_.update(w0_, params_.chord_cents);
+    chord2_.update(w0_, chord2_old_cents_);
+    chord2_new_.update(w0_, params_.chord2_cents);
     update_w0_sub();
     update_w0_sub2();
     waves_.update(w0_);
@@ -710,6 +725,34 @@ private:
   float chord1_fade_ = 0.f; // CINT  interval level fade (0..1)
   float chord2_fade_ = 0.f; // CINT2 interval level fade (0..1)
   float chord_fade_alpha_ = 0.f; // per-sample one-pole alpha (K-rate, init())
+
+  // ---- Chord interval pitch crossfade (CINT / CINT2 offset change) -----------
+  // When the interval cents value changes (Rnd re-roll, manual edit, morph),
+  // the phasor's frequency ratio (w0) jumps and produces a click. This
+  // crossfade runs TWO wavetable lookups per chord voice (old-offset phasor
+  // + new-offset phasor) and blends their outputs with a one-pole coefficient
+  // (chord1_cross_ / chord2_cross_, same 2 s alpha as the on/off level fade).
+  // The "new" phasors (chord_new_ / chord2_new_) are reset to the FRESH
+  // offset at change-detection time (blockPrepass); the "old" phasors
+  // (chord_ / chord2_) keep running at their current w0. When the crossfade
+  // completes (cross >= 0.999), the old phasor is synced to the new one and
+  // only the new phasor is read in the audio path (zero extra lookups,
+  // regression-safe). See the crossfade block in osc_mix.h.
+  ChordVoice chord_new_;    // "new" CINT  phasor (target offset)
+  ChordVoice chord2_new_;   // "new" CINT2 phasor (target offset)
+  float chord1_cross_ = 1.f; // CINT  pitch crossfade position (0=old, 1=new)
+  float chord2_cross_ = 1.f; // CINT2 pitch crossfade position (0=old, 1=new)
+  // Interval cents the OLD phasors (chord_ / chord2_) are currently tracking.
+  // These are the cents used to re-fret the old phasor in recalc_pitch_derived()
+  // / noteOn() / glide, so a base-pitch change MID-FADE keeps the old note at
+  // its old frequency (the crossfade is not destroyed by the note change).
+  // When no crossfade is in flight (cross == 1) they equal params_.chord*_cents;
+  // when a crossfade is active they are the PRE-CHANGE cents and are synced back
+  // to params_.chord*_cents when the crossfade completes (osc_mix.h).
+  float chord_old_cents_ = 0.f;   // CINT  cents the old phasor tracks
+  float chord2_old_cents_ = 0.f;  // CINT2 cents the old phasor tracks
+  float prev_chord_cents_ = 0.f;    // last-seen CINT  cents (change detection)
+  float prev_chord2_cents_ = 0.f;   // last-seen CINT2 cents (change detection)
 
   // ---- Enrichment-2 DSP state (formant / comb / ducking) --------------------
   // All OFF by default (the corresponding params_ fields are 0), so the stock

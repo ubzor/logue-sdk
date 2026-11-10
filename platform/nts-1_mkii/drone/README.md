@@ -35,6 +35,8 @@ MAIN voice (osc A + osc B)
 CHORD voice (osc C at INT, osc C2 at INT2)
   phasor C  ->  wavetable C (WA3)  at base * 2^(INT/1200)
   phasor C2 ->  wavetable C (WA3)  at base * 2^(INT2/1200)
+  [pitch crossfade: when INT/INT2 changes, old + new phasors are AM-blended
+   over 2 s (same one-pole as the level fade) before the folder/saturator]
   each: -> FLD (CFLD / CH2F) -> SAT (CH2D / CH2D, shared ASYM)
   y_chord = (c1 + c2) * CHRD * lvl_c * fade    (lvl_c = Breath stream,
                                                fade = 2 s one-pole on INT / INT2)
@@ -79,6 +81,26 @@ Key facts about the path:
    0; only the LEVEL fades. Re-targeting mid-fade is continuous, so scrubbing
    the knob through 0 is click-free. The whole chord is still gated by the
    note A-H-R envelope, so a note-off kills it instantly.
+ * **Chord pitch crossfade**: when the INT or INT2 cents value **changes**
+   the phasor's frequency ratio (w0) jumps and would produce an audible click.
+   To smooth the transition, TWO wavetable lookups are run per chord voice —
+   the "old" phasor (running at the previous offset) and the "new" phasor
+   (reset to the fresh offset) — and their outputs are **AM-blended** with a
+   one-pole coefficient that relaxes from 0 (all old) to 1 (all new) over
+   **2 s** (same `kChordCrossSamples` / `kChordFadeSamples` curve as the on/off
+   level fade). The blend happens in the wavetable-output domain, **before**
+   the folder/saturator, so the saturation is shared. When the cents value is
+   stable the old phasor is synced to the new one and only one lookup runs
+   (regression-safe, zero extra cost in steady state). The crossfade is
+   triggered by `apply_edit_param(CINT/CINT2)` (osc_param_apply.h) resetting
+   `chord_new_` / `chord2_new_` and starting `chord1_cross_` / `chord2_cross_`
+   from 0, and records the pre-change cents in `chord_old_cents_` /
+   `chord2_old_cents_` so the "old" phasors keep their pre-change frequency for
+   the whole fade (a base-pitch change mid-fade does not destroy the crossfade;
+   on completion the old cents sync back to `params_`). Because CINT / CINT2 are
+   excluded from the Rnd morph (see the *Rnd re-roll* section), a re-roll
+   applies the new interval **immediately** and the crossfade is the ONLY
+   smoothing — a clean 2 s voice swap, not a cents glide.
 
 ### Rnd re-roll (BPM-synced smooth morph)
 
@@ -110,8 +132,25 @@ all at once.
   `apply_edit_param()` path a manual PARAM_VAL edit uses, so the derived-voice
   caches (wavetables, chords, SVF coefficients, formant combs) stay consistent
   with the moving raw values. Discrete parameters morph in their native space
-  for free: a fractional wavetable index crossfades via `resolve_wave()` and
-  fractional chord cents glide the interval continuously.
+  for free: a fractional wavetable index crossfades via `resolve_wave()`.
+  **Exception — CINT / CINT2 do NOT morph**: the two chord intervals are
+  excluded from the morph engine (`rndMorphStart` skips idx 17 / 30) and are
+  applied **immediately** inside `rndMorphStart` instead (an
+  `apply_edit_param()` call for each, on a real change), so the chord
+  **pitch-crossfades** (old interval fades out, new interval fades in over
+  2 s — see the *Chord pitch crossfade* note in the Sound-path section) rather
+  than the interval gliding in cents. This is audible as a clean "voice swap"
+  instead of a slide. (The sim's CINT / CINT2 sliders therefore snap to the
+  new value on a re-roll — the DSP, not the slider, carries the 2 s crossfade.)
+   **CINT / CINT2 minimum separation**: when a re-roll draws the two chord
+   intervals, `rnd_separate_cint()` (osc_randomize.h) guarantees that if BOTH are
+   non-zero they end up at least `kRndCintMinSepCents` (175 c) apart — closer
+   they sound like a single beating note rather than two distinct voices. If the
+   fresh draw is too close, the second interval is re-drawn (up to 3×) and, if
+   still too close, snapped to the nearest consonant-set element far enough away.
+   A 0 (unison) on either interval is always allowed (it silences that voice).
+   Enforced in all three re-roll paths (All / Part / Orbit) and mirrored in the
+   web simulator's `randomizeAllRaw()` / `partialRandomRaw()`.
 * **Re-fire mid-morph (C1-continuous re-aim)**: a new fire while a morph is in
   flight does NOT restart the morph. It re-aims **every** parameter (not just
   the currently-active ones), because a new fire (especially Orbit/Part) often

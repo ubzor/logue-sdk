@@ -200,6 +200,18 @@
   // current level), so scrubbing the INT / INT2 knob through 0 is click-free.
   static constexpr uint32_t kChordFadeSamples = 2U * 48000U; // 2 s @ 48 kHz
 
+  // ---- Chord interval pitch crossfade (CINT / CINT2 offset change) -----------
+  // When the interval cents value CHANGES (Rnd re-roll, manual edit, morph),
+  // the phasor's frequency ratio (w0) jumps and produces an audible click.
+  // The crossfade runs TWO wavetable lookups per chord voice (old-offset
+  // phasor + new-offset phasor) and blends their outputs with a one-pole
+  // coefficient that relaxes from 0 (all old) to 1 (all new) over this many
+  // samples. Same 2 s one-pole curve as the on/off level fade above (kChord-
+  // FadeSamples), so the pitch transition and the level fade are tempo-locked.
+  // When the cents value is stable (no change), cross == 1 and only the new
+  // phasor is read — zero extra lookups (regression-safe).
+  static constexpr uint32_t kChordCrossSamples = kChordFadeSamples; // 2 s
+
  // ---- Rnd re-roll morph (BPM-synced smooth transition) -----------------------
  // When a Rnd re-roll fires (All / Part / Orbi), the affected parameters do NOT
  // jump to their new values: they morph from the OLD raw value to the NEW one,
