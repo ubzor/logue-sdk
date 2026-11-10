@@ -61,11 +61,25 @@ public:
     FX_REV,
     FX_STAGE_COUNT
   };
+  // MOD is now a full 10-parameter stage (TIME / DEPTH / DRIFT / ENSE / TREMO /
+  // FLNG / TAPE / FORM / FLVL / COMB). DEL and REV still have their own
+  // parameter sets (DELAY / FDBK / ... / DENS / ...). We use the MOD stage's
+  // count (10) as the per-stage stride so setFxParam/applyFxParams work for all
+  // three; DEL/REV simply ignore the higher indices (their setParameter
+  // default-cases them). FX_PARAM_COUNT is the MOD count = 10.
   enum
   {
     FX_TIME = 0,
     FX_DEPTH,
-    FX_PARAM_COUNT
+    FX_DRIFT,
+    FX_ENSE,
+    FX_TREMO,
+    FX_FLNG,
+    FX_TAPE,
+    FX_FORM,
+    FX_FLVL,
+    FX_COMB,
+    FX_PARAM_COUNT // = 10 (the MOD stage's parameter count)
   };
 
   // Total dynamic RAM the chain needs = the sum of every stage's buffer.
@@ -140,15 +154,34 @@ public:
     }
 
     // 3. MOD -> DEL -> REV, each in-place between two interleaved stereo
-    //    scratch buffers (in=buf_a_, out=buf_b_, then swap).
-    mod_.process(buf_a_, buf_b_, frames);
-    del_.process(buf_b_, buf_a_, frames);
-    rev_.process(buf_a_, buf_b_, frames);
+    //    scratch buffers (in/out ping-pong). Each stage can be BYPASSED
+    //    (sim_stage_bypass_[stage] == 1): when bypassed the buffer is passed
+    //    straight through untouched, so the user can A/B any combination
+    //    OSC -> [MOD] -> [DEL] -> [REV] and localize a clipping stage.
+    const float *fx_in = buf_a_;
+    float *fx_out = buf_b_;
+    if (!sim_stage_bypass_[FX_MOD])
+    {
+      mod_.process(fx_in, fx_out, frames);
+      const float *t = fx_out; fx_out = const_cast<float *>(fx_in); fx_in = t;
+    }
+    if (!sim_stage_bypass_[FX_DEL])
+    {
+      del_.process(fx_in, fx_out, frames);
+      const float *t = fx_out; fx_out = const_cast<float *>(fx_in); fx_in = t;
+    }
+    if (!sim_stage_bypass_[FX_REV])
+    {
+      rev_.process(fx_in, fx_out, frames);
+      const float *t = fx_out; fx_out = const_cast<float *>(fx_in); fx_in = t;
+    }
 
-    // 4. stereo -> mono (average L/R) for the single-channel output.
+    // 4. stereo -> mono (average L/R) for the single-channel output. If every
+    //    stage is bypassed, fx_in is still buf_a_ where L==R==osc, so the
+    //    average equals the raw mono OSC output (a clean dry reference).
     for (uint32_t i = 0; i < frames; ++i)
     {
-      out[i] = 0.5f * (buf_b_[2 * i] + buf_b_[2 * i + 1]);
+      out[i] = 0.5f * (fx_in[2 * i] + fx_in[2 * i + 1]);
     }
   }
 
@@ -217,6 +250,27 @@ public:
     return sim_fx_cache_[stage * FX_PARAM_COUNT + which];
   }
 
+  // ---- Per-stage BYPASS (web-sim diagnostic A/B) -----------------------------
+  // A per-stage on/off switch so the user can hear any combination of
+  // OSC -> [MOD] -> [DEL] -> [REV] and localize which stage is clipping.
+  //   bypass == 0 (default) -> the stage is IN the path.
+  //   bypass == 1           -> the stage is skipped (dry wire through).
+  // Main thread writes (UI toggle), worklet reads in process(). Plain aligned
+  // 32-bit: benign data race, exactly like sim_fx_valid_.
+  void setStageBypass(int stage, int on)
+  {
+    if (stage < 0 || stage >= FX_STAGE_COUNT)
+      return;
+    sim_stage_bypass_[stage] = on ? 1 : 0;
+  }
+
+  int32_t getStageBypass(int stage) const
+  {
+    if (stage < 0 || stage >= FX_STAGE_COUNT)
+      return 0;
+    return sim_stage_bypass_[stage];
+  }
+
   // Called from the worklet thread once per block (top of process()): apply the
   // cached FX values to the live DSP. `w` (FX_TIME=0 / FX_DEPTH=1) maps 1:1 onto
   // each FX class's TIME / DEPTH parameter ids.
@@ -257,13 +311,19 @@ private:
 
   // Scratch buffers: one mono (OSC out) + two interleaved stereo (FX ping-pong).
   // Sized for kFrames (128) samples; the worklet always calls with 128.
-  float osc_mono_[kFrames];
-  float buf_a_[2 * kFrames];
-  float buf_b_[2 * kFrames];
+  // Zero-initialized to avoid garbage on first block (causes DC offset / noise).
+  float osc_mono_[kFrames] = {};
+  float buf_a_[2 * kFrames] = {};
+  float buf_b_[2 * kFrames] = {};
 
   // Shared FX parameter cache (main thread writes, worklet reads/applies).
   // Plain aligned 32-bit ints: benign data race, inaudible.
-  int32_t sim_fx_cache_[FX_STAGE_COUNT * FX_PARAM_COUNT];
+  // Zero-initialized so getFxParam returns 0 (not garbage) before first setFxParam.
+  int32_t sim_fx_cache_[FX_STAGE_COUNT * FX_PARAM_COUNT] = {};
   volatile int32_t sim_fx_valid_ = 0;
+
+  // Per-stage bypass flags (web-sim diagnostic A/B). 0 = stage IN path
+  // (default), 1 = stage skipped. See setStageBypass/getStageBypass.
+  volatile int32_t sim_stage_bypass_[FX_STAGE_COUNT] = {0, 0, 0};
 };
 

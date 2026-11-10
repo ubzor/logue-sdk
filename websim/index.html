@@ -32,7 +32,7 @@
       <span id="DroneIcon" class="icon-[tabler--drone] text-2xl" role="img" aria-label="Drone"></span>
       <span class="text-lg font-semibold tracking-wide">DRONE</span>
       <div class="flex-1"></div>
-      <input type="checkbox" id="ThemeSwitch" class="switch switch-primary" title="Toggle dark theme (VSCode) / light theme (Valorant)">
+      <input type="checkbox" id="ThemeSwitch" class="switch switch-primary switch-xs" title="Toggle dark theme (VSCode) / light theme (Valorant)">
     </div>
 
     <div class="flex flex-col xl:flex-row gap-6 items-start">
@@ -137,68 +137,6 @@
 
     </div>
 
-    <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
-    <!-- The full audio path OSC -> MOD -> DEL -> REV -> out runs inside the
-         single wasm worklet (drone-chain/chain.h). Each FX stage exposes two
-         knobs (TIME / DEPTH, raw 0..1023), driven through Module.setFxParam.
-         The FX DSP is currently a pass-through, so these read as 0% until the
-         stages get real DSP; the UI and parameter plumbing are already in
-         place. Each column is one card (MOD / DEL / REV) with two sliders. -->
-    <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
-
-      <!-- ---- MOD column ---------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-3 pt-4">
-          <div class="text-xs uppercase tracking-wide opacity-60">Mod</div>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
-            <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1">
-            <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- ---- DEL column ---------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-3 pt-4">
-          <div class="text-xs uppercase tracking-wide opacity-60">Del</div>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_time" class="range range-primary range-sm flex-1">
-            <span id="fxdel_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1">
-            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- ---- REV column ---------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-3 pt-4">
-          <div class="text-xs uppercase tracking-wide opacity-60">Rev</div>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_time" class="range range-primary range-sm flex-1">
-            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-          <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1">
-            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-        </div>
-      </div>
-
-    </div>
-
     <!-- ---- Parameters card (full width) ------------------------------------ -->
     <!-- Moved out of the right column so the card spans the whole page width
          (max-w-[1200px] mx-auto on the outer container). Three equal columns,
@@ -209,26 +147,136 @@
       <div class="card-body flex-col items-stretch gap-1 pt-6">
         <div id="Parameters" class="grid grid-cols-3 gap-x-10 gap-y-6 items-stretch">
           <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
-          <!-- Sits as the first full-width row of the Parameters card
-               (col-span-3), above the 3 parameter columns. The buttons are
-               still created in JS and appended to #Presets, so the preset
-               bank logic (applyPresetRaw / active-button highlight) is
-               unchanged. -->
           <div class="col-span-3 flex items-center gap-2">
             <div class="flex flex-wrap gap-2" id="Presets"></div>
           </div>
-          <!-- The grid's items-stretch makes every column fill the full row
-               height. col 0 and col 2 (3 and 2 blocks) use justify-between so
-               their TOP block sits at the top edge and their BOTTOM block at
-               the bottom edge. col 1 (PITCH + WANDER) is top-aligned, and
-               WANDER carries mt-auto so it is pushed to the bottom edge too —
-               the three columns' bottom blocks all sit flush with the card's
-               bottom border regardless of the middle column's height. -->
           <div id="ParamCol0" class="flex flex-col justify-between gap-2"></div>
           <div id="ParamCol1" class="flex flex-col gap-2"></div>
           <div id="ParamCol2" class="flex flex-col justify-between gap-2"></div>
         </div>
       </div>
+    </div>
+
+    <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
+    <!-- Sits BELOW the Parameters card so the oscillator params stay primary.
+         MOD is a full 10-parameter stage (TIME / DEPTH / DRIFT / ENSE / TREMO /
+         FLNG / TAPE / FORM / FLVL / COMB), driven through
+         Module.setFxParam(stage, which, raw); DEL / REV keep their own TIME /
+         DEPTH. -->
+    <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
+
+    <!-- ---- MOD column (10 params) ---------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-body flex-col items-stretch !gap-3 pt-4">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wide opacity-60">Mod</div>
+            <label class="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" id="fxmod_bypass" class="switch switch-primary switch-xs" checked>
+            </label>
+          </div>
+          <div id="fxmod_body" class="flex flex-col gap-3">
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <input type="range" min="0" max="1023" value="256" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
+            <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">25%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1">
+            <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">50%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Drift</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" class="range range-primary range-sm flex-1">
+            <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Ense</span>
+            <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
+            <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Tremo</span>
+            <input type="range" min="0" max="1023" value="307" step="1" id="fxmod_tremo" class="range range-primary range-sm flex-1">
+            <span id="fxmod_tremo_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">30%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Flng</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flng" class="range range-primary range-sm flex-1">
+            <span id="fxmod_flng_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Tape</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_tape" class="range range-primary range-sm flex-1">
+            <span id="fxmod_tape_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Form</span>
+            <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_form" class="range range-primary range-sm flex-1">
+            <span id="fxmod_form_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">I</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Flvl</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flvl" class="range range-primary range-sm flex-1">
+            <span id="fxmod_flvl_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Comb</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_comb" class="range range-primary range-sm flex-1">
+            <span id="fxmod_comb_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          </div><!-- /fxmod_body -->
+        </div>
+      </div>
+
+      <!-- ---- DEL column ---------------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-body flex-col items-stretch !gap-3 pt-4">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wide opacity-60">Del</div>
+            <label class="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" id="fxdel_bypass" class="switch switch-primary switch-xs" checked>
+            </label>
+          </div>
+          <div id="fxdel_body" class="flex flex-col gap-3">
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_time" class="range range-primary range-sm flex-1">
+            <span id="fxdel_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1">
+            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          </div><!-- /fxdel_body -->
+        </div>
+      </div>
+
+      <!-- ---- REV column ---------------------------------------------------- -->
+      <div class="card card-border shadow-none w-full">
+        <div class="card-body flex-col items-stretch !gap-3 pt-4">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wide opacity-60">Rev</div>
+            <label class="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" id="fxrev_bypass" class="switch switch-primary switch-xs" checked>
+            </label>
+          </div>
+          <div id="fxrev_body" class="flex flex-col gap-3">
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_time" class="range range-primary range-sm flex-1">
+            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1">
+            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          </div><!-- /fxrev_body -->
+        </div>
+      </div>
+
     </div>
 
   </div>
@@ -263,7 +311,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 44;
+      const EDIT_PARAM_COUNT = 41; // 41 = RATE..CHFLD2 (FORM/FLVL/COMB moved to DRONE-MOD)
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h):
       // 0 RATE (shared depth ceiling), 1 DETU,
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
@@ -298,8 +346,6 @@
         "Chord Drive", "Chord Fold",
         "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Chord 2 Drive", "Chord 2 Fold",
-        "Formant Vowel", "Formant Level",
-        "Comb Res",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -321,14 +367,13 @@
         // ---- Column 0 ----
         { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 33, 34, 31, 32, 0] },
         { title: "BREATH",   col: 0, items: [25, 26, 27] },
-        { title: "FORMANT",  col: 0, className: "mt-auto", items: [39, 40] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, className: "mt-auto", items: [19, 24, 20, 21, 35, 36] },
         // ---- Column 2 ----
         { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
-        { title: "FILTER",     col: 2, items: [22, 23, 41] },
+        { title: "FILTER",     col: 2, items: [22, 23] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable
@@ -418,17 +463,25 @@
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
-        if (idx === 39) {
-          // FORM (edit 39): formant vowel position. Show the nearest vowel
-          // (A/E/I/O/U) across the 5 stops (0..1 -> 0..4), mirroring
-          // Osc::getParameterStrValue (osc_param_display.h).
+        // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
+        // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
+        // 19..21 (RWAV/RDRV/RFLD), 24 (RWFC), 25..27 (Breath), 29 (CHFLD),
+        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 38 (CHFLD2).
+        // (FORM/FLVL/COMB are no longer OSC edit params — they live in the
+        //  MOD stage and are displayed by formatFxParam below.)
+        return Math.round((raw * 100) / 1023) + "%";
+      }
+
+      // Format the raw 10-bit value (0..1023) of a DRONE-MOD FX parameter.
+      // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
+      // index within that stage (0=TIME, 1=DEPTH, 2=DRIFT, ... for MOD; 0..1
+      // for DEL/REV). FORM (which==7) shows the nearest vowel (A/E/I/O/U);
+      // every other param shows 0..100%. Mirrors Modfx::getParameterStrValue.
+      function formatFxParam(stage, which, raw) {
+        if (stage === 0 && which === 7) { // MOD FORM: vowel
           const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
           return "AEIOU".charAt(vi);
         }
-        // Every other index formats as 0..100%: 1..7 (RATE, SPD1..SMT3),
-        // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
-        // 19..21 (RWAV/RDRV/RFLD), 24 (RWFC), 25..27 (Breath), 29 (CHFLD),
-        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 40 (FVOL), 41 (COMB).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -1388,39 +1441,70 @@
       updateLfoFreq();
       updateLfoDepth();
 
-      // ---- FX chain knobs (MOD / DEL / REV, each TIME + DEPTH) --------------
+      // ---- FX chain knobs (MOD 10-params / DEL 2 / REV 2) -------------------
       // The full audio path OSC -> MOD -> DEL -> REV -> out runs inside the
-      // single wasm worklet (drone-chain/chain.h). Each FX stage's TIME / DEPTH
-      // is driven through Module.setFxParam(stage, which, raw):
+      // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
+      // are driven through Module.setFxParam(stage, which, raw):
       //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: 0=TIME, 1=DEPTH        (Chain::FX_TIME / FX_DEPTH)
+      //   which: MOD -> 0..9 (TIME/DEPTH/DRIFT/ENSE/TREMO/FLNG/TAPE/FORM/FLVL/COMB)
+      //          DEL/REV -> 0..1 (TIME/DEPTH)
       //   raw:   0..1023 (10-bit knob value)
       // The worklet thread applies the value to the live DSP each block
-      // (Chain::applyFxParams), so the sound updates in real time. The FX DSP
-      // is currently a pass-through, so the sound does not change yet -- but
-      // the plumbing (UI -> wasm -> DSP) is fully wired and ready for the real
-      // FX implementations.
+      // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod" }, // MOD
-        { stage: 1, prefix: "fxdel" }, // DEL
-        { stage: 2, prefix: "fxrev" }, // REV
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "ense", "tremo", "flng", "tape", "form", "flvl", "comb"] },
+        { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
+        { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];
-      const FX_PARAMS = ["time", "depth"]; // which: 0=TIME, 1=DEPTH
-      for (const { stage, prefix } of FX_STAGES) {
-        FX_PARAMS.forEach((param, which) => {
+      for (const { stage, prefix, params } of FX_STAGES) {
+        params.forEach((param, which) => {
           const input = document.getElementById(prefix + "_" + param);
           const label = document.getElementById(prefix + "_" + param + "_val");
           if (!input || !label) return;
           const apply = (raw) => {
             input.value = raw;
-            label.textContent = Math.round((raw * 100) / 1023) + "%";
+            label.textContent = formatFxParam(stage, which, raw);
             if (Module.setFxParam) Module.setFxParam(stage, which, raw);
           };
           input.addEventListener("input", () => apply(parseInt(input.value, 10)));
-          // Initialize from the wasm side (defaults are 0 = pass-through off).
+          // Initialize from the wasm side (defaults in Modfx::Params::reset).
           const initRaw = (Module.getFxParam) ? Module.getFxParam(stage, which) : 0;
           apply(initRaw);
         });
+      }
+
+      // ---- Per-stage ON/OFF toggles (diagnostic A/B) --------------------------
+      // A checkbox in each FX card header controls whether that stage is in the
+      // C++ chain (OSC -> [MOD] -> [DEL] -> [REV]). The toggle is UNLABELED:
+      //   checked   -> the stage IS in the path (active, contributes to sound).
+      //   unchecked -> the stage is BYPASSED (dry wire through).
+      // Default = checked = every stage active (the unit runs the full path).
+      // stage: 0=MOD, 1=DEL, 2=REV.
+      const BYPASS_STAGES = [
+        { stage: 0, id: "fxmod_bypass", body: "fxmod_body" },
+        { stage: 1, id: "fxdel_bypass", body: "fxdel_body" },
+        { stage: 2, id: "fxrev_bypass", body: "fxrev_body" },
+      ];
+      for (const { stage, id, body } of BYPASS_STAGES) {
+        const box = document.getElementById(id);
+        const bodyEl = document.getElementById(body);
+        if (!box) continue;
+        const refresh = () => {
+          // checked = active (in path); unchecked = bypass.
+          const bypass = box.checked ? 0 : 1;
+          if (Module.setStageBypass) Module.setStageBypass(stage, bypass);
+          // Dim the sliders of a bypassed (unchecked) stage so state is obvious.
+          if (bodyEl) bodyEl.style.opacity = box.checked ? "" : "0.35";
+        };
+        // Listen on both: some automation/headless contexts emit `input`
+        // rather than `change` for checkboxes. Both are idempotent (refresh
+        // reads box.checked), so double-firing is harmless.
+        box.addEventListener("change", refresh);
+        box.addEventListener("input", refresh);
+        // Init from wasm state: active (bypass==0) means the box is checked.
+        const active = !(Module.getStageBypass && Module.getStageBypass(stage));
+        box.checked = active;
+        refresh();
       }
     };
   </script>

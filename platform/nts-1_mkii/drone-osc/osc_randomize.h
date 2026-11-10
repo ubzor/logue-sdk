@@ -213,9 +213,8 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 36: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMBB  0..50% FM breath
     case 37: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CH2D2 0..60% CINT2 drive
     case 38: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CH2F  0..50% CINT2 fold
-    case 40: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
-    case 41: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
+    // (FLVL/COMB formant+comb removed: moved to the DRONE-MOD unit.)
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2/3, etc.)
   }
   return w;
@@ -231,8 +230,8 @@ static constexpr uint32_t kRndRedrawMax  = 5U;
 
 // ---- Orbit Random (RndM = ORBI) tuning: a "development", not a mutation ----
 // Part (kRndModePart) is the LOOSE dev: it re-rolls a random SUBSET (2..6) of
-// the 44 parameters, each to a FRESH safe-window value (a guaranteed >= 10%
-// step from the current raw). That is a real mutation: a few of the 44 knobs
+// the 41 parameters, each to a FRESH safe-window value (a guaranteed >= 10%
+// step from the current raw). That is a real mutation: a few of the 41 knobs
 // can each jump up to ~50% of their range, so the result can be a different
 // sound entirely.
 //
@@ -250,7 +249,7 @@ static constexpr uint32_t kRndRedrawMax  = 5U;
 //   * ONE "sphere" of the sound moves per fire (the weighted families below):
 //     a single fire develops the harmony, or the timbre, or the motion -- not
 //     all three at once. That is what keeps Orbit feeling like "the same sound,
-//     explored", whereas Part can reach across the whole 44-param space.
+//     explored", whereas Part can reach across the whole 41-param space.
 //   * A small "surprise" chance (kRndOrbiSurpriseChance of 100) still lets a fire
 //     escape the chosen family and touch any parameter (a bigger discovery).
 // The families group the edit parameters by what a move there affects:
@@ -281,9 +280,9 @@ static constexpr uint8_t  kRndOrbiFamilyW[kRndOrbiFamilyCount] = {50U, 20U, 20U,
 // The weighted families: a flat list of edit-param indices, one per family
 // (order = kRndOrbiFamilyCount). C++11-safe plain static initializers.
 static const uint8_t kRndOrbiFamCore[12]   = {1, 8, 9, 13, 14, 15, 16, 17, 18, 30, 31, 32};
-static const uint8_t kRndOrbiFamTimbre[10] = {10, 11, 12, 22, 23, 28, 29, 37, 38, 41};
+static const uint8_t kRndOrbiFamTimbre[9]  = {10, 11, 12, 22, 23, 28, 29, 37, 38};
 static const uint8_t kRndOrbiFamMotion[16] = {0, 2, 3, 4, 5, 6, 7, 19, 20, 21, 24, 25, 26, 27, 33, 34};
-static const uint8_t kRndOrbiFamExtra[3]   = {9, 35, 40};
+static const uint8_t kRndOrbiFamExtra[2]   = {9, 35};
 
 // The family's parameter list + length for an Orbit fire (family 0..3).
 static const uint8_t *rnd_orbi_family(uint8_t fam, uint32_t &n)

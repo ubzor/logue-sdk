@@ -278,6 +278,22 @@ extern "C" int getFxParam(int stage, int which)
   return static_cast<int>(processor.getFxParam(stage, which));
 }
 
+// ---- Per-stage BYPASS (diagnostic A/B: OSC -> [MOD] -> [DEL] -> [REV]) -------
+// stage: 0=MOD, 1=DEL, 2=REV (Chain::FX_MOD / FX_DEL / FX_REV).
+// on:    0 = stage IN the path (default), 1 = stage skipped (dry wire).
+// Stored in the chain's shared sim_stage_bypass_[] and consumed by the worklet
+// thread in Chain::process each block. Same benign shared-memory race as
+// setFxParam.
+extern "C" void setStageBypass(int stage, int on)
+{
+  processor.setStageBypass(stage, on);
+}
+
+extern "C" int getStageBypass(int stage)
+{
+  return static_cast<int>(processor.getStageBypass(stage));
+}
+
 // ---- OSC edit-parameter accessors (the 44-parameter UI) ----------------------
 // Mirror drone-osc/wasm.cc: the main-thread `processor` and the worklet-thread
 // `processor` are the SAME object (shared linear memory), so writing through
@@ -392,12 +408,16 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   // FX parameters (MOD / DEL / REV x TIME / DEPTH).
   emscripten::function("setFxParam", &setFxParam);
   emscripten::function("getFxParam", &getFxParam);
+
+  // Per-stage bypass (diagnostic A/B). stage: 0=MOD, 1=DEL, 2=REV.
+  emscripten::function("setStageBypass", &setStageBypass);
+  emscripten::function("getStageBypass", &getStageBypass);
 }
 
 // ---- Audio worklet (runs on the dedicated audio thread) ----------------------
 // No audio input (the OSC is a generator), one MONO output (matching the
 // hardware OSC's 1-channel output). The full OSC->MOD->DEL->REV cascade runs
-// inside Chain::process.
+// inside Chain::process, which averages stereo back to mono at the end.
 bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
                   int numOutputs, AudioSampleFrame *outputs,
                   int numParams, const AudioParamFrame *params,

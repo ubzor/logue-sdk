@@ -92,24 +92,9 @@ inline void Osc::init(float *)
     // the 2 s attack/release actually take 2 s. Computed once at init (K-rate).
     eg_alpha_a_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kAttackSamples));
     eg_alpha_r_ = one_minus_expf(-5.f / static_cast<float>(AhEnvelope::kReleaseSamples));
-    // ---- Enrichment-2 state init (all OFF / transparent at default) --------
-    // Comb / resonator: zero the ring buffer + reset the write cursor. The
-    // comb is transparent (a pure wire) until COMB > 0, so a zeroed buffer is
-    // exactly the default (regression-safe).
-    for (uint32_t i = 0; i < kCombDelayMaxSmp; ++i)
-      comb_buf_[i] = 0.f;
-    comb_w_ = 0;
-    // Formant: zero both comb ring buffers and write indices (the K-rate
-    // delays/feedback are set by the apply_edit_param loop above, which
-    // already ran for the default FORM/FVOL values -> formant_wet = 0 ->
-    // stage is transparent, so a zeroed buffer is the exact default state).
-    for (uint32_t i = 0; i < kFormantDelayMaxSmp; ++i)
-    {
-      formant_comb_buf1_[i] = 0.f;
-      formant_comb_buf2_[i] = 0.f;
-    }
-    formant_comb_w1_ = 0U;
-    formant_comb_w2_ = 0U;
+    // ---- Enrichment-2 state init --------------------------------------------
+    // (The FORM/FLVL/COMB formant + comb-resonator state was moved to the
+    //  DRONE-MOD unit; nothing to zero here anymore.)
     // Envelope follower / sidechain ducking: zero the follower and precompute
     // the one-pole follower coefficient (1 - exp(-1/tau) at 48 kHz). The duck
     // is now CONSTANT (kDuckConstant) -- the follower advances every sample in

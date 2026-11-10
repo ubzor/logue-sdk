@@ -28,9 +28,9 @@ MAIN voice (osc A + osc B)
     -> FLD (wavefolder, FLD)
     -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)
     -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
-    -> FORMANT (2 parallel IIR-comb resonators F1+F2, FMVT/FLVL, parallel-add)  <-- new
-    -> COMB (IIR resonator, COMB feedback, fixed delay)             <-- new
     = y_main
+    (the FORMANT F1+F2 resonators and the COMB resonator now live in the
+     downstream DRONE-MOD unit; see drone-modfx/README.md)
 
 CHORD voice (osc C at INT, osc C2 at INT2)
   phasor C  ->  wavetable C (WA3)  at base * 2^(INT/1200)
@@ -128,10 +128,10 @@ all at once.
   every active parameter's start delay at 0..2 s and the re-roll would feel
   "unresponsive". The anchor is only applied on a FRESH morph (not on a
   re-aim mid-morph), so an in-flight morph is never disrupted.
-* **What morphs**: the parameters selected by the re-roll (All → all 44,
+* **What morphs**: the parameters selected by the re-roll (All → all 41,
   Part → the 2..6 re-drawn ones, Orbit → the 2..4 nudged ones), each through the same
   `apply_edit_param()` path a manual PARAM_VAL edit uses, so the derived-voice
-  caches (wavetables, chords, SVF coefficients, formant combs) stay consistent
+  caches (wavetables, chords, SVF coefficients) stay consistent
   with the moving raw values. Discrete parameters morph in their native space
   for free: a fractional wavetable index crossfades via `resolve_wave()`.
   **Exception — CINT / CINT2 do NOT morph**: the two chord intervals are
@@ -237,10 +237,10 @@ The randomization is a **two-slot multiplexer** (edit-menu, device-only):
     * nudges **2..4** parameters (vs Part's 2..6);
     * picks each from **ONE weighted family** -- *core* (harmonic core: detune,
       subs, A/B/C wavetables, chord, intervals), *timbre* (color: saturation,
-      fold, filter, ring-mod, comb), *motion* (movement: RATE, the wander
+      fold, filter, ring-mod), *motion* (movement: RATE, the wander
       streams, walk depths, breath, FM) or *extra* (enrichment layers, default
       OFF -- a low-weight "surprise") -- so a single fire develops one "sphere"
-      of the sound rather than reaching across all 44 parameters (a small
+      of the sound rather than reaching across all 41 parameters (a small
       ~4% "surprise" chance still lets a fire touch any parameter);
     * moves each by a step: at least `kRndOrbiMinStepRaw` (64, ~6%, still
       audible) but at most `kRndOrbiMaxStepRaw` (307, ~30%) of the 10-bit range
@@ -297,10 +297,10 @@ device's "develop from the last confirmed preset" behaviour intact.
 
 ## Parameters
 
-The unit exposes its **48** DSP knobs through a PARAM/VALUE multiplexer on the
+The unit exposes its **41** DSP knobs through a PARAM/VALUE multiplexer on the
 two physical knobs:
 
-* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..41; the display
+* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..40; the display
   shows the name of the selected parameter.
 * **Slot 1 VALUE** (fixed knob B) -- raw 10-bit value (0..1023) of the selected
   parameter. Each parameter maps 0..1023 onto its own range; the raw value is
@@ -309,7 +309,7 @@ two physical knobs:
 * **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 44 editable DSP parameters (select_ index -> name), with range, factory
+All 41 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
@@ -353,9 +353,10 @@ default and effect:
 | 36 | FMBB | % | 0..100% | 0% (off) | Walk depth on the FM-B index ("breathing" FM, RATE-gated). |
 | 37 | CH2D | 0..300 | 0..3.0 drive | = CH2D(28) | INT2 interval's own saturator drive. |
 | 38 | CH2F | % | 0..100% | = CFLD (0%) | INT2 interval's own wavefolder depth. |
-| 39 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
-| 40 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
-| 41 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
+
+(The former enrichment-2 tail — FMVT / FLVL / COMB, indices 39..41 — was moved
+to the DRONE-MOD unit; the OSC edit-parameter set now ends at index 38 (CH2F),
+so `kEditParamCount` is 41 and indices 0..38 are unchanged.)
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -391,8 +392,6 @@ independent of the period, so the walk depth does not depend on speed.
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
 | Shape-LFO | +/-10 tables (morph), +/-5 c (sub FM) | On hardware: platform OSC-B shape-LFO; in the web sim: synthesized. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
-| Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
-| Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
 | Duck (sidechain) | constant 0.5, floor 0.7, 75 ms tau | One-pole abs-peak follower of \|SUB1+SUB2\|; constantly ducks the MAIN voice (A+B + RMOD) by kDuckConstant (0.5), floored at 0.7. The low end is the drone's anchor; the main tone sinks. (Formerly the DCK knob — now a constant.) |
 
 ---

@@ -581,54 +581,6 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     }
 
 
-    // ---- Enrichment-2: formant resonators (two one-pole IIR combs, F1+F2) ----
-    // When FVOL (formant_wet) > 0, run the post-SVF main output through TWO
-    // parallel one-pole IIR combs: an F1 comb (formant_delay1_smp_, the vowel's
-    // first formant, 135..365 Hz peak) and an F2 comb (formant_delay2_smp_, the
-    // vowel's second formant, 435..1145 Hz peak), both morphed by the FORM
-    // knob across A-E-I-O-U. Each comb is a ring-buffer delay whose output is
-    // summed back around one feedback tap (formant_fb_, 0..0.9, shared) --
-    // ALWAYS STABLE (|fb| < 1). The two combs' "color" (fb * delayed sample,
-    // i.e. the comb output minus the dry input) is summed and ADDED on top of
-    // the intact main signal (parallel branch, NOT dry/wet). F2 is what makes
-    // the vowels distinct: I/E (high F2) sound "bright/open", U/O (low F2)
-    // "warm/dark". At FVOL = 0 (default) the stage is bypassed (regression-
-    // safe). The color is scaled by kFormantGain so a full FVOL=100% adds a
-    // clear vocal tint without overdriving the final soft-clip.
-    if (p.formant_wet > 0.f)
-    {
-      const uint32_t mask = kFormantDelayMaxSmp - 1U;
-      // F1 comb: write, read formant_delay1_smp_ back, advance.
-      formant_comb_buf1_[formant_comb_w1_] = y_filt;
-      const float yd1 = formant_comb_buf1_[(formant_comb_w1_ + (mask + 1U - formant_delay1_smp_)) & mask];
-      formant_comb_w1_ = (formant_comb_w1_ + 1U) & mask;
-      // F2 comb: write, read formant_delay2_smp_ back, advance.
-      formant_comb_buf2_[formant_comb_w2_] = y_filt;
-      const float yd2 = formant_comb_buf2_[(formant_comb_w2_ + (mask + 1U - formant_delay2_smp_)) & mask];
-      formant_comb_w2_ = (formant_comb_w2_ + 1U) & mask;
-      // Parallel branch: keep the intact main signal, add both comb colors
-      // (F1 + F2, each scaled by the shared feedback and the stage gain).
-      const float formant_color = formant_fb_ * (yd1 + yd2);
-      y_filt = y_filt + formant_color * kFormantGain * p.formant_wet;
-    }
-
-    // ---- Enrichment-2: comb / resonator (IIR feedback through a delay) ----
-    // When COMB (comb_fb) > 0, run the main output through a one-pole IIR
-    // comb: a fixed-length ring-buffer delay (kCombDelaySmp, ~190 Hz peak)
-    // whose output is summed back around the feedback loop. This produces a
-    // resonant peak + harmonics (a "wooden / cavernous" tint). At COMB = 0
-    // (default) the branch is a pure wire (regression-safe). The buffer is a
-    // fixed member (kCombDelayMaxSmp floats); the read index is a fast mask.
-    if (p.comb_fb > 0.f)
-    {
-      // Write the current sample, read the delayed sample kCombDelaySmp back.
-      comb_buf_[comb_w_] = y_filt;
-      const uint32_t r = (comb_w_ + (kCombDelayMaxSmp - kCombDelaySmp)) & (kCombDelayMaxSmp - 1U);
-      const float yd = comb_buf_[r];
-      comb_w_ = (comb_w_ + 1U) & (kCombDelayMaxSmp - 1U);
-      // IIR comb: y = in + fb * delayed (one feedback tap).
-      y_filt = y_filt + p.comb_fb * yd;
-    }
     // ---- advance the A-H-R envelope by one sample ----
     // (per-sample so the 2 s phases are sample-accurate at any block size)
     eg_.advance(alpha_a, alpha_r);

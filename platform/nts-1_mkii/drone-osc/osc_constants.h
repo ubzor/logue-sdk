@@ -280,52 +280,11 @@
   static constexpr float    kRwDriveScale = 0.5f;       // +/-0.5 drive at RW_DRV 100%
   static constexpr float    kRwFoldScale = 0.5f;        // +/-0.5 fold at RW_FLD 100%
 
-// ---- Enrichment-2: formant / comb / fold2 / ducking ---------------------------
-// New DSP blocks added in the enrichment-2 pass. All OFF by default (the
-// corresponding params_ fields are 0), so the stock sound is bit-identical
-// until the user turns one on. No dynamic allocation: every array is a fixed
-// member (the comb ring buffer is kCombDelayMaxSmp floats = 1 KB of RAM).
-// (Tape wow/flutter were removed — the synchronous whole-voice pitch wander
-//  was inaudible against the drone's inherent DETUNE beating.)
-
-// ---- Comb / resonator (feedback through a short delay) -----------------------
-// The COMB knob sets the feedback coefficient of a one-pole IIR comb (a sample
-// delay line with its output summed back around a feedback loop). A single
-// feedback tap produces a resonant peak at ~1/delay-samples Hz and its
-// harmonics -- a "wooden / cavernous" resonance that tints the main A+B voice.
-// The delay is a FIXED mid-band length (kCombDelaySmp, ~5.2 ms -> ~190 Hz peak);
-// the knob sweeps the feedback 0..kCombFbMax (clamped < 1 for stability). At
-// COMB = 0 the branch is a pure wire (regression-safe). The ring buffer is a
-// fixed member array sized to kCombDelayMaxSmp (never dynamically allocated).
-  static constexpr float    kCombFbMax     = 0.9f; // feedback ceiling (< 1 = stable)
-  static constexpr uint32_t kCombDelaySmp  = 250U; // fixed delay (~5.2 ms -> ~190 Hz peak)
-  static constexpr uint32_t kCombDelayMaxSmp = 256U; // ring-buffer size (pow-of-2, >= delay)
-
-// ---- Formant filter (5 parallel band-pass biquads, vowel morph) --------------
-// The FORM knob selects a VOWEL POSITION (0..1) across the five formant stops
-// A-E-I-O-U; the FVOL knob sets the PARALLEL-ADD gain of the formant stage
-// (0 = fully dry / transparent, regression-safe). Each vowel is modelled by
-// TWO parallel one-pole IIR comb resonators (its F1 + F2 formant frequencies,
-// from kFormantStops: the comb delay = sr/(2*f), so the resonance peak sits at
-// f/2 -- a musical sub-octave band). The K-rate path (recompute_formant_comb)
-// linearly crossfades the (F1, F2) pair between the two nearest stops, so
-// morphing FORM slides the vowel smoothly A -> U; the per-sample path (only
-// when FVOL > 0) runs both combs on the pre-sub main output and ADDS the
-// (scaled) sum of their feedback colors ON TOP of the intact main signal
-// (parallel branch, NOT dry/wet -- a dry/wet blend would mute the drone,
-// since a formant band carries only a sliver of its energy). F2 is what makes
-// the vowels distinct (I/E high F2 = bright, U/O low F2 = warm). The color
-// is scaled by kFormantGain so a full FVOL=100% cannot overdrive the final
-// soft-clip. Both combs are ALWAYS stable (single feedback tap, |fb| < 1).
-  // Formant stops as [F1 Hz, F2 Hz] for A, E, I, O, U (approx. speech values).
-  static constexpr float    kFormantStops[5][2] = {
-      { 730.f, 1090.f },   // A
-      { 530.f, 1840.f },   // E
-      { 270.f, 2290.f },   // I
-      { 450.f, 1020.f },   // O
-      { 300.f,  870.f },   // U
-  };
-  static constexpr float    kFormantGain  = 1.0f;  // parallel-add gain (formant color on top of main)
+// ---- Enrichment-2: fold2 / ducking --------------------------------------------
+// (The FORM/FLVL/COMB formant + comb-resonator constants were moved to the
+//  DRONE-MOD unit: see drone-modfx/modfx_constants.h. Tape wow/flutter were
+//  removed -- the synchronous whole-voice pitch wander was inaudible against
+//  the drone's inherent DETUNE beating.)
 
 // ---- Sidechain ducking (sub-bass -> main voice, the drone's "pump") ---------
 // CONSTANT sidechain duck (formerly the DCK knob, removed from the editable
