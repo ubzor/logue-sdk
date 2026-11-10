@@ -1,0 +1,16 @@
+/*
+ * Linker version script for the drone unit.
+ *
+ * The NTS-1 mkII runtime resolves unit entry points by symbol name after
+ * loading the module image, so only the unit header and the unit_* callbacks
+ * need to be exported. Everything else (libm/libc internals, C++ symbols,
+ * internal helpers) is made local, which shrinks .dynsym/.dynstr/.hash,
+ * removes their PLT entries and the associated dynamic relocations.
+ */
+{
+  global:
+    unit_header;
+    unit_*;
+  local:
+    *;
+};

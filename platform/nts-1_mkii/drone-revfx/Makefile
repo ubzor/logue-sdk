@@ -66,10 +66,10 @@ STRIP := $(GCC_BIN_PATH)/$(GCC_TARGET)strip
 HEX   := $(CP) -O ihex
 BIN   := $(CP) -O binary
 
-# FX modules ship no local unit.ld / version.map, so link against the shared
-# platform linker script (same as the dummy-* templates). RULESPATH points the
-# linker at the directory containing rules.ld (unit.ld INCLUDEs it).
-LDSCRIPT := $(LDDIR)/unit.ld
+# LDSCRIPT is set in config.mk to the local ./unit.ld (a copy of ../ld/unit.ld
+# whose .unit_header section is not wrapped in KEEP(), so --gc-sections can
+# drop the weak fallback unit_header from _unit_base.c). Do NOT override it
+# here with $(LDDIR)/unit.ld, or the local script will be ignored.
 RULESPATH := $(LDDIR)
 DLIBS := -lc
 
@@ -211,7 +211,7 @@ $(COBJS) : $(OBJDIR)/%.o : %.c Makefile config.mk
 # ARM C++ objects depend on the DSP headers: unit.cc (the only .cc in CXXSRC)
 # includes them, so any change must force a recompile. (The WASM build already
 # tracks them separately — see the WASMOBJDIR rule below.)
-$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk
+$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk reverb.h
 	@echo Compiling $(<F)
 	@$(CXXC) -c $(CXXFLAGS) -I. $(INCDIR) $< -o $@
 
@@ -260,8 +260,11 @@ $(BUILDDIR)/$(PRODUCT): | $(OBJS) $(OUTFILES)
 #
 # ALLOWED_UND: the symbols the firmware is expected to provide. Add a new one
 # here ONLY when the firmware genuinely provides it.
-ALLOWED_UND := osc_white osc_rand wavesA wavesB wavesC wavesD wavesE wavesF \
-               wt_sine_lut_f midi_to_hz_lut_f
+# FX modules use no firmware LUTs, so this list is empty: any undefined
+# dynamic symbol (e.g. a stray libm powf/sinf) means the unit will fail to
+# load on device. If you need a LUT, add its name here AND verify the firmware
+# actually exports it.
+ALLOWED_UND :=
 READELF := $(GCC_BIN_PATH)/$(GCC_TARGET)readelf
 
 check-und: $(BUILDDIR)/$(PRODUCT)

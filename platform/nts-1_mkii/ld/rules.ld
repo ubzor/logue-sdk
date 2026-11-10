@@ -113,7 +113,14 @@ SECTIONS
   .unit_header : ALIGN(8) SUBALIGN(8)
   {
     . = ALIGN(8);
-    KEEP(*(.unit_header))
+    /* Not using KEEP() here so that, with --gc-sections, the weak fallback
+     * unit_header section from _unit_base.c is dropped from the final image
+     * (each unit's real unit_header from header.c is a strong symbol and wins
+     * the section merge). This saves ~200-400 bytes in each .nts1mkiiunit.
+     * Units that ship no header.c with a strong unit_header will fail to link
+     * with "undefined reference to unit_header" -- which is the desired
+     * behaviour: every unit must define its own header. */
+    *(.unit_header)
   } :unit_header
 
   .preinit_array : ALIGN(4) SUBALIGN(4)
