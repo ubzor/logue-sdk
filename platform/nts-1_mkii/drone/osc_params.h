@@ -158,15 +158,13 @@ struct OscParamsData
   float rfm_a;        // 0.f .. 1.f, edit RFMA (random-walk depth on FM A)
   float rfm_b;        // 0.f .. 1.f, edit RFMB (random-walk depth on FM B)
 
-  // ---- Enrichment-2 (formant / comb / fold2 / ducking) ----------------------
+  // ---- Enrichment-2 (formant / comb) -----------------------------------------
   // All default to OFF (transparent) so the stock sound is bit-identical.
-  // (Tape wow/flutter were removed — the synchronous whole-voice pitch wander
-  //  was inaudible against the drone's inherent DETUNE beating.)
+  // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now a
+  //  constant (kDuckConstant, osc_constants.h); no DSP state for them here.)
   float formant_pos;  // 0.f .. 1.f, edit FORM: vowel morph position (A=0 .. U=1)
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
-  float fold2_depth;  // 0.f .. 1.f, edit FOLD2 (second cascaded wavefolder)
-  float duck_amt;     // 0.f .. 1.f, edit DCK (sidechain-duck amount of MAIN by SUB1/SUB2, 0 = off)
 
   void reset()
   {
@@ -183,7 +181,7 @@ struct OscParamsData
     rw_smooth[1] = 0.5f; // SMT2 (Timbre)
     rw_smooth[2] = 0.5f; // SMT3 (Density)
     sub_level = 0.5f;   // default: half-level sub
-    sub2_level = 0.2f;  // default: light f/4 sub for low-end body
+    sub2_level = 0.4f;  // default: ~40% f/4 sub (a clearly audible low-end anchor)
     fold_depth = 0.f;   // default: wavefolder off
     asym = 0.f;         // default: symmetric saturator
     wave_a = 0.f;       // default: first wave of bank A
@@ -238,8 +236,6 @@ struct OscParamsData
       formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
-      fold2_depth  = 0.f;   // default: second (cascaded) fold off
-      duck_amt     = 0.f;   // default: sidechain ducking off
   }
 
   OscParamsData() { reset(); }

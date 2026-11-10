@@ -195,11 +195,13 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      // 37 editable parameters total (edit indices 0..36); see EDIT_PARAM_NAMES
+      // 44 editable parameters total (edit indices 0..43); see EDIT_PARAM_NAMES
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
-      const EDIT_PARAM_COUNT = 48;
+      // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
+      //  a constant (kDuckConstant in osc_constants.h).)
+      const EDIT_PARAM_COUNT = 44;
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h):
       // 0 RATE (shared depth ceiling), 1 DETU,
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
@@ -235,7 +237,7 @@
         "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Chord 2 Drive", "Chord 2 Fold",
         "Formant Vowel", "Formant Level",
-        "Comb Res", "Fold 2", "Duck",
+        "Comb Res",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -255,7 +257,7 @@
       //   FILTER      FCUT RES
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 42, 33, 34, 31, 32, 0] },
+        { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 33, 34, 31, 32, 0] },
         { title: "BREATH",   col: 0, items: [25, 26, 27] },
         { title: "FORMANT",  col: 0, className: "mt-auto", items: [39, 40] },
         // ---- Column 1 ----
@@ -265,7 +267,6 @@
         { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
         { title: "FILTER",     col: 2, items: [22, 23, 41] },
-        { title: "DYNAMICS",   col: 2, className: "mt-auto", items: [43] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable
@@ -365,8 +366,7 @@
         // Every other index formats as 0..100%: 1..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
         // 19..21 (RWAV/RDRV/RFLD), 24 (RWFC), 25..27 (Breath), 29 (CHFLD),
-        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 40 (FVOL), 41 (COMB),
-        // 42 (FOLD2), 43 (DCK).
+        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 40 (FVOL), 41 (COMB).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -817,12 +817,13 @@
       const PRESET_RESET = "Reset";
       // Factory defaults = the edit_value_ initializers in osc.h (kEditParamFirst
       // order, RATE-first): RATE 0, DETU 511, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
-      // SPD3 511, SMT3 511, SUB1 511, SUB2 205, SATU 341, ASYM 511, FOLD 0,
+      // SPD3 511, SMT3 511, SUB1 511, SUB2 410 (~40%), SATU 341, ASYM 511, FOLD 0,
       // WAV1 0, WAV2 128, WAV3 0, CHRD 205, CINT 377, MAIN 1023 (full),
       // RWAV 0, RDRV 0, RFLD 0, FCUT 921, RES 0, RWFC 0,
       // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
-      // CHFLD 0 (chord fold off, = FOLD default).
-      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 341, 0];
+      // CHFLD 0 (chord fold off, = FOLD default), ..., FMVT 511, FLVL 0, COMB 0.
+      // (FOLD2 / DCK removed — 44 params total.)
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -888,11 +889,12 @@
         // of the "overwhelming" random presets). 50% keeps the drone
         // breathing without going nuclear.
         set("Rate", rRange(204, 511));
-        // SUB1: sub-octave (f/2) sine, mixed at 0.4. 15..80% — body without mud.
-        set("Sub 1", rRange(153, 818));
-        // SUB2: second sub (f/4), LPF'd + gated, mixed at 0.3. 0..45% — light
-        // low-end, never the f/4 "mud" zone.
-        set("Sub 2", rRange(0, 460));
+        // SUB1: sub-octave (f/2) sine. 20..80% — the bass is ALWAYS audible
+        // (the low end is the drone's anchor); only the depth varies.
+        set("Sub 1", rRange(204, 818));
+        // SUB2: second sub (f/4), LPF'd + gated. 25..70% — the bass is ALWAYS
+        // audible; a light-to-present low-end, never silent, never the f/4 "mud".
+        set("Sub 2", rRange(256, 716));
         // SATU: saturator drive, 0..kSatuMax (3.0) => display 0..300. Window
         // 40..240 (drive 0.4..2.4) — audible drive, no near-clip.
         set("Drive", rRange(136, 819));
@@ -1002,7 +1004,9 @@
         // RATE ceiling (20..50%) and the quadratic FM curve.
         set("FM A Bre", rRange(0, 511));
         set("FM B Bre", rRange(0, 511));
-        // ---- Enrichment-2 (formant / comb / fold2 / ducking) ----
+        // ---- Enrichment-2 (formant / comb) ----
+        // (FOLD2 and DCK were removed — FOLD2 judged unnecessary, DCK is now a
+        //  constant (kDuckConstant).)
         // FORM: any vowel (full range) -- the formant stage is OFF until FVOL>0,
         // so this is musically free (no clipping).
         set("Formant Vowel", r1023());
@@ -1012,11 +1016,6 @@
         // COMB: 0..30% (raw 0..307) -- a gentle resonance, never the ringy
         // fb>0.7 zone that "rings" harshly.
         set("Comb Res", rRange(0, 307));
-        // FOLD2: 0..30% (raw 0..307) -- a light "worn" edge.
-        set("Fold 2", rRange(0, 307));
-        // DCK: 0..25% (raw 0..256) -- a gentle sidechain: the SUB1+SUB2
-        // envelope follower ducks the MAIN voice a few dB (floor 0.7).
-        set("Duck", rRange(0, 256));
         return raws;
       }
 

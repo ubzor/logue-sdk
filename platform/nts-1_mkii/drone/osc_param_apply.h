@@ -347,27 +347,11 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
       break;
 
-    // ---- Enrichment-2: second (cascaded) wavefolder depth (FOLD2) ----
-    // The knob maps 0..1023 -> 0..1 (fold depth). The audio path runs the
-    // A+B chain's output through a SECOND Saturator::fold with this depth
-    // (on top of the FOLD knob's first fold), so full FOLD2 doubles the
-    // folding into a denser, "worn" timbre. At 0 it is a no-op
-    // (regression-safe).
-    case FOLD2:
-      params_.fold2_depth = param_10bit_to_f32(value);
-      break;
-
-    // ---- Enrichment-2: sidechain ducking of the main voice (DCK) ----
-    // The knob maps 0..1023 -> 0..1 (ducking amount). The audio path computes
-    // a one-pole abs-peak envelope follower of the combined SUB1 + SUB2
-    // output (only when DCK > 0) and uses it to duck the MAIN voice (A+B +
-    // RMOD): the low end is the constant anchor of the drone, the main tone
-    // "sinks" out of the way of the low end. The duck gain is floored at
-    // kDuckFloor (0.7, ~-3 dB) so the main voice never disappears.
-    // At 0 the duck gain is 1.0 (regression-safe).
-    case DCK:
-      params_.duck_amt = param_10bit_to_f32(value);
-      break;
+    // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
+    // were removed from the editable parameter set. FOLD2 was judged
+    // unnecessary; DCK is now a CONSTANT (kDuckConstant, osc_constants.h) and
+    // no longer has an apply path. The audio path no longer references
+    // params_.fold2_depth / params_.duck_amt.
 
     default:
       break;

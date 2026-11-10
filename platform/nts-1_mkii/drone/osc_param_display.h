@@ -40,7 +40,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "CH2D", "CFLD",
       "INT2", "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
       "CH2D", "CH2F",
-      "FMVT", "FLVL", "COMB", "FLD2", "DCK"};
+      "FMVT", "FLVL", "COMB"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)

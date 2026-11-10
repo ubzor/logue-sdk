@@ -328,28 +328,22 @@
   static constexpr float    kFormantGain  = 1.0f;  // parallel-add gain (formant color on top of main)
 
 // ---- Sidechain ducking (sub-bass -> main voice, the drone's "pump") ---------
-// The DCK knob sets a sidechain-ducking amount (0 = off, regression-safe).
-// The drone's body lives in the low end, so the low end must stay STABLE:
-// an envelope follower tracks the |SUB1 + SUB2 output| energy (a cheap
-// one-pole abs-peak follower, computed only when DCK > 0) and the follower
-// then DUCKS the MAIN voice (A+B + RMOD) instead. The sub-bass becomes the
+// CONSTANT sidechain duck (formerly the DCK knob, removed from the editable
+// set): the drone's body lives in the low end, so the low end must always read
+// as the STABLE anchor. An envelope follower tracks the |SUB1 + SUB2 output|
+// energy (a cheap one-pole abs-peak follower, computed every sample) and the
+// follower then DUCKS the MAIN voice (A+B + RMOD). The sub-bass becomes the
 // constant "anchor" and the main tone "sinks" out of the way of the low end,
-// the classic sidechain "pump" in reverse: dense SUB1/SUB2 push the main
-// tone down a few dB so the low end owns the spectrum.
+// the classic sidechain "pump" in reverse: dense SUB1/SUB2 push the main tone
+// down a few dB so the low end owns the spectrum.
 //
-// (The previous polarity ducked SUB1/SUB2 from |main|, but the sub branches
-// are so much quieter than the main voice (kMixSub/kMixSub2 vs kMixOsc +
-// saturator) that the effect was inaudible on typical drone notes -- the main
-// voice is near-constant while held, so a follower of |main| produces a
-// static duck gain with no dynamics, and the gain range it applies to is a
-// small fraction of the mix. Ducking the LARGE branch from the SMALL one is
-// what makes the parameter audible.)
-//
-// The duck gain is floored at kDuckFloor (0.7, ~-3 dB) so the main tone only
-// "sinks", it never disappears (a drone must keep its pitch anchor), and the
-// follower's one-pole time constant (kDuckFollowTauSec, ~75 ms attack/release)
-// sets how fast the sink releases -- slow enough to read as a smooth "breath"
-// on the low end instead of a clicky gate.
+// The duck AMOUNT is a fixed constant (kDuckConstant = 0.5) -- a clearly
+// audible sidechain. The duck gain is floored at kDuckFloor (0.7, ~-3 dB) so
+// the main tone only "sinks", it never disappears (a drone must keep its pitch
+// anchor), and the follower's one-pole time constant (kDuckFollowTauSec,
+// ~75 ms attack/release) sets how fast the sink releases -- slow enough to
+// read as a smooth "breath" on the low end instead of a clicky gate.
+  static constexpr float    kDuckConstant     = 0.5f;   // fixed duck amount (50%)
   static constexpr float    kDuckFollowTauSec = 0.075f; // follower time constant (~75 ms)
   static constexpr float    kDuckFloor        = 0.7f;   // duck gain floor (~-3 dB, never silent)
   static constexpr float    kDuckScale        = 1.0f;   // follower -> duck-gain scaling

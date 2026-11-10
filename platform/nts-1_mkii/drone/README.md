@@ -19,13 +19,13 @@ through a shared tanh soft-clip:
 
 ```
 out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK + y_chord + y_sub1 + y_sub2 + y_ring*DUCK ) )
+  where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
 
 MAIN voice (osc A + osc B)
   phasor A  ->  wavetable A (WA1)   [ DET, FM1, FMAB, JIT, + walk detune ]
   phasor B  ->  wavetable B (WA2)   [ DET, FM2, FMBB, JIT, + walk detune ]
   y = (wavA + wavB) / 2
     -> FLD (wavefolder, FLD)
-    -> FLD2 (cascaded wavefolder, FLD2)               <-- new
     -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)
     -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
     -> FORMANT (2 parallel IIR-comb resonators F1+F2, FMVT/FLVL, parallel-add)  <-- new
@@ -45,9 +45,10 @@ SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub   <-
 SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2   <-- new
 RING voice : (wavA * wavB) * RMOD * MAIN   (A*B ring-mod, ducked by MAIN)
 
-DUCK: envelope follower of |SUB1 + SUB2| (one-pole abs-peak) ducks y_main + y_ring
-      (floor 0.7 = ~-3 dB, ~75 ms tau): the low end is the constant anchor
-      of the drone, the main tone "sinks" out of the way of the low end. DCK=0 off.
+DUCK: CONSTANT sidechain — envelope follower of |SUB1 + SUB2| (one-pole
+      abs-peak) ducks y_main + y_ring by a fixed kDuckConstant (0.5), floored
+      at 0.7 (~-3 dB), ~75 ms tau: the low end is the constant anchor of the
+      drone, the main tone "sinks" out of the way of the low end. Always on.
 
 The A-H-R envelope (2 s / 2 s) multiplies the whole sum (note attack/release).
 ```
@@ -299,7 +300,7 @@ device's "develop from the last confirmed preset" behaviour intact.
 The unit exposes its **48** DSP knobs through a PARAM/VALUE multiplexer on the
 two physical knobs:
 
-* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..43; the display
+* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..41; the display
   shows the name of the selected parameter.
 * **Slot 1 VALUE** (fixed knob B) -- raw 10-bit value (0..1023) of the selected
   parameter. Each parameter maps 0..1023 onto its own range; the raw value is
@@ -322,7 +323,7 @@ default and effect:
 | 6 | SPD3 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Density** stream period. |
 | 7 | SM3 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Density** stream time constant. |
 | 8 | SUB1 | % | 0..100% | 50% | Sub-octave (f/2) sine level. |
-| 9 | SUB2 | % | 0..100% | ~20% | Second sub (f/4) saturated level (0 = off). |
+| 9 | SUB2 | % | 0..100% | ~40% | Second sub (f/4) saturated level (0 = off). The bass is the drone's anchor, so the randomizer keeps it always audible (window 25..70%). |
 | 10 | SAT | 0..300 | 0..3.0 drive | 100 (1.0x) | Main A+B saturator drive. |
 | 11 | ASYM | +/-% | -100..+100% | 0% | Saturator asymmetry (even harmonics; >0 = positive half harder). |
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
@@ -355,8 +356,10 @@ default and effect:
 | 39 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
 | 40 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 41 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
-| 42 | FLD2 | % | 0..100% | 0% (off) | Second (cascaded) wavefolder on the A+B chain (denser "worn" edge). |
-| 43 | DCK | % | 0..100% | 0% (off) | Sidechain ducking: a \|SUB1+SUB2\| envelope follower ducks the MAIN voice (A+B + RMOD), floor 0.7 (~-3 dB), ~75 ms tau. The low end stays constant; the main tone sinks. |
+
+(FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
+removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
+"DUCK" above.)
 
 ### The four random-walk streams
 
@@ -390,7 +393,7 @@ independent of the period, so the walk depth does not depend on speed.
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
-| Duck follower | 75 ms tau, floor 0.7 | One-pole abs-peak follower of \|SUB1+SUB2\|; ducks the MAIN voice (A+B + RMOD) by the DCK amount. |
+| Duck (sidechain) | constant 0.5, floor 0.7, 75 ms tau | One-pole abs-peak follower of \|SUB1+SUB2\|; constantly ducks the MAIN voice (A+B + RMOD) by kDuckConstant (0.5), floored at 0.7. The low end is the drone's anchor; the main tone sinks. (Formerly the DCK knob — now a constant.) |
 
 ---
 

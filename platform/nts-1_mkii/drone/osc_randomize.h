@@ -156,7 +156,7 @@ static inline int32_t drone_cents_raw(int32_t cents)
 //
 // C++11 note: the window table is NOT a constexpr array (the ARM build is
 // -std=c++11, and a constexpr initializer may not reference the Osc class
-// members DETUNE..DCK / kEditParamFirst). It is a plain static array, built
+// members DETUNE..COMB / kEditParamFirst). It is a plain static array, built
 // once at load time from rnd_window_for(), whose return type is deduced from
 // its (C++11-legal) default-argument initializers. (The WASM build is C++17 and
 // treats these as constant-initialized; either way they are initialized before
@@ -191,8 +191,8 @@ static RndWindow rnd_window_for(uint8_t idx)
   {
     case 1:  w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // DET   +/-5 c
     case 0:  w.kind=0; w.lo=204;  w.hi=511;  w.div=0; break; // RATE  20..50% (cap wander)
-    case 8:  w.kind=0; w.lo=153;  w.hi=818;  w.div=0; break; // SUB1  15..80%
-    case 9:  w.kind=0; w.lo=0;    w.hi=460;  w.div=0; break; // SUB2  0..45%
+    case 8:  w.kind=0; w.lo=204;  w.hi=818;  w.div=0; break; // SUB1  20..80% (bass always audible)
+    case 9:  w.kind=0; w.lo=256;  w.hi=716;  w.div=0; break; // SUB2  25..70% (bass always audible)
     case 10: w.kind=0; w.lo=136;  w.hi=819;  w.div=0; break; // SAT   40..240
     case 11: w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // ASYM  +/-50%
     case 12: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // FLD   0..60%
@@ -215,8 +215,7 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 38: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CH2F  0..50% CINT2 fold
     case 40: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
     case 41: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
-    case 42: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FLD2  0..30% worn edge
-    case 43: w.kind=0; w.lo=0;    w.hi=256;  w.div=0; break; // DCK   0..25% duck
+    // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2/3, etc.)
   }
   return w;

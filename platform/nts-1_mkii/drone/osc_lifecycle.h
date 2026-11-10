@@ -112,9 +112,11 @@ inline void Osc::init(float *)
     formant_comb_w2_ = 0U;
     // Envelope follower / sidechain ducking: zero the follower and precompute
     // the one-pole follower coefficient (1 - exp(-1/tau) at 48 kHz). The duck
-    // gain itself is local to process() (duck_gain, defaults to 1.0 when DCK
-    // == 0, so the follower never advances and the main voice is untouched --
-    // regression-safe).
+    // is now CONSTANT (kDuckConstant) -- the follower advances every sample in
+    // process() and duck_gain settles to 1 - kDuckConstant * env_follower.
+    // Starting the follower at 0 makes the very first notes un-ducked; the
+    // follower then rises to the steady-state low-end level (~0.5) over a few
+    // tau (~75 ms) as the subs sound.
     env_follower_ = 0.f;
     duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.013
     // Chord interval fades (INT / INT2 on-off): start SILENT -- the interval

@@ -537,16 +537,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     float eff_drive_clamped = p.drive + rw_dev_drive;
     if (eff_drive_clamped < 0.f) eff_drive_clamped = 0.f;
     else if (eff_drive_clamped > kSatuMax) eff_drive_clamped = kSatuMax;
+    // (FOLD2 — the second cascaded wavefolder — was removed: the A+B chain
+    //  now runs a single wavefolder (FOLD) before the saturator.)
     const float folded = Saturator::fold(mix, eff_fold);
-    // ---- Enrichment-2: second (cascaded) wavefolder (FOLD2) ----
-    // Run the first fold's output through a SECOND Saturator::fold with the
-    // FOLD2 depth, so full FOLD2 doubles the folding into a denser "worn"
-    // timbre (even more even harmonics / a metallic edge). At FOLD2 = 0 the
-    // second fold is a no-op (regression-safe).
-    const float folded2 = (p.fold2_depth > 0.f)
-        ? Saturator::fold(folded, p.fold2_depth)
-        : folded;
-    const float y = Saturator::saturate(folded2, eff_drive_clamped, p.asym);
+    const float y = Saturator::saturate(folded, eff_drive_clamped, p.asym);
 
     // ---- internal SVF (12 dB/oct low-pass, post-saturator) ----
     // When the FCUT dry/wet (svf_wet) is non-zero, the saturator output is
@@ -733,43 +727,41 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // keeping the digital overflow guard while matching the platform's
     // reference loudness. See the kOutDrive / kOutSat comments in
     // osc_constants.h (tune kOutDrive there, not the kMix* budget).
-    // ---- Enrichment-2: sidechain ducking of the MAIN voice by SUB1/SUB2 (DCK) ----
-    // When DCK (duck_amt) > 0, a one-pole abs-peak follower tracks the
-    // combined SUB1 + SUB2 output energy (|sub + sub2| with their levels,
-    // i.e. the low end that actually reaches the mix); the follower then
-    // DUCKS the MAIN voice (y_filt * kMixOsc * MAIN and the RMOD branch) so
-    // the main tone "sinks" out of the way of the low end -- the classic
+    // ---- Constant sidechain ducking of the MAIN voice by SUB1/SUB2 ---------
+    // (Formerly the DCK knob; now a fixed amount kDuckConstant -- the drone's
+    // low end must always read as the anchor.) A one-pole abs-peak follower
+    // tracks the combined SUB1 + SUB2 output energy (|sub + sub2| with their
+    // levels, i.e. the low end that actually reaches the mix); the follower
+    // then DUCKS the MAIN voice (y_filt * kMixOsc * MAIN and the RMOD branch)
+    // so the main tone "sinks" out of the way of the low end -- the classic
     // sidechain "pump", inverted: the low end is the constant anchor and the
     // main voice yields. This is the audible drone behaviour: at a held note
     // the sub sines are steady, so the follower settles to a constant duck
-    // gain (the main tone sits a few dB lower while the subs are present)
-    // and any low-end movement (Breath stream on SUB1, note glides, SUB2
-    // gate) moves the main tone with it. The duck gain is floored at
-    // kDuckFloor (0.7, ~-3 dB) so the main voice never disappears. At DCK = 0
-    // (default) duck_ stays 1.0 and the follower never advances
-    // (regression-safe). The RMOD branch ducks with y_filt: it is a DERIVED
-    // voice of A+B (wav_a * wav_b), so the whole main-voice cluster (A+B +
-    // its FM/JIT/RMOD byproducts) sinks together -- the same logic the MAIN
-    // knob applies (see the RMOD comment above).
-    float duck_gain = 1.f;
-    if (p.duck_amt > 0.f)
+    // gain (the main tone sits a few dB lower while the subs are present) and
+    // any low-end movement (Breath stream on SUB1, note glides, SUB2 gate)
+    // moves the main tone with it. The duck gain is floored at kDuckFloor
+    // (0.7, ~-3 dB) so the main voice never disappears. The duck is ALWAYS
+    // active (the follower advances every sample); the RMOD branch ducks with
+    // y_filt: it is a DERIVED voice of A+B (wav_a * wav_b), so the whole
+    // main-voice cluster (A+B + its FM/JIT/RMOD byproducts) sinks together --
+    // the same logic the MAIN knob applies (see the RMOD comment above).
     {
       // Follower source: the (level-scaled) sub-voice sum, i.e. the low end
       // that actually reaches the mix (sub*s SUB1 * lvl_sub, sub2*s SUB2).
       const float sub_src = sub * p.sub_level * lvl_sub + sub2 * sub2_level;
       const float inst = (sub_src < 0.f) ? -sub_src : sub_src;
       env_follower_ += (inst - env_follower_) * duck_alpha_;
-      duck_gain = 1.f - p.duck_amt * env_follower_ * kDuckScale;
+      float duck_gain = 1.f - kDuckConstant * env_follower_ * kDuckScale;
       if (duck_gain < kDuckFloor) duck_gain = kDuckFloor;
       if (duck_gain > 1.f) duck_gain = 1.f;
+      // Final output: the ducked main+ring cluster + the UNTOUCHED sub branches.
+      const float raw = (y_filt * kMixOsc * p.main_level * duck_gain
+                       + chord_sat * kMixChordDirect
+                       + sub * p.sub_level * lvl_sub * kMixSub
+                       + sub2 * sub2_level * kMixSub2
+                       + ring_out * kMixRing * duck_gain) * eg_.env * kOutDrive;
+      out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
     }
-    // Final output: the ducked main+ring cluster + the UNTOUCHED sub branches.
-    const float raw = (y_filt * kMixOsc * p.main_level * duck_gain
-                     + chord_sat * kMixChordDirect
-                     + sub * p.sub_level * lvl_sub * kMixSub
-                     + sub2 * sub2_level * kMixSub2
-                     + ring_out * kMixRing * duck_gain) * eg_.env * kOutDrive;
-    out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
   }
 }
 // K-rate per-block prepass extracted from process() (see the call site there):

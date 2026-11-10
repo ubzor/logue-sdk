@@ -19,7 +19,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' as displayed on device. See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000001U,                                // ID for this unit (1st unit of the author). Scoped within the context of a given dev_id.
-    .version = 0x0000000CU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
+    .version = 0x0000000DU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
     .num_params = 6,                                       // Number of valid parameter descriptors. (max. 10)
     .params = {
@@ -29,7 +29,7 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..43. The display
+        // A knob (PARAM, slot 0): parameter selector, 0..41. The display
         // shows the name of the selected parameter via unit_get_param_str_value().
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
@@ -43,7 +43,7 @@ const __unit_header unit_header_t unit_header = {
         //   6: SPD3 - Density stream period (log), default 511
         //   7: SM3  - Density stream time constant (log), default 511
         //   8: SUB1 - sub-octave (f/2) sine level (0..100%), default 511 (50%)
-        //   9: SUB2 - second sub (f/4) saturated level (0..100%), default 205 (~20%)
+        //   9: SUB2 - second sub (f/4) saturated level (0..100%), default 410 (~40%)
         //   10: SAT  - saturator drive (0..300), default 341 (100 = 1.0x, gentle)
         //   11: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
         //   12: FLD  - pre-drive wavefolder depth (0..100%), default 0 (off)
@@ -76,9 +76,11 @@ const __unit_header unit_header_t unit_header = {
         //   39: FMVT - formant vowel position (A-E-I-O-U morph), default 511 (mid, but stage OFF until FLVL>0)
         //   40: FLVL - formant stage dry/wet (0..100%), default 0 (off / transparent)
         //   41: COMB - comb resonator feedback (0..100% -> 0..0.9 fb), default 0 (off)
-        //   42: FLD2 - second (cascaded) wavefolder depth (0..100%), default 0 (off)
-        //   43: DCK  - sidechain-duck amount of the MAIN voice by SUB1/SUB2 (0..100%), default 0 (off)
-        {0, 43, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // NOTE: FLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
+        //   were REMOVED -- DCK is now a CONSTANT (kDuckConstant, see
+        //   osc_constants.h) and FLD2 was judged unnecessary. (Duck is always
+        //   on at 50%, floored at 0.7.)
+        {0, 41, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -97,8 +99,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..43. Identical to slot 0.
-        {0, 43, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..41. Identical to slot 0.
+        {0, 41, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

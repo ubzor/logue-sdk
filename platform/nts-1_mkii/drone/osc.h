@@ -196,26 +196,24 @@ public:
     // sound is unchanged. ASYM is shared.
     CHSAT2,         // CINT2's own saturator drive (0..3.0, default = CHSAT default)
     CHFLD2,         // CINT2's own wavefolder depth (0..1, default = CHFLD default = off)
-    // ---- Enrichment-2 (formant / tape / comb / fold2 / ducking) ------------
+    // ---- Enrichment-2 (formant / comb) --------------------------------------
     // Added AFTER CHFLD2 so no existing edit index (0..38) is re-numbered
     // (presets stay compatible). All default to OFF (transparent), so the
     // stock sound is bit-identical until the user turns one on.
+    // NOTE: FOLD2 (cascaded wavefolder) and DCK (sidechain-duck amount) were
+    // REMOVED — DCK is now a CONSTANT (see kDuckConstant in osc_constants.h)
+    // and FOLD2 was judged unnecessary. The second (cascaded) wavefolder and
+    // the editable duck amount no longer exist.
     FORM,           // formant vowel position (0..1, morph across A-E-I-O-U)
     FVOL,           // formant stage dry/wet (0..1, 0 = dry / transparent)
-    // NOTE: tape wow/flutter (former indices 41/42) were REMOVED — the
-    // synchronous whole-voice pitch wander was inaudible against the drone's
-    // inherent DETUNE beating, so it never shipped. COMB/FOLD2/DCK shifted
-    // down to 41/42/43 as a result.
     COMB,           // comb resonator feedback (0..1 -> 0..kCombFbMax)
-    FOLD2,          // second (cascaded) wavefolder depth (0..1)
-    DCK,            // envelope-follower self-ducking amount (0..1, 0 = off)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..DCK).
-  static constexpr uint8_t kEditParamCount = 46; // RATE_AMT..DCK
-  // The first editable enum value. The UI (header.c PARAM slot, 0..43) expects
+  // Number of editable DSP parameters (RATE_AMT..COMB).
+  static constexpr uint8_t kEditParamCount = 44; // RATE_AMT..COMB
+  // The first editable enum value. The UI (header.c PARAM slot, 0..41) expects
   // this order (select_ index -> parameter), 44 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
   //   2 SPD1             3 SM1   (Tone stream period / smooth)
@@ -239,9 +237,9 @@ public:
   //   36 FMBB (RFM_B: random-walk depth on FM B, RATE-gated)
   //   37 CH2D (CINT2's own saturator drive)  38 CH2F (CINT2's own fold depth)
   //   39 FMVT (formant vowel position)  40 FLVL (formant dry/wet)
-  //   41 COMB (comb resonator)  42 FLD2 (cascaded fold)  43 DCK (self-ducking)
+  //   41 COMB (comb resonator)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 46 = (DCK - RATE_AMT + 1); select_ 0..45 -> RATE_AMT..DCK.
+  // kEditParamCount = 44 = (COMB - RATE_AMT + 1); select_ 0..43 -> RATE_AMT..COMB.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -254,12 +252,12 @@ public:
   // WAV3 0, CHORD 205, CINT 377, MAIN 1023 (full), RW_WAV 0, RW_DRV 0,
   // RW_FLD 0, FCUT 921 (~90%), RES 0, RWFC 0, RW_LVL 0
   // (breath off), RW_LSP 511, RW_LSM 511.
-  // Enrichment-2 defaults (indices 39..43): FORM 511 (middle vowel, but the
+  // Enrichment-2 defaults (indices 39..41): FORM 511 (middle vowel, but the
   // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
-  // COMB 0, FOLD2 0, DCK 0 (all off, regression-safe).
+  // COMB 0 (all off, regression-safe). SUB2 (index 9) defaults to 410 (~40%).
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -270,7 +268,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 205, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0, 0, 0};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -768,11 +766,12 @@ private:
   uint32_t comb_w_  = 0;                 // write cursor
 
   // Envelope follower / sidechain ducking: a one-pole abs-peak follower of
-  // the combined SUB1+SUB2 output energy, and the per-sample duck gain
-  // (1.0 when DCK == 0). The follower only advances when duck_amt > 0
-  // (otherwise the duck gain stays 1.0 = transparent, see duck_gain in
-  // osc_mix.h). The duck gain applies to the MAIN voice (A+B + RMOD), NOT
-  // the subs: the low end is the constant anchor, the main tone yields.
+  // the combined SUB1+SUB2 output energy, and the per-sample duck gain. The
+  // duck is now CONSTANT (kDuckConstant, see osc_constants.h) -- it is always
+  // active, the follower advances every sample, and duck_gain in osc_mix.h
+  // settles to 1 - kDuckConstant * env_follower (floored at kDuckFloor). The
+  // duck gain applies to the MAIN voice (A+B + RMOD), NOT the subs: the low
+  // end is the constant anchor, the main tone yields.
   float duck_alpha_ = 0.f;     // one-pole follower coefficient (1 - exp(-1/tau))
   float env_follower_ = 0.f;   // smoothed |sub1 + sub2| energy
 
