@@ -231,7 +231,8 @@ public:
     tremo_high_ = 0.f;
     flng_hp_ = 0.f;
     flng_fb_ = 0.f;
-    ense_pre_lpf_ = 0.f;
+    ense_pre_lpf_l_ = 0.f;
+    ense_pre_lpf_r_ = 0.f;
     ense_delay_l_ = 0.f;
     ense_delay_r_ = 0.f;
     ense_post_lpf_l_ = 0.f;
@@ -323,7 +324,8 @@ private:
   float flng_hp_;     // flanger HPF accumulator
   float flng_fb_;     // flanger feedback delay state
   // ENSE chorus pre/post LPF (Juno-style aliasing suppression).
-  float ense_pre_lpf_;   // pre-delay LPF (~2 kHz), shared mono (L and R are identical)
+  float ense_pre_lpf_l_; // pre-delay LPF (~2 kHz), left channel
+  float ense_pre_lpf_r_; // pre-delay LPF (~2 kHz), right channel
   // ENSE one-pole "delay" voices: DEDICATED state (NOT tremo_low_/tremo_high_,
   // which are also the L/R scratch carriers consumed by TREMO/FLNG/TAPE;
   // sharing them corrupted the delay state with the chorus output each sample).
@@ -436,9 +438,21 @@ private:
   // ---- Per-sample path ------------------------------------------------------
   for (uint32_t n = 0; n < frames; ++n)
   {
-    const float in_mono = in[n]; // `in` is the mono OSC output (frames samples)
-    const float in_abs = (in_mono < 0.f) ? -in_mono : in_mono;
-    if (in_abs > in_peak) in_peak = in_abs;
+    // `in` is INTERLEAVED STEREO (out[2n]=L, out[2n+1]=R) -- both the NTS-1
+    // platform (modfx units are stereo, see drone-modfx/unit.cc) and the web
+    // chain (Chain::process upmixes the mono OSC to L/R) deliver it this way.
+    // The OLD code read `in[n]` (mono layout, frames samples) from this
+    // 2*frames interleaved buffer: it consumed ONLY the even samples (the L
+    // channel) and treated the odd (R) samples as the next frame of L --
+    // a half-rate garbled signal. In the web chain L==R (the upmix is a
+    // plain duplicate), so the L half still happened to be clean; on the
+    // NTS-1, where the platform feeds true stereo, it would have been broken.
+    const float in_l = in[2 * n];
+    const float in_r = in[2 * n + 1];
+    const float in_l_abs = (in_l < 0.f) ? -in_l : in_l;
+    if (in_l_abs > in_peak) in_peak = in_l_abs;
+    const float in_r_abs = (in_r < 0.f) ? -in_r : in_r;
+    if (in_r_abs > in_peak) in_peak = in_r_abs;
 
     // ---- ENSE: stereo chorus (2 detuned voices, modulated one-pole delays) --
     // Wet amounts are NON-const: the DRIFT random-walk nudges them below
@@ -519,21 +533,25 @@ private:
     // overload in the one-pole filters. The allpass filters (unit gain) diffuse
     // the signal without adding gain. The dry/wet mix is unitary: out = in +
     // (wet - in) * amount, so the total level doesn't change with the knob.
-    const float in_scaled = in_mono * modfx_consts::kModInputGain;
+    const float in_scaled_l = in_l * modfx_consts::kModInputGain;
+    const float in_scaled_r = in_r * modfx_consts::kModInputGain;
     if (ense_wet > 0.f)
     {
-      // Pre-LPF: soften the high end before the chorus delays (aliasing suppression).
-      const float pre = onelpf(ense_pre_lpf_, in_scaled, ense_pre_lpf_alpha);
+      // Pre-LPF: soften the high end before the chorus delays (aliasing
+      // suppression). Per-channel state so L and R diffuse independently
+      // (the chorus image is what makes the stage sound stereo).
+      const float pre_l = onelpf(ense_pre_lpf_l_, in_scaled_l, ense_pre_lpf_alpha);
+      const float pre_r = onelpf(ense_pre_lpf_r_, in_scaled_r, ense_pre_lpf_alpha);
 
       const float ense_lfo = lfoStep(ense_lfo_phase_, ense_freq);
       const float spread1 = ense_spread_smp * (0.5f + 0.5f * ense_lfo);
       const float len1 = ense_base1_smp + spread1;
       const float a1 = 1.f / (1.f + len1 * 0.02f); // one-pole length -> alpha
-      const float v1 = onelpf(ense_delay_l_, pre, a1);
+      const float v1 = onelpf(ense_delay_l_, pre_l, a1);
       const float spread2 = ense_spread_smp * (0.5f - 0.5f * ense_lfo);
       const float len2 = ense_base2_smp + spread2;
       const float a2 = 1.f / (1.f + len2 * 0.02f);
-      float v2 = onelpf(ense_delay_r_, pre, a2);
+      float v2 = onelpf(ense_delay_r_, pre_r, a2);
       v2 *= modfx_consts::kEnseVoice2; // voice 2 "pitch" (detune stand-in)
 
       // Allpass diffusion (unit gain, no level change). g = 0.5 (stable, |g| < 1).
@@ -547,26 +565,27 @@ private:
 
       // Unitary dry/wet mix: out = in + (wet - in) * amount.
       // At ense_wet = 0: out = in (dry). At ense_wet = 1: out = wet (full chorus).
-      const float chorus_l = in_scaled + (wet_lpf_l - in_scaled) * ense_wet;
-      const float chorus_r = in_scaled + (wet_lpf_r - in_scaled) * ense_wet;
+      const float chorus_l = in_scaled_l + (wet_lpf_l - in_scaled_l) * ense_wet;
+      const float chorus_r = in_scaled_r + (wet_lpf_r - in_scaled_r) * ense_wet;
       tremo_low_ = chorus_l;   // L (scratch carrier, consumed by TREMO/FLNG/TAPE)
       tremo_high_ = chorus_r;  // R (scratch carrier)
     }
     else
     {
-      // Wire: reset the one-pole state to the current input so that a later
-      // ramp of ense_wet from 0 does not start from a stale (accumulated) LPF
-      // value. This avoids a transient click / DC offset when the user turns
-      // the ENSE knob up from zero.
-      tremo_low_ = in_scaled;
-      tremo_high_ = in_scaled;
-      ense_pre_lpf_ = in_scaled;
-      ense_delay_l_ = in_scaled;
-      ense_delay_r_ = in_scaled;
-      ense_post_lpf_l_ = in_scaled;
-      ense_post_lpf_r_ = in_scaled;
-      ense_ap_l_ = in_scaled;
-      ense_ap_r_ = in_scaled;
+      // Wire: reset the one-pole state to the current (per-channel) input so
+      // that a later ramp of ense_wet from 0 does not start from a stale
+      // (accumulated) LPF value. This avoids a transient click / DC offset
+      // when the user turns the ENSE knob up from zero.
+      tremo_low_ = in_scaled_l;
+      tremo_high_ = in_scaled_r;
+      ense_pre_lpf_l_ = in_scaled_l;
+      ense_pre_lpf_r_ = in_scaled_r;
+      ense_delay_l_ = in_scaled_l;
+      ense_delay_r_ = in_scaled_r;
+      ense_post_lpf_l_ = in_scaled_l;
+      ense_post_lpf_r_ = in_scaled_r;
+      ense_ap_l_ = in_scaled_l;
+      ense_ap_r_ = in_scaled_r;
     }
     float L = tremo_low_;
     float R = tremo_high_;

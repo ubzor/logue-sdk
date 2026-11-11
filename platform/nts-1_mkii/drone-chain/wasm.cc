@@ -13,6 +13,7 @@
 // for parameters (setEditParam / setFxParam write, the worklet consumes).
 
 #include <emscripten/bind.h>
+#include <emscripten/val.h>
 #include <emscripten/webaudio.h>
 #include <emscripten/em_math.h>
 #include <string>
@@ -493,15 +494,38 @@ void AudioWorkletProcessorCreated(EMSCRIPTEN_WEBAUDIO_T audioContext, bool succe
   ram.resize(processor.getBufferSize());
   processor.init(ram.data());
 
-  // no input, stereo output (2 channels: L + R)
-  int outputChannelCounts[1] = {2};
-  EmscriptenAudioWorkletNodeCreateOptions options = {
-      .numberOfInputs = 0,
-      .numberOfOutputs = 1,
-      .outputChannelCounts = outputChannelCounts};
+  // STEREO OUTPUT NODE.
+  //
+  // We build the AudioWorkletNode through EM_ASM (plain JS) rather than
+  // emscripten_create_wasm_audio_worklet_node() to guarantee the correct
+  // WebIDL option name `outputChannelCount` (a sequence, i.e. an array:
+  // [2] for stereo). The C API's EmscriptenAudioWorkletNodeCreateOptions
+  // carries `outputChannelCounts` (int*); the JS glue in libwebaudio.js
+  // reads it from the C struct at the correct offset and passes it as
+  // `outputChannelCount` (array) to the AudioWorkletNode constructor.
+  // However, any struct-layout mismatch (or a missing include that shifts
+  // the field offsets) silently produces a MONO node, and ProcessAudio's
+  // planar write `output.data[N + i]` (R channel) then lands past the end
+  // of the 1-channel sample buffer -- undefined behaviour, audible glitches
+  // and an apparent "enormous loud noise" from the MOD stage (chorus 18/31 ms
+  // LFOs + tremolo) that no internal gain cut can fix.
+  //
+  // Creating the node in JS with the correct `outputChannelCount: [2]` makes
+  // the node genuinely 2-channel, the planar R write becomes valid, and the
+  // cascade's stereo image (MOD/DEL/REV) reaches the speakers as intended.
+  //
+  // The processor callback `ProcessAudio` is passed as `processorOptions.callback`
+  // (a C function pointer, which in emscripten IS a wasm table index). The
+  // worklet module resolves it via `getWasmTableEntry(callback)`.
+  // `samplesPerChannel` MUST be included in processorOptions -- the worklet's
+  // WasmAudioWorkletProcessor constructor reads it to size its I/O buffers;
+  // without it, `this.bytesPerChannel` is NaN and all audio processing fails.
+  const int ctxHandle = static_cast<int>(audioContext);
+  const size_t cbPtr = reinterpret_cast<size_t>(&ProcessAudio);
 
-  EMSCRIPTEN_AUDIO_WORKLET_NODE_T wasmAudioWorklet = emscripten_create_wasm_audio_worklet_node(audioContext,
-                                                                                               "logue-chain", &options, &ProcessAudio, 0);
+  EMSCRIPTEN_WEBAUDIO_T wasmAudioWorklet = (EMSCRIPTEN_WEBAUDIO_T)EM_ASM_INT(
+      "const ctx = emscriptenGetAudioObject($0); const node = new AudioWorkletNode(ctx, 'logue-chain', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { callback: $1, userData: 0, samplesPerChannel: emscriptenGetContextQuantumSize($0) } }); return emscriptenRegisterAudioObject(node);",
+      ctxHandle, cbPtr);
 
   EM_ASM({ setupWebAudioAndUI(emscriptenGetAudioObject($0), emscriptenGetAudioObject($1)); }, audioContext, wasmAudioWorklet);
 }

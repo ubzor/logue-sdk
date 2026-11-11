@@ -26,12 +26,20 @@ Defaults match `header.c` and `Modfx::Params::reset()`.
 
 ## Signal path
 
-Stereo, interleaved. The OSC delivers a MONO signal; MOD upmixes it to L/R and
-runs the cascade in series:
+**Stereo in / stereo out, interleaved** (`in[2n]=L, in[2n+1]=R`, `out[2n]=L,
+out[2n+1]=R`). MOD does NOT upmix: the NTS-1 platform feeds modfx units true
+stereo (see `drone-modfx/unit.cc`, which rejects non-2-channel geometry), and
+in the web simulator `Chain::process` (drone-chain/chain.h) upmixes the mono
+OSC to L/R *before* the first FX stage. The OLD code read `in[n]` (a mono
+layout) from the interleaved buffer -- i.e. it consumed the L half only and
+walked the R half as if it were the next L frames (a half-rate garbled
+signal; clean in the web chain only because L==R there). The per-sample path
+now reads both channels and every stateful stage (ENSE pre/post LPF, the
+chorus delay voices, TREMO/FLNG/TAPE) is per-channel.
 
-    in (mono)
-      -> upmix(L, R)
-      -> ENSE  (stereo chorus: 2 detuned voices, modulated one-pole delays)
+    in (stereo L/R)
+      -> ENSE  (stereo chorus: 2 detuned voices, modulated one-pole delays,
+               per-channel pre/post LPF + allpass)
       -> TREMO (harmonic/optical tremolo: LPF/HPF split, antiphase LFO)
       -> FLNG  (thru-zero flanger: HPF, modulated short delay + feedback)
       -> TAPE  (wow: LCG random-walk delay; flutter: LCG noise level mod)

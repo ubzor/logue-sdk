@@ -164,8 +164,11 @@ static constexpr uint32_t kLcgA    = 16807u;   // multiplier
 static constexpr uint32_t kLcgSeed = 83647u;   // non-zero seed
 
 // ---- Input gain (unity, no attenuation) -------------------------------------
-// The OSC output is already attenuated by 0.5x (-6 dB) in chain.h to compensate
-// for stereo summation. MOD does NOT attenuate the input further (kModInputGain = 1.0).
+// The OSC output (mono) is upmixed to L/R by Chain::process with NO
+// attenuation (a plain duplicate, so the per-channel level equals the mono
+// level; the chain's output is written straight through to the 2-channel
+// worklet output, so there is no stereo summation to compensate for). MOD
+// does NOT attenuate the input either: kModInputGain = 1.0.
 static constexpr float kModInputGain = 1.0f;
 
 // ---- Output makeup (0.9x headroom) -------------------------------------------
