@@ -158,11 +158,13 @@ struct OscParamsData
   float rfm_a;        // 0.f .. 1.f, edit RFMA (random-walk depth on FM A)
   float rfm_b;        // 0.f .. 1.f, edit RFMB (random-walk depth on FM B)
 
-  // ---- Enrichment-2 ----------------------------------------------------------
+  // ---- Enrichment-2 (formant / comb) -----------------------------------------
+  // All default to OFF (transparent) so the stock sound is bit-identical.
   // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now a
   //  constant (kDuckConstant, osc_constants.h); no DSP state for them here.)
-  // (The FORM/FLVL/COMB formant + comb-resonator parameters were moved to the
-  //  DRONE-MOD unit; they no longer live in this struct.)
+  float formant_pos;  // 0.f .. 1.f, edit FORM: vowel morph position (A=0 .. U=1)
+  float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
+  float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
 
   void reset()
   {
@@ -227,7 +229,13 @@ struct OscParamsData
       fm_b         = 0.f;   // default: static phase-FM off (B)
       rfm_a        = 0.f;   // default: FM-A walk off (pure static FM)
       rfm_b        = 0.f;   // default: FM-B walk off (pure static FM)
-      // (FORM/FLVL/COMB enrichment-2 defaults moved to the DRONE-MOD unit.)
+      // ---- Enrichment-2 defaults (all OFF, regression-safe) ----
+      // FORM sits at the middle vowel, but the formant stage is fully DRY
+      // (formant_wet = 0) so it contributes nothing until the user raises
+      // FVOL. Every other enrichment-2 knob defaults to 0 (off / transparent).
+      formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
+      formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
+      comb_fb      = 0.f;   // default: comb resonator off
   }
 
   OscParamsData() { reset(); }

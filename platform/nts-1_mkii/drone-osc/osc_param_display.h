@@ -40,7 +40,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "BRT", "BRR", "SMT",
       "CH2D", "CFLD",
       "INT2", "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
-      "CH2D", "CH2F"};
+      "CH2D", "CH2F",
+      "FMVT", "FLVL", "COMB"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -156,6 +157,21 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       buf[n++] = 'H';
     }
     buf[n] = '\0';
+    return buf;
+  }
+
+  // FMVT (formant vowel position): show the nearest vowel (A/E/I/O/U) as a
+  // single letter. The raw 0..1023 value maps to 0..1 across 5 stops, so
+  // (int)(pos*4.999) gives the stop index 0..4 (the 4.999 keeps raw=1023
+  // from overflowing to index 5).
+  if (k == FORM)
+  {
+    static const char vowels[5] = {'A', 'E', 'I', 'O', 'U'};
+    int vi = (int)(param_10bit_to_f32(raw) * 4.999f);
+    if (vi < 0) vi = 0;
+    else if (vi > 4) vi = 4;
+    buf[0] = vowels[vi];
+    buf[1] = '\0';
     return buf;
   }
 

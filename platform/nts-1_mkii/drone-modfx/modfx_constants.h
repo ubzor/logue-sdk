@@ -7,10 +7,7 @@
  *  File: modfx_constants.h
  *
  *  DRONE-MOD (modfx): static tuning constants for the drone modulation-effect
- *  unit. All stage gains / ceilings / LFO curves / DRIFT budget + the
- *  FORMANT/COMB constants copied verbatim from drone-osc (so the formant/comb
- *  sound is bit-identical to what it was in the oscillator, just relocated to
- *  the MOD slot).
+ *  unit: stage gains / ceilings / LFO curves / DRIFT budget.
  *
  *  IMPORTANT (check-und): the NTS-1 mkII FX runtime does NOT link libm into a
  *  unit, and the check-und target in the Makefile fails the build if any
@@ -20,9 +17,7 @@
  *    * plain float / integer arithmetic, and
  *    * the hand-rolled one-pole / Taylor helpers (one_minus_expf, the sine
  *      LFO via a phase accumulator + Taylor sine).
- *  No transcendental calls in the audio path. The formant comb delays are
- *  computed with a float division at K-rate (init / FORM/FVOL change) -- a
- *  division is FPU, not libm -- so that is fine.
+ *  No transcendental calls in the audio path.
  */
 
 #include <cstdint>
@@ -99,48 +94,9 @@ static constexpr float kTapeWowCents    = 25.f;    // max wow pitch deviation (c
 static constexpr float kTapeFlutterAmt  = 0.25f;   // max flutter level modulation (0..25%, full DEPTH)
 static constexpr float kTapeLpfAlpha    = 0.05f;   // flutter noise LPF one-pole alpha (slow)
 
-// ---- FORMANT (F1+F2 one-pole IIR combs, morph by FORM) ---------------------
-// MOVED from drone-osc (enrichment-2). The FORM knob selects a VOWEL POSITION
-// (0..1) across the five formant stops A-E-I-O-U; the FVOL knob sets the
-// PARALLEL-ADD gain of the formant stage (0 = fully dry / transparent). Each
-// vowel is modelled by TWO parallel one-pole IIR comb resonators (its F1 + F2
-// formant frequencies, from kFormantStops: the comb delay = sr/(2*f), so the
-// resonance peak sits at f/2 -- a musical sub-octave band). The K-rate path
-// (recompute_formant_comb) linearly crossfades the (F1, F2) pair between the
-// two nearest stops; the per-sample path (only when FLVL > 0) runs both combs
-// and ADDS the (scaled) sum of their feedback colors ON TOP of the intact
-// signal (parallel branch, NOT dry/wet). Both combs are ALWAYS stable (single
-// feedback tap, |fb| < 1). Copied verbatim from drone-osc/osc_constants.h.
-static constexpr float kFormantStops[5][2] = {
-    { 730.f, 1090.f },   // A
-    { 530.f, 1840.f },   // E
-    { 270.f, 2290.f },   // I
-    { 450.f, 1020.f },   // O
-    { 300.f,  870.f },   // U
-};
-static constexpr float kFormantGain       = 1.0f;  // parallel-add gain (formant color on top)
-static constexpr float kFormantFbMax      = 0.9f;  // shared feedback ceiling (FVOL * this, < 1 = stable)
-static constexpr uint32_t kFormantDelayMaxSmp  = 256U; // ring-buffer size (pow-of-2)
-static constexpr uint32_t kFormantDelayMinSmp  = 8U;   // delay clamp (samples)
-static constexpr uint32_t kFormantDelayClampSmp = 250U; // delay clamp (samples, in-buffer)
-
-// ---- COMB (IIR resonator) --------------------------------------------------
-// MOVED from drone-osc (enrichment-2). The COMB knob sets the feedback
-// coefficient of a one-pole IIR comb (a sample delay line with its output
-// summed back around a feedback loop). A single feedback tap produces a
-// resonant peak at ~1/delay-samples Hz and its harmonics -- a "wooden /
-// cavernous" resonance that tints the signal. The delay is a FIXED mid-band
-// length (kCombDelaySmp, ~5.2 ms -> ~190 Hz peak); the knob sweeps the
-// feedback 0..kCombFbMax (clamped < 1 for stability). At COMB = 0 the branch
-// is a pure wire (regression-safe). Copied verbatim from drone-osc.
-static constexpr float kCombFbMax      = 0.9f;    // feedback ceiling (< 1 = stable)
-static constexpr uint32_t kCombDelaySmp  = 250U;  // fixed delay (~5.2 ms -> ~190 Hz peak)
-static constexpr uint32_t kCombDelayMaxSmp = 256U; // ring-buffer size (pow-of-2, >= delay)
-
 // ---- DRIFT (slot 2): the shared self-motion ceiling ------------------------
-// Like RATE in the oscillator: a single ceiling that gates how far the seven
-// "level" stages (ENSE / TREMO / FLNG / TAPE / FORM / FLVL / COMB) wander on
-// their own. DRIFT = 0 -> every level stays at its manual value (static,
+// Like RATE in the oscillator: a single ceiling that gates how far the four
+// "level" stages (ENSE / TREMO / FLNG / TAPE) wander on their own. DRIFT = 0 -> every level stays at its manual value (static,
 // regression-safe). DRIFT > 0 -> a K-rate random-walk nudges each level
 // within [manual * (1 - d), manual * (1 + d)] where d = DRIFT (0..1), using
 // exponential target gaps (tempo from TIME) + one-pole tracking (5..20 s).
@@ -172,8 +128,8 @@ static constexpr uint32_t kLcgSeed = 83647u;   // non-zero seed
 static constexpr float kModInputGain = 1.0f;
 
 // ---- Output makeup (0.9x headroom) -------------------------------------------
-// A small makeup gain keeps the formant/comb parallel-add stages from reading
-// quieter than dry. 0.9x leaves 1 dB of headroom.
+// A small makeup gain keeps the modulation stages from reading quieter than
+// dry. 0.9x leaves 1 dB of headroom.
 static constexpr float kModMakeup = 0.9f;
 
 // ---- Pre/post LPF for ENSE chorus (aliasing suppression, Juno-style) --------

@@ -27,13 +27,12 @@ const __unit_header unit_header_t unit_header = {
     .name = "DRONE",
     .num_params = 6,
     .params = {
-        // PARAM selector (A knob / UI edit-parameter index), 0..40 (41 OSC
-        // edit params; FORM/FLVL/COMB moved to the MOD FX stage).
-        {0, 40, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // PARAM selector (A knob / UI edit-parameter index), 0..43.
+        {0, 43, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
         // VALUE (raw 0..1023 of the selected parameter).
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
         // Optional (edit-menu) duplicates of PARAM / VALUE.
-        {0, 40, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        {0, 43, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
         {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
         // RndM (randomization type selector, 0..2).
         {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"RndM"}},

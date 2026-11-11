@@ -48,9 +48,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010001U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: real author IDs + name.
+    .version = 0x00010002U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: FORM/FLVL/COMB removed (moved back to drone-osc).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 10,                                      // Number of valid parameter descriptors. (max. 10)
+    .num_params = 7,                                       // Number of valid parameter descriptors. (max. 10)
 
     .params = {
         // Format: min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -64,7 +64,7 @@ const __unit_header unit_header_t unit_header = {
         // spread, tape flutter, tremolo depth.
         {0, 1023, 0, 511, k_unit_param_type_none, 1, 0, 0, {"DEPTH"}},
 
-        // [2] DRIFT: shared self-motion ceiling (0..1, 0 = static). The 7 level
+        // [2] DRIFT: shared self-motion ceiling (0..1, 0 = static). The 4 level
         // stages wander on their own, constrained by an L1 budget.
         {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"DRIFT"}},
 
@@ -79,14 +79,5 @@ const __unit_header unit_header_t unit_header = {
 
         // [6] TAPE: tape wow+flutter level (0..1). 0 = off.
         {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"TAPE"}},
-
-        // [7] FORM: formant vowel position (0..1, morph A-E-I-O-U). strings.
-        {0, 1023, 0, 511, k_unit_param_type_strings, 1, 0, 0, {"FORM"}},
-
-        // [8] FLVL: formant stage level (0..1, 0 = dry/transparent).
-        {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"FLVL"}},
-
-        // [9] COMB: comb resonator feedback (0..1 -> 0..0.85). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"COMB"}},
     },
 };
