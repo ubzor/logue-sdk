@@ -40,9 +40,9 @@ static constexpr float kSr = 48000.f;
 // For |lnRatio * p| <= ~3.3 a 4th-order Taylor of exp is accurate to <1e-3
 // (far below audibility for an LFO frequency). We precompute lnRatio per
 // stage as a plain constant (computed offline, no runtime libm).
-static constexpr float kEnseLFOMin = 0.05f;  // 0.05 Hz  (TIME = 0)
-static constexpr float kEnseLFOMax = 1.2f;   // 1.2 Hz   (TIME = 1)
-static constexpr float kEnseLFOlnR = 3.17805f; // ln(kEnseLFOMax / kEnseLFOMin)
+static constexpr float kEnseLFOMin = 0.02f;  // 0.02 Hz  (TIME = 0)
+static constexpr float kEnseLFOMax = 0.6f;   // 0.6 Hz   (TIME = 1)
+static constexpr float kEnseLFOlnR = 3.40120f; // ln(kEnseLFOMax / kEnseLFOMin)
 
 static constexpr float kTremoLFOMin = 0.05f;  // 0.05 Hz
 static constexpr float kTremoLFOMax = 0.5f;   // 0.5 Hz
@@ -57,21 +57,67 @@ static constexpr float kFlngLFOlnR = 2.81341f; // ln(...)
 // constant so a full DEPTH gives a clearly audible (but not destructive)
 // amount. Chorus delay-spread and flanger delay are squared (DEPTH^2) so low
 // DEPTH is a gentle shimmer and full DEPTH is a pronounced sweep.
-static constexpr float kEnseMaxSpreadSmp = 48.0f;  // chorus LFO delay-spread (samples) at full DEPTH
+static constexpr float kEnseMaxSpreadSmp = 384.0f; // chorus LFO delay-spread (samples, ~8 ms) at full DEPTH
+// ENSE knob scaling: the knob maps to a MAX wet mix of 50% (kEnseWetMax). A
+// full 50/50 stereo chorus with comb interference reads as mud/garble on the
+// drone in mono and dulls the highs; capping at 50% keeps the ensemble
+// "wide but present" at 100% and a gentle thickening at typical 20-40%.
+static constexpr float kEnseWetMax = 0.5f;   // ENSE=1 -> 50% wet (max)
 static constexpr float kTremoDepthMax    = 0.85f;  // tremolo depth: at TREMO=DEPTH=1, level dips to 15%
 static constexpr float kFlngMaxDepthSmp  = 120.0f; // flanger delay (samples, ~2.5 ms) at DEPTH=1 (squared)
 
-// ---- ENSEMBLE (stereo chorus) ----------------------------------------------
-// Two detuned one-pole "delay" voices: the L voice is in-phase, the R voice is
-// the golden-ratio conjugate (x1.0618, so they never re-align) with a longer
-// base delay and a phase-inverted LFO. The delay is modulated by a slow LFO
-// (freq from TIME, spread from DEPTH). pre/post one-pole LPFs soften the
-// chorus and keep its DC envelope from accumulating.
-static constexpr float kEnseDelayBaseL = 18.0f;  // voice 1 base delay (ms, L, in-phase)
-static constexpr float kEnseDelayBaseR = 31.0f;  // voice 2 base delay (ms, R, x1.0618)
-static constexpr float kEnseVoice2     = 1.0618f; // voice 2 detune multiplier
-static constexpr float kEnsePreLpfHz   = 2000.f; // pre-delay LPF cutoff (Hz)
-static constexpr float kEnsePostLpfHz  = 6000.f; // post-chorus LPF cutoff (Hz)
+// ---- ENSEMBLE (stereo chorus, Juno-60 style) --------------------------------
+// Architecture follows peterall/junologue-chorus (MIT), adapted for the
+// drone-modfx NTS-1 mkII unit. Two parallel BBD chorus voices ("main" and
+// "sub"), each a single REAL delay line (dsp::DelayLine) driven by two
+// triangle LFOs (dsp::SimpleLFO) at fixed rates 0.513 Hz and 0.863 Hz.
+// Each LFO reads the delay at two fractional taps (t and 1-t) and sums them
+// with per-mode gains -> a smooth, wide, non-vibrato chorus wash.
+// A 1st-order LPF (dsp::BiQuad::setFOLP) runs pre- and post-delay on each
+// channel (emulating the Juno's passive RC anti-alias).
+//
+// TIME knob -> 3 chorus modes (I, I+II, II) with timbre sweep within each:
+//   mode 0 (I):   main voice only  (delay_gain = {1.0, 0.0})
+//   mode 1 (I+II): both voices     (delay_gain = {0.707, 0.707})
+//   mode 2 (II):  sub voice only   (delay_gain = {0.0, 1.0})
+// Within a mode, the LPF cutoff sweeps (brighter clockwise) via TIME frac.
+//
+// DEPTH knob -> dry/wet crossfade (orthonormal: dry=sqrt(1-x), wet=sqrt(x))
+// so total level stays ~constant. DEPTH=0 -> pure dry (wire), DEPTH=1 ->
+// 50/50 dry/wet.
+//
+// The ENSE knob is the master level of this stage: 0 = wire (bypass),
+// 1 = full chorus (the dry/wet blend above). This keeps the DRONE MOD unit's
+// 7-slot shape (ENSE is slot 3, same as TREMO/FLNG/TAPE).
+//
+// Delay line: 512 samples (next-pow2 of 5.4 ms x 48 kHz), ~27 KB SDRAM.
+// Two delay lines (main + sub) = 54 KB. LFOs are q31 phase accumulators
+// (no per-sample float state). LPFs are dsp::BiQuad (2 float state each).
+// Total ENSE state: 54 KB SDRAM + ~10 float (RAM).
+static constexpr float kEnseDelayMinMs = 15.0f;  // main voice min delay (ms, target ~18 ms chorus)
+static constexpr float kEnseDelayMaxMs = 20.0f;  // main voice max delay (ms)
+static constexpr float kEnseSubDelayMinMs = 28.0f; // sub voice min delay (ms, target ~31 ms)
+static constexpr float kEnseSubDelayMaxMs = 34.0f; // sub voice max delay (ms)
+static constexpr float kEnseLfoRate1 = 0.513f;   // LFO 1 rate (Hz, Juno BBD, when TIME at mid)
+static constexpr float kEnseLfoRate2 = 0.863f;   // LFO 2 rate (Hz, Juno BBD, when TIME at mid)
+// TIME knob now sweeps the ENSE LFO rate exponentially: rate = Min * exp(lnR * TIME).
+// At TIME=0.5 the LFO1 lands near the classic Juno 0.513 Hz. Range ~0.05..~4.5 Hz.
+static constexpr float kEnseLfoRateMin = 0.05f;  // slowest LFO sweep (Hz, TIME=0)
+static constexpr float kEnseLfoRateLnR = 4.5f;   // exp span (e^4.5 ~= 90x)
+// CMODE knob: 3 EQUAL bands (Formant-Vowel style) -> Juno voice blend.
+//   band 0 (CMODE 0..341)   -> mode I    (main voice only)
+//   band 1 (CMODE 342..683) -> mode I+II (both voices, classic Juno)
+//   band 2 (CMODE 684..1023)-> mode II   (sub voice only)
+// Equal thirds of the 0..1023 range so every value lands cleanly in a band.
+static constexpr float kEnsePreLpfMinHz = 2000.f;  // pre-delay LPF min cutoff
+static constexpr float kEnsePreLpfMaxHz = 23500.f; // pre-delay LPF max cutoff
+static constexpr float kEnsePostLpfMinHz = 6000.f; // post-delay LPF min cutoff
+static constexpr float kEnsePostLpfMaxHz = 23500.f;// post-delay LPF max cutoff
+static constexpr uint32_t kEnseDelaySize = 512U;   // next-pow2(5.4ms * 48k) = 512 samples
+// Juno chorus mode gains: {main_gain, sub_gain} for I, I+II, II
+static constexpr float kEnseGainI[2]   = {1.0f, 0.0f};
+static constexpr float kEnseGainI2[2]  = {0.7071f, 0.7071f}; // _3db
+static constexpr float kEnseGainII[2]  = {0.0f, 1.0f}; // post-chorus LPF cutoff (Hz, Juno RC anti-alias)
 
 // ---- TREMOLO (optical / harmonic) ------------------------------------------
 // Classic optical tremolo: a single AM depth knob. The level dips
@@ -142,18 +188,25 @@ static constexpr float kModMakeup = 0.9f;
 // filters: a one-pole is a lowpass (that is exactly why the old "modulated
 // one-pole delays" read as mutes/ducking instead of mod-FX). The NTS-1 modfx
 // slot provides 256 KB of allocatable external memory (see the platform
-// README "Supported Modules" table), so we keep 96 KB here for 6 interleaved
-// delay lines (L/R pairs for ENSE, FLNG, TAPE). getBufferSize() reports this;
-// unit.cc allocates it and init() slices it into the 6 line buffers. The web
-// chain (drone-chain/chain.h) slices the same size automatically.
-static constexpr uint32_t kEnseLineLenSmp = 480U;  //  10 ms max chorus delay + margin (per channel)
+// README "Supported Modules" table). getBufferSize() reports this; unit.cc
+// allocates it and init() slices it into the line buffers. The web chain
+// (drone-chain/chain.h) slices the same size automatically.
+static constexpr uint32_t kEnseLineLenSmp = 2048U;  // 34 ms @ 48 kHz (target 18/31 ms chorus); next-pow2
 static constexpr uint32_t kFlngLineLenSmp = 192U;  //   4 ms max flanger delay + margin (per channel)
 static constexpr uint32_t kTapeLineLenSmp = 384U;  //   8 ms tape wow delay + margin (per channel)
+// ENSE: 2 MONO delay lines (Juno main + sub voices), 2048 smp each.
+// FLNG: 1 interleaved L/R pair (192 smp/channel). TAPE: 1 L/R pair (384 smp).
 static constexpr uint32_t kModLineBytesPerPair =
     2U * (kEnseLineLenSmp + kFlngLineLenSmp + kTapeLineLenSmp) * sizeof(float);
-// 2 * (480 + 192 + 384) * 4 = 7372 bytes per L/R pair, x 6 lines = 44232 bytes
-// (keep the whole thing under 256 KB with wide margin).
-static constexpr uint32_t kModSramBytes = 6U * kModLineBytesPerPair;
+// ENSE: 2 mono lines x 2048 x 4 = 16384 bytes
+// FLNG: 1 pair x 2 x 192 x 4 = 1536 bytes
+// TAPE: 1 pair x 2 x 384 x 4 = 3072 bytes
+// Total: 20992 bytes (~20.5 KB, well under 256 KB).
+static constexpr uint32_t kModSramBytes =
+    2U * kEnseLineLenSmp * sizeof(float) +        // 2 ENSE delay lines (main + sub, mono each)
+    1U * 2U * kFlngLineLenSmp * sizeof(float) +   // 1 FLNG L/R pair
+    1U * 2U * kTapeLineLenSmp * sizeof(float);    // 1 TAPE L/R pair
+// = 2*2048*4 + 2*192*4 + 2*384*4 = 16384 + 1536 + 3072 = 20992 bytes (~20.5 KB)
 
 } // namespace modfx_consts
 

@@ -191,7 +191,12 @@
             <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Ense</span>
+            <span class="w-14 text-sm font-medium shrink-0">CMode</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxmod_cmode" class="range range-primary range-sm flex-1">
+            <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">I+II</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-16 text-sm font-medium shrink-0">Dry/Wet</span>
             <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
             <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
           </label>
@@ -470,6 +475,12 @@
       // index within that stage (0=TIME, 1=DEPTH, 2=DRIFT, ... for MOD; 0..1
       // for DEL/REV). Every param shows 0..100%.
       function formatFxParam(stage, which, raw) {
+        // MOD CMODE (stage 0, which 3): show the Juno voice band (equal thirds).
+        if (stage === 0 && which === 3) {
+          if (raw < 342) return "I";
+          if (raw < 684) return "I+II";
+          return "II";
+        }
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -1440,7 +1451,7 @@
       // The worklet thread applies the value to the live DSP each block
       // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "ense", "tremo", "flng", "tape"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "tremo", "flng", "tape"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];

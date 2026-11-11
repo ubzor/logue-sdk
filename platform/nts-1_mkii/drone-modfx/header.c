@@ -48,36 +48,41 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010002U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: FORM/FLVL/COMB removed (moved back to drone-osc).
+    .version = 0x00010007U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped minor: 8 params. Added CMODE (3 equal bands -> Juno voice I/I+II/II); TIME now sweeps ENSE LFO rate (0.05..~4.5 Hz); ENSE renamed DWET (dry/wet); DEPTH = chorus LFO spread; 2 Juno BBD voices @ 18/31 ms.
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 7,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 8,                                       // Number of valid parameter descriptors. (max. 10)
 
     .params = {
         // Format: min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
 
         // See common/runtime.h for type enum and unit_param_t structure
 
-        // [0] TIME: LFO tempo ceiling (0..1) — drives ENSE/TREMO/FLNG LFO rate.
-        {0, 1023, 0, 256, k_unit_param_type_none, 1, 0, 0, {"TIME"}},
+        // [0] TIME: LFO tempo (0..1) — sweeps ENSE chorus LFO rate (0.05..~4.5 Hz)
+        // exponentially; also drives TREMO/FLNG LFO rate.
+        {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"TIME"}},
 
-        // [1] DEPTH: per-stage modulation depth (0..1) — flanger delay, chorus
-        // spread, tape flutter, tremolo depth.
-        {0, 1023, 0, 511, k_unit_param_type_none, 1, 0, 0, {"DEPTH"}},
+        // [1] DEPTH: per-stage modulation depth (0..1) — chorus LFO spread,
+        // flanger delay, tape flutter, tremolo depth.
+        {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"DEPTH"}},
 
         // [2] DRIFT: shared self-motion ceiling (0..1, 0 = static). The 4 level
         // stages wander on their own, constrained by an L1 budget.
-        {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"DRIFT"}},
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DRIFT"}},
 
-        // [3] ENSE: stereo chorus level (0..1). 0 = wire.
-        {0, 1023, 0, 1023, k_unit_param_type_none, 1, 0, 0, {"ENSE"}},
+        // [3] CMODE: chorus mode — 3 equal bands -> Juno voice blend.
+        //   band 0 = I (main), band 1 = I+II (classic Juno), band 2 = II (sub).
+        {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"CMODE"}},
 
-        // [4] TREMO: harmonic/optical tremolo level (0..1). 0 = wire.
-        {0, 1023, 0, 307, k_unit_param_type_none, 1, 0, 0, {"TREMO"}},
+        // [4] DWET: dry/wet of the chorus (0..1). 0 = dry only, 1 = full chorus.
+        {0, 1023, 0, 1023, k_unit_param_type_none, 0, 0, 0, {"DWET"}},
 
-        // [5] FLNG: thru-zero flanger level (0..1). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"FLNG"}},
+        // [5] TREMO: harmonic/optical tremolo level (0..1). 0 = wire.
+        {0, 1023, 0, 307, k_unit_param_type_none, 0, 0, 0, {"TREMO"}},
 
-        // [6] TAPE: tape wow+flutter level (0..1). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 1, 0, 0, {"TAPE"}},
+        // [6] FLNG: thru-zero flanger level (0..1). 0 = off.
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLNG"}},
+
+        // [7] TAPE: tape wow+flutter level (0..1). 0 = off.
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"TAPE"}},
     },
 };
