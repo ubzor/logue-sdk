@@ -76,12 +76,7 @@ ULIBS  =
 
 UDEFS =
 
-##############################################################################
-# WASM (web simulator) sources
-#
-# FX modules have no runtime-provided LUTs (the dummy/osc DSP stubs are not
-# needed). WASMSRC_C compiles header.c (the unit_header), WASMSRC_CXX compiles
-# unit.cc + wasm.cc (the embind binding). The shell is websim/fx.html.
-#
-WASMSRC_C := $(PROJECT_ROOT)/header.c
-WASMSRC_CXX := $(PROJECT_ROOT)/unit.cc $(PROJECT_ROOT)/wasm.cc
+# WASM (web simulator) sources: this module no longer builds a standalone
+# simulator -- the web simulator for the whole family is the unified chain
+# page (drone-chain/, one wasm worklet running OSC -> MOD -> DEL -> REV).
+# wasm.cc (the embind binding) now only exists for that build.

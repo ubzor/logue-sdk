@@ -12,10 +12,20 @@ cd tools/emsdk
 ``
 
 # how to compile to wasm and test in browser
-Inside your normal project directory, instead of `make install` which creates a hardware specific unit file, run
+For the DRONE family the only web simulator is the unified chain page:
+instead of `make install` (which creates a hardware-specific unit file), run
 
 ``
-make wasm
+cd platform/nts-1_mkii/drone-chain && make wasm
 ``
 
-This will build your audio processor class into wasm, set up a web audio based audio processing graph, and serve the web app via emrun, which is a local server that came with emsdk.
+This builds the full OSC -> MOD -> DEL -> REV audio path into ONE wasm audio
+worklet (drone-chain/sim/index.html). Serve it with
+`platform/nts-1_mkii/serve.sh` (http://localhost:8000/), which adds the
+COOP/COEP headers the SharedArrayBuffer build needs.
+
+This directory is the shared shell/project for that simulator:
+- `index.html` — the page shell (linked into drone-chain/sim/index.html);
+- `dsp/*.c` — the LUT/stub sources the chain wasm links in;
+- `entry.js` / `app.css` + `vite*.js` — the FlyonUI asset build (flyon.css/js).
+The per-unit standalone pages (osc.html / fx.html) are gone.

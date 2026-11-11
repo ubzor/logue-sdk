@@ -5,8 +5,8 @@
 # OSC -> MOD -> DEL -> REV -> out running as a SINGLE wasm audio worklet
 # (drone-chain/), with the MOD/DEL/REV TIME+DEPTH knobs and the full 44-
 # parameter OSC UI. The simulator page is sim/index.html, so the landing URL
-# is the document root (http://host:8000/). The pure-oscillator simulator
-# (drone-osc/sim/drone.html) is still available by its own path if needed.
+# is the document root (http://host:8000/). This is the ONLY web simulator
+# of the drone family: the four per-unit standalone pages no longer exist.
 #
 # Usage:
 #   ./serve.sh [PORT] [BIND]      # default: 8000 0.0.0.0

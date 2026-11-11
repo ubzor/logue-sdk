@@ -115,9 +115,8 @@ CXXSRC := $(UCXXSRC)
 
 vpath %.s $(sort $(dir $(ASMSRC)))
 vpath %.S $(sort $(dir $(ASMXSRC)))
-vpath %.c $(sort $(dir $(CSRC)) $(dir $(WASMSRC_C)))
-vpath %.cc $(sort $(dir $(CXXSRC)) $(dir $(WASMSRC_CXX)))
-vpath %.cpp $(sort $(dir $(WASMSRC_CXX)))
+vpath %.c $(sort $(dir $(CSRC)))
+vpath %.cc $(sort $(dir $(CXXSRC)))
 
 ASMOBJS := $(addprefix $(OBJDIR)/, $(notdir $(ASMSRC:.s=.o)))
 ASMXOBJS := $(addprefix $(OBJDIR)/, $(notdir $(ASMXSRC:.S=.o)))
@@ -137,20 +136,6 @@ ADEFS := $(DADEFS) $(UADEFS)
 LIBS := $(DLIBS) $(ULIBS)
 
 LIBDIR := $(patsubst %,-I%,$(DLIBDIR) $(ULIBDIR))
-
-##############################################################################
-# WebAssembly compiler and binding tools
-#
-SANDBOXDIR ?= $(PROJECT_ROOT)/../../../websim
-# WASM sources: C and C++ are compiled separately because the wasm audio
-# worklet engine (and libembind) require C++17, while plain C sources must
-# not be compiled with a C++ standard in this emscripten version.
-WASMSRC_C ?= $(UCSRC)
-WASMSRC_CXX ?= $(UCXXSRC)
-WASMDIR := $(PROJECT_ROOT)/sim
-DINCDIR += $(TOOLSDIR)/emsdk/upstream/emscripten/system/include
-EMCC_BIN_PATH := $(TOOLSDIR)/emsdk/upstream/emscripten
-WASMOBJDIR := $(WASMDIR)/obj
 
 ##############################################################################
 # Compiler flags
@@ -241,7 +226,7 @@ $(BUILDDIR)/%.elf: $(OBJS) $(LDSCRIPT)
 
 clean:
 	@echo Cleaning
-	-rm -fR $(PROJECT_ROOT)/.dep $(BUILDDIR) $(PROJECT_ROOT)/$(PRODUCT) $(WASMDIR)
+	-rm -fR $(PROJECT_ROOT)/.dep $(BUILDDIR) $(PROJECT_ROOT)/$(PRODUCT)
 	@echo Done
 	@echo
 
@@ -286,73 +271,6 @@ install: check-und $(BUILDDIR)/$(PRODUCT)
 	@echo Done
 	@echo
 
-WASMOBJS := $(addprefix $(WASMOBJDIR)/, $(notdir $(WASMSRC_C:.c=.o)) $(notdir $(WASMSRC_CXX:.cc=.o)))
-
-wasm: $(WASMOBJS)
-	@echo Building WebAssembly audio processor
-	@echo Linking $(WASMDIR)/$(PROJECT).html
-	@$(EMCC_BIN_PATH)/em++ -Wno-unknown-attributes -Wno-limited-postlink-optimizations $(INCDIR) \
-		-fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
-		-s AUDIO_WORKLET=1 \
-		-s WASM_WORKERS=1 \
-		-s SHARED_MEMORY=1 \
-		-lembind \
-		--shell-file $(SANDBOXDIR)/osc.html \
-		-O2 \
-		-g -fdebug-compilation-dir='..' \
-		$(WASMOBJS) \
-		-o $(WASMDIR)/$(PROJECT).html
-	# The shell (osc.html) loads assets with relative paths (scripts/, images/),
-	# and serve.sh serves $(WASMDIR) as the document root. Copy them so the
-	# simulator is self-contained and does not depend on the websim/ tree.
-	@echo Copying web assets to $(WASMDIR)
-	@mkdir -p $(WASMDIR)/scripts $(WASMDIR)/images
-	@cp -p $(SANDBOXDIR)/scripts/*.js $(WASMDIR)/scripts/
-	@cp -p $(SANDBOXDIR)/images/*.ico $(WASMDIR)/images/ 2>/dev/null || true
-	@echo 'Building FlyonUI assets (Vite) in $(SANDBOXDIR)'
-	@if [ ! -d "$(SANDBOXDIR)/node_modules" ]; then \
-		echo "node_modules missing - running npm install in $(SANDBOXDIR)"; \
-		cd "$(SANDBOXDIR)" && npm install --no-audit --no-fund; \
-	fi
-	@cd "$(SANDBOXDIR)" && npx vite build
-	@cp -p "$(SANDBOXDIR)/sim/flyon.css" "$(WASMDIR)/flyon.css"
-	@cp -p "$(SANDBOXDIR)/sim/flyon.js" "$(WASMDIR)/flyon.js"
-	# Vercel deploy config: the wasm build uses -s SHARED_MEMORY=1 (see above),
-	# which needs SharedArrayBuffer, i.e. the page must be cross-origin isolated.
-	# Vercel does not send these headers by default (unlike serve.sh, which adds
-	# them in the Python handler), so without vercel.json the simulator's
-	# drone.js fails at startup and the generated parameter UI never appears.
-	# sim/ is git-ignored and wiped on rebuild, so this file must be generated
-	# after the build, not kept in the repo.
-	@echo 'Writing Vercel config (COOP/COEP headers) to $(WASMDIR)/vercel.json'
-	@printf '%s\n' \
-	'{' \
-	'  "headers": [' \
-	'    {' \
-	'      "source": "/(.*)",' \
-	'      "headers": [' \
-	'        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },' \
-	'        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },' \
-	'        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" }' \
-	'      ]' \
-	'    }' \
-	'  ]' \
-	'}' > "$(WASMDIR)/vercel.json"
-	@echo Done
-
-$(WASMOBJDIR):
-	@mkdir -p $(WASMOBJDIR)
-
-# C sources are compiled as plain C (the audio worklet engine below is C++17)
-$(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
-	@echo Compiling wasm C object $(<F)
-	@$(EMCC_BIN_PATH)/emcc -c $(INCDIR) -O2 -g -fdebug-compilation-dir='..' $< -o $@
-
-# C++ sources are compiled with C++17 as required by the wasm audio worklet engine
-$(WASMOBJDIR)/%.o: %.cc Makefile config.mk osc.h osc_params.h osc_constants.h osc_waves.h osc_envelope.h osc_saturator.h osc_random_walk.h osc_sub2.h osc_chord.h osc_detune.h osc_param_apply.h osc_param_display.h osc_randomize.h osc_mix.h | $(WASMOBJDIR)
-	@echo Compiling wasm C++ object $(<F)
-	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) -fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -O2 -g -fdebug-compilation-dir='..' $< -o $@
-
-$(WASMOBJDIR)/%.o: %.cpp | $(WASMOBJDIR)
-	@echo Compiling wasm C++ object $(<F)
-	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) -fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -O2 -g -fdebug-compilation-dir='..' $< -o $@
+# The web simulator for the drone family is the unified chain page
+# (drone-chain/, one wasm worklet running OSC -> MOD -> DEL -> REV). This
+# module no longer has a standalone simulator: there is no wasm target here.

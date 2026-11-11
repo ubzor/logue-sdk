@@ -426,7 +426,7 @@ extern "C" int getEditParamValue(int idx)
 
 // 1 while a Rnd re-roll morph is in flight (any parameter still moving or
 // still in its stagger delay), 0 otherwise. The web simulator's post-fire
-// slider-sync poll (websim/osc.html fireRandom) uses this to know when to
+// slider-sync poll (websim/index.html fireRandom) uses this to know when to
 // STOP: the poll must NOT stop on a "no value changed this frame" tick during
 // the stagger window (before any parameter has started moving), because the
 // morph is still in progress -- it must wait until rndMorphTick disarms

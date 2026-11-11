@@ -30,31 +30,13 @@ LDFLAGS_EXTRA := \
   -Wl,--version-script=$(PROJECT_ROOT)/version.map \
   -Wl,--gc-sections
 
-##############################################################################
-# WASM (web simulator) sources
-#
-# C sources (compiled with emcc, plain C)
-#
-# C++ sources (compiled with em++, C++17 - required by the wasm audio
-# worklet engine and libembind in this emscripten version)
-#
-# The web simulator has no NTS-1 runtime, so any LUT the runtime would
-# normally provide must be linked in from the websim stubs:
-#   * wavetable_lut.c  -> wt_sine_lut_f (osc_sinf, sub-octave sine)
-#   * waves-a..f.c     -> wavesA..wavesF (the 91 wavetables scanned by the
-#                         two wavetable oscillators, osc_wave_scanf)
-# On ARM these live in the NTS-1 mkII firmware, so the unit only references
-# them (a few pointer reads). In the browser they add ~46 KB to drone.wasm
-# (91 tables x 129 samples x 4 bytes) — a small fraction of the ~1 MB total.
-WASMSRC_C := $(PROJECT_ROOT)/header.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/wavetable_lut.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-a.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-b.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-c.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-d.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-e.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-f.c
-WASMSRC_CXX := $(PROJECT_ROOT)/wasm.cc
+# WASM (web simulator) sources: this module no longer builds a standalone
+# simulator -- the web simulator for the whole family is the unified chain
+# page (drone-chain/, one wasm worklet running OSC -> MOD -> DEL -> REV,
+# see drone-chain/config.mk). The LUT sources listed there
+# (websim/dsp/wavetable_lut.c, waves-a..f.c) exist for that build: on ARM they
+# live in the NTS-1 mkII firmware, so the unit only references them
+# (wt_sine_lut_f, wavesA..F) via the firmware LUTs.
 
 ##############################################################################
 # Sources

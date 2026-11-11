@@ -15,7 +15,8 @@
  *  osc.h, after the Osc class is complete, so it can reference select_ /
  *  edit_value_, the OscParams enum, and the osc_consts::* scaling constants.
  *
- *  Keep in sync with the web simulator's formatParamValue (websim/osc.html)
+ *  Keep in sync with the web simulator's formatParamValue (websim/index.html,
+ *  the unified drone-chain page)
  *  and apply_edit_param (osc_param_apply.h): all three share the same
  *  raw <-> DSP ranges, so the display, the DSP, and the UI always agree.
  *

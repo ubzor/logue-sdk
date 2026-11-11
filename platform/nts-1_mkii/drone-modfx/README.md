@@ -125,8 +125,8 @@ not libm) — fine.
 - `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
   to `Modfx::setParameter`; no multiplexer, unlike the OSC's 4-slot
   PARAM/VALUE pair).
-- `wasm.cc` — the standalone web-simulator embind interface (legacy; the
-  unified UI lives in `drone-chain/` — see below).
+- `wasm.cc` — the web-simulator embind interface (now only used by the unified
+  chain simulator in `drone-chain/` — see below).
 
 ## Web simulator
 

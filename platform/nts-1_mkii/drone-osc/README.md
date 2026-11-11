@@ -183,7 +183,7 @@ all at once.
 * **Web sim UI**: `getEditParamValue()` (wasm.cc) returns the CURRENT
   interpolated value while a morph is in flight, so the sim's sliders travel
   with the morph in real time. The post-fire sync poll window in
-  `websim/osc.html` is `kRndMorphBeats` @ 120 BPM + max stagger + margin
+  `websim/index.html` is `kRndMorphBeats` @ 120 BPM + max stagger + margin
   (≈ 5 s). The poll stops early when **both** (a) no value changed on this
   tick **and** (b) `getMorphActive()` (wasm.cc, exposed from
   `Osc::isMorphActive()`) reports the morph is done. The morph-active check is
@@ -199,7 +199,7 @@ all at once.
   slot: bit 31 = valid, bits 0..2 = mode, consumed in `process()` by
   `osc_mix.h`) carries the request from the UI thread to the worklet. The
   **All Random / Partial Random / Orbit Random** buttons all go through
-  `fireRandom(mode)` (websim/osc.html) → `Module.setRndMode(mode)` +
+  `fireRandom(mode)` (websim/index.html) → `Module.setRndMode(mode)` +
   `Module.rndTrigger()` → worklet `rndTick` → `randomizeAll/Partial/Orbi` →
   `rndMorphStart` — i.e. the SAME code path as the hardware, so all three
   morph identically. **Reset** is the only button that bypasses the worklet
@@ -279,7 +279,7 @@ apply so the C++ Orbit reference matches what the sim is showing).
 
 **Manual slider edits update the Orbit stable state** (web simulator only):
 each slider's `apply()` (the `oninput` handler in `createEditableParam`,
-`websim/osc.html`) calls `Module.stableSync()` after writing the value -- a
+`websim/index.html`) calls `Module.stableSync()` after writing the value -- a
 manual edit is by definition the user's new "stable" sound, so the next
 Orbit Random must develop from the just-set values, not from the previous
 All/Part/Reset snapshot. The call is guarded by `getMorphActive() === 0`
@@ -442,23 +442,25 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_lfo_sim.h | Web-simulator-only shape-LFO synthesizer. |
 | osc_constants.h | All static tuning constants (max depths, scales, glide/envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
-| wasm.cc | Web-simulator glue (embind) for the sim/ build. |
-| Makefile / config.mk | Build: ARM unit (make) and web simulator (make wasm). |
+| wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |
+| Makefile / config.mk | Build: the ARM unit (`make` / `make install`). |
 
 ## Build
 
     # ARM unit (via Docker):
     docker run --rm -v $(pwd):/src -w /src korg/logue-sdk-sdk:latest make
 
-    # Web simulator (two-stage C/C++ compile, linked with em++):
-    make wasm
+    # Web simulator (the unified chain page, OSC -> MOD -> DEL -> REV in one
+    # wasm worklet -- there is no standalone OSC page anymore):
+    cd platform/nts-1_mkii/drone-chain && make wasm
 
     # Serve the simulator:
-    ./serve.sh        # or: emrun --serve 0.0.0.0:8000 sim/drone.html
+    ./serve.sh        # http://localhost:8000/ (drone-chain/sim/index.html)
 
-> The web simulator's UI is generated from websim/osc.html (the build shell,
-> referenced via SANDBOXDIR in the Makefile). sim/drone.html is the **output**
-> of make wasm -- edit websim/osc.html, never sim/drone.html.
+> The web simulator's UI is generated from websim/index.html (the build shell
+> of drone-chain, referenced via SANDBOXDIR in drone-chain/Makefile).
+> drone-chain/sim/index.html is the **output** of `make wasm` -- edit
+> websim/index.html, never the generated page.
 
 > **Keep this README in sync with the code.** See the project rule in the root
 > .clinerules: any parameter add/remove/rename/re-range (or DSP-topology change)
