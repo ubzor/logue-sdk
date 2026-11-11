@@ -26,8 +26,11 @@
  *    2. upmixes mono -> stereo (duplicate L/R) for the first FX stage,
  *    3. runs Mod -> Del -> Rev in series (each in-place between two
  *       interleaved stereo scratch buffers),
- *    4. downmixes the final stereo to mono for the single-channel worklet
- *       output (matching the hardware OSC's mono output).
+ *    4. writes the final stereo (interleaved L/R) to the 2-channel worklet
+ *       output. The web simulator's worklet node has outputChannelCounts={2},
+ *       so the browser delivers true stereo to the speakers. (On the NTS-1
+ *       the four modules are separate units and the platform routes the audio
+ *       itself; the stereo output is a web-simulator-only convenience.)
  *
  *  RAM: Osc needs none (getBufferSize()==0). The FX stages claim buffers
  *  (Mod 256 KB, Del 1 MB, Rev 1 MB in float samples). Chain::init allocates
@@ -134,7 +137,11 @@ public:
 
   // The full cascade, one audio block (frames = WEB_AUDIO_FRAME_SIZE).
   // `in` is unused (the OSC is a generator and ignores its input); `out` is
-  // the mono output (frames samples).
+  // the STEREO output (2*frames interleaved samples: out[2i]=L, out[2i+1]=R).
+  // The hardware OSC is mono, but the FX stages (MOD/DEL/REV) are stereo, so
+  // the chain upmixes OSC to L/R at the front and keeps it stereo all the way
+  // to the output. The web simulator's worklet node has 2 output channels;
+  // the browser's channel-routing delivers true stereo to the speakers.
   void process(const float *__restrict in, float *__restrict out, uint32_t frames) override final
   {
     (void)in;
@@ -184,12 +191,13 @@ public:
       const float *t = fx_out; fx_out = const_cast<float *>(fx_in); fx_in = t;
     }
 
-    // 4. stereo -> mono (average L/R) for the single-channel output. If every
-    //    stage is bypassed, fx_in is still buf_a_ where L==R==osc, so the
-    //    average equals the raw mono OSC output (a clean dry reference).
+    // 4. Write the stereo output (interleaved L/R). If every stage is
+    //    bypassed, fx_in is still buf_a_ where L==R==osc (a clean dry
+    //    mono reference duplicated to both channels).
     for (uint32_t i = 0; i < frames; ++i)
     {
-      out[i] = 0.5f * (fx_in[2 * i] + fx_in[2 * i + 1]);
+      out[2 * i]     = fx_in[2 * i];
+      out[2 * i + 1] = fx_in[2 * i + 1];
     }
   }
 

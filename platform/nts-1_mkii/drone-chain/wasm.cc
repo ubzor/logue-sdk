@@ -30,7 +30,10 @@ uint8_t audioThreadStack[4096];
 constexpr int SAMPLE_RATE = 48000;
 constexpr int WEB_AUDIO_FRAME_SIZE = 128;
 std::vector<float> ram;
-std::array<float, WEB_AUDIO_FRAME_SIZE> interleavedOut;
+// STEREO interleaved output (2 channels x WEB_AUDIO_FRAME_SIZE samples).
+// The full OSC->MOD->DEL->REV cascade runs stereo internally; the worklet
+// node has 2 output channels so the browser delivers true stereo.
+std::array<float, 2 * WEB_AUDIO_FRAME_SIZE> interleavedOut;
 
 Chain processor; // the chained OSC->MOD->DEL->REV dsp instance
 extern const unit_header_t unit_header;
@@ -441,9 +444,10 @@ EMSCRIPTEN_BINDINGS(drone_ui)
 }
 
 // ---- Audio worklet (runs on the dedicated audio thread) ----------------------
-// No audio input (the OSC is a generator), one MONO output (matching the
-// hardware OSC's 1-channel output). The full OSC->MOD->DEL->REV cascade runs
-// inside Chain::process, which averages stereo back to mono at the end.
+// No audio input (the OSC is a generator), one STEREO output (2 channels).
+// The full OSC->MOD->DEL->REV cascade runs inside Chain::process, which
+// upmixes the mono OSC to L/R and keeps it stereo to the output. The
+// browser's channel-routing delivers true stereo to the speakers.
 bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
                   int numOutputs, AudioSampleFrame *outputs,
                   int numParams, const AudioParamFrame *params,
@@ -455,7 +459,7 @@ bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
   (void)userData;
   assert(numInputs == 0);
   assert(numOutputs == 1);
-  assert(outputs->numberOfChannels == 1);
+  assert(outputs->numberOfChannels == 2);
   assert(outputs->samplesPerChannel == WEB_AUDIO_FRAME_SIZE);
   auto &output = outputs[0];
 
@@ -468,10 +472,15 @@ bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,
   // emscripten_log(EM_LOG_CONSOLE, "bpm=%d", fx_get_bpm());
   processor.process(nullptr, interleavedOut.data(), WEB_AUDIO_FRAME_SIZE);
 
-  // de-interleave output buffer (mono)
-  for (int i = 0; i < WEB_AUDIO_FRAME_SIZE; ++i)
+  // The AudioSampleFrame.data is PLANAR (not interleaved):
+  //   data[0 .. N-1]     = channel 0 (L)
+  //   data[N .. 2N-1]    = channel 1 (R)
+  // interleavedOut is interleaved: [L0, R0, L1, R1, ...]. De-interleave.
+  const int N = WEB_AUDIO_FRAME_SIZE;
+  for (int i = 0; i < N; ++i)
   {
-    output.data[i] = interleavedOut[i];
+    output.data[i]        = interleavedOut[2 * i];       // L
+    output.data[N + i]    = interleavedOut[2 * i + 1];   // R
   }
   return true; // Keep the graph output going
 }
@@ -484,8 +493,8 @@ void AudioWorkletProcessorCreated(EMSCRIPTEN_WEBAUDIO_T audioContext, bool succe
   ram.resize(processor.getBufferSize());
   processor.init(ram.data());
 
-  // no input, single mono output
-  int outputChannelCounts[1] = {1};
+  // no input, stereo output (2 channels: L + R)
+  int outputChannelCounts[1] = {2};
   EmscriptenAudioWorkletNodeCreateOptions options = {
       .numberOfInputs = 0,
       .numberOfOutputs = 1,
