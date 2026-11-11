@@ -62,7 +62,7 @@
 class Modfx : public Processor
 {
 public:
-  uint32_t getBufferSize() const override final { return 0U; } // no SDRAM state
+  uint32_t getBufferSize() const override final { return modfx_consts::kModSramBytes; } // 6 delay lines
 
   // audio parameters (header.c slot order)
   enum
@@ -144,7 +144,34 @@ public:
   // life-cycle methods
   void init(float *allocated_buffer) override final
   {
-    buffer_ = allocated_buffer; // not used (getBufferSize() == 0)
+    // Slice the single SDRAM allocation (getBufferSize() floats) into the six
+    // interleaved delay lines (ENSE L/R, FLNG L/R, TAPE L/R). On the NTS-1 this
+    // comes from unit.cc's sdram_alloc; in the web chain, Chain::init slices
+    // the chain's single allocation and passes the MOD slice here.
+    buffer_ = allocated_buffer;
+    float *p = allocated_buffer;
+    const float per = 2.f * (static_cast<float>(modfx_consts::kEnseLineLenSmp) +
+                             static_cast<float>(modfx_consts::kFlngLineLenSmp) +
+                             static_cast<float>(modfx_consts::kTapeLineLenSmp));
+    ense_buf_ = p;
+    p += 2 * modfx_consts::kEnseLineLenSmp;
+    flng_buf_ = p;
+    p += 2 * modfx_consts::kFlngLineLenSmp;
+    tape_buf_ = p;
+    p += 2 * modfx_consts::kTapeLineLenSmp;
+    (void)per;
+
+    // Zero-clear the line storage (avoid garbage on first block -> DC / noise).
+    if (buffer_)
+      for (uint32_t i = 0; i < getBufferSize(); ++i) buffer_[i] = 0.f;
+
+    // Line heads (int, newest-written slot), wrapping per line.
+    ense_w_ = 0U;
+    flng_w_ = 0U;
+    tape_w_ = 0U;
+    tape_wow_l_ = 0.f;
+    tape_wow_r_ = 0.f;
+
     params_.reset();
 
     lcg_state_ = modfx_consts::kLcgSeed;
@@ -162,14 +189,8 @@ public:
     }
 
     tape_lpf_ = 0.f;
-    tremo_low_ = 0.f;
-    tremo_high_ = 0.f;
-    flng_hp_ = 0.f;
-    flng_fb_ = 0.f;
     ense_pre_lpf_l_ = 0.f;
     ense_pre_lpf_r_ = 0.f;
-    ense_delay_l_ = 0.f;
-    ense_delay_r_ = 0.f;
     ense_post_lpf_l_ = 0.f;
     ense_post_lpf_r_ = 0.f;
     ense_ap_l_ = 0.f;
@@ -206,24 +227,29 @@ private:
 
   // ---- First-order filter / feedback states ----------------------------------
   float tape_lpf_;    // flutter noise one-pole LPF state
-  float tremo_low_;   // tremolo LPF band accumulator
-  float tremo_high_;  // tremolo HPF band accumulator
-  float flng_hp_;     // flanger HPF accumulator
-  float flng_fb_;     // flanger feedback delay state
-  // ENSE chorus pre/post LPF (Juno-style aliasing suppression).
-  float ense_pre_lpf_l_; // pre-delay LPF (~2 kHz), left channel
-  float ense_pre_lpf_r_; // pre-delay LPF (~2 kHz), right channel
-  // ENSE one-pole "delay" voices: DEDICATED state (NOT tremo_low_/tremo_high_,
-  // which are also the L/R scratch carriers consumed by TREMO/FLNG/TAPE;
-  // sharing them corrupted the delay state with the chorus output each sample).
-  float ense_delay_l_;   // voice 1 one-pole delay state (L)
-  float ense_delay_r_;   // voice 2 one-pole delay state (R)
+  // ENSE chorus pre/post LPF (Juno-style aliasing suppression), per channel.
+  float ense_pre_lpf_l_;  // pre-delay LPF (~2 kHz), left channel
+  float ense_pre_lpf_r_;  // pre-delay LPF (~2 kHz), right channel
   float ense_post_lpf_l_; // post-chorus LPF (~6 kHz), left channel
   float ense_post_lpf_r_; // post-chorus LPF (~6 kHz), right channel
   float ense_ap_l_;       // allpass filter state, left channel (unit gain diffusion)
   float ense_ap_r_;       // allpass filter state, right channel
 
-  float *buffer_; // SDRAM (unused: getBufferSize() == 0)
+  // ---- Real delay lines (SDRAM, see getBufferSize()/init) --------------------
+  // Each stage owns an interleaved L/R pair of line buffers (length = the
+  // stage's k..LineLenSmp). These replace the old modulated one-pole "delays",
+  // which were lowpasses and read as mutes. Fractional reads (LFO-modulated
+  // delay length) are linear-interpolated between the two nearest samples.
+  float *ense_buf_;  // chorus delay lines [2 * kEnseLineLenSmp]
+  float *flng_buf_;  // flanger delay lines [2 * kFlngLineLenSmp]
+  float *tape_buf_;  // tape wow delay lines [2 * kTapeLineLenSmp]
+  uint32_t ense_w_;  // line head (int, newest-written slot), ENSE
+  uint32_t flng_w_;  // line head, FLNG
+  uint32_t tape_w_;  // line head, TAPE
+  float tape_wow_l_; // per-channel smoothed wow-walk state (L)
+  float tape_wow_r_; // per-channel smoothed wow-walk state (R)
+
+  float *buffer_; // SDRAM base (getBufferSize() floats, owned by the runtime)
 
   // ---- Per-sample DSP helper functions (static inline, no libm) ----
   // These are defined here (inside the class scope) so that the inline
@@ -236,6 +262,15 @@ private:
     const float step = 6.283185307179586f * freq / modfx_consts::kSr;
     phase += step;
     if (phase >= 1.f) phase -= 1.f;
+    const float ang = 6.283185307179586f * phase;
+    const float x2 = ang * ang;
+    return ang * (1.f - x2 / 6.f + x2 * x2 / 120.f);
+  }
+
+  // Pure sine of a phase in [0,1) (no phase advance, no libm). Used to read a
+  // phase-shifted copy of an LFO without disturbing the shared accumulator.
+  static float lfoSine(float phase)
+  {
     const float ang = 6.283185307179586f * phase;
     const float x2 = ang * ang;
     return ang * (1.f - x2 / 6.f + x2 * x2 / 120.f);
@@ -277,6 +312,54 @@ private:
     return x - g * state;
   }
 
+  // ---- Real delay-line helpers (SDRAM line buffers, no libm) -----------------
+  // A line is a pair of per-channel circular buffers (interleaved L/R, length
+  // 2*len). The HEAD is an INTEGER (exact wrap, no float drift over 48k sps);
+  // a per-sample fractional read offset `off` in [0,1) is tracked separately for
+  // the fractional (LFO-modulated) delay reads. `write` (the head) is advanced
+  // once per audio sample, storing both channels at the new head so L/R stay
+  // in sync.
+  static void lineWrite(float *buf, uint32_t len, uint32_t &head, float xl, float xr)
+  {
+    head = (head + 1U) % len;
+    buf[head]     = xl; // ch 0 = L
+    buf[head + 1] = xr; // ch 1 = R
+  }
+
+  // Fractional read: the sample `delay` (float, in samples) behind the newest
+  // written sample, linearly interpolated. `head` is the newest-written slot.
+  // `delay` is clamped to [1, len-1].
+  static float lineReadF(float *buf, uint32_t len, int ch, uint32_t head, float delay)
+  {
+    if (delay < 1.f) delay = 1.f;
+    const float lenf = (float)len;
+    if (delay > lenf - 1.f) delay = lenf - 1.f;
+    const float i0f = (float)head - delay; // newest is at `head`; one slot back is head-1
+    // i0f is in (-(len-1), len-1]; one wrap each direction is sufficient.
+    float w0 = i0f;
+    if (w0 < 0.f) w0 += lenf;
+    if (w0 >= lenf) w0 -= lenf;
+    const uint32_t i0 = (uint32_t)w0;
+    const uint32_t i1 = (i0 + 1U >= len) ? 0U : (i0 + 1U);
+    // frac from the true pre-wrap anchor i0f (NOT the wrapped index, whose
+    // slot may already hold an overwritten sample). i0 == (int)floor(i0f)
+    // holds because i0f < len and the floor of i0f wraps exactly to i0.
+    const float frac = i0f - (float)(int)(i0f);
+    const float a = buf[i0 + ch];
+    const float b = buf[i1 + ch];
+    return a + (b - a) * frac;
+  }
+
+  // Shift an LFO phase accumulator by a fixed fraction of a cycle (for the
+  // per-channel stereo LFO offsets). No libm.
+  static float phaseShift(float phase, float shift)
+  {
+    float p = phase + shift;
+    while (p >= 1.f) p -= 1.f;
+    while (p < 0.f) p += 1.f;
+    return p;
+  }
+
   // The per-sample audio path (upmix -> ENSE -> TREMO -> FLNG -> TAPE ->
   // makeup -> out). Defined INLINE inside the class so that
   // multiple translation units can each #include modfx.h through different
@@ -295,28 +378,25 @@ private:
   const float flng_freq = modfx_consts::kFlngLFOMin * modfx_expf(modfx_consts::kFlngLFOlnR * t);
 
   // ---- K-rate one-pole alphas / feedbacks -----------------------------------
-  const float tremo_alpha = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kTremoSplitHz / sr);
-  const float flng_hpf_alpha = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kFlngHPFHz / sr);
   // ENSE chorus pre/post LPF alphas (one-pole, Juno-style aliasing suppression).
   const float ense_pre_lpf_alpha  = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kEnsePreLpfHz  / sr);
   const float ense_post_lpf_alpha = 1.f - modfx_one_minus_expf(-6.283185307179586f * modfx_consts::kEnsePostLpfHz / sr);
+
+  // FLNG: feedback + delay length. Delay scales with DEPTH^2 (gentle -> pronounced).
   float flng_fb = p.flng > 0.f ? (p.depth * modfx_consts::kFlngFbMax) : 0.f;
   if (flng_fb > 0.85f) flng_fb = 0.85f;
-
-  // Flanger delay (samples): DEPTH^2 * kFlngMaxDepthMs, clamped, +1 offset.
   const float d2 = p.depth * p.depth;
-  float flng_delay_ms = d2 * modfx_consts::kFlngMaxDepthMs;
-  if (flng_delay_ms < modfx_consts::kFlngDelayMinMs) flng_delay_ms = modfx_consts::kFlngDelayMinMs;
-  if (flng_delay_ms > modfx_consts::kFlngDelayMaxMs) flng_delay_ms = modfx_consts::kFlngDelayMaxMs;
-  const float flng_delay_smp = flng_delay_ms * 0.001f * sr + 1.f;
+  const float flng_delay_smp = modfx_consts::kFlngDelayMinSmp +
+      d2 * (modfx_consts::kFlngDelayMaxSmp - modfx_consts::kFlngDelayMinSmp);
 
-  // Chorus delay spread (samples, from DEPTH) + base delays.
-  const float ense_spread_smp = p.depth * modfx_consts::kEnseSpreadSmp;
-  const float ense_base1_smp = modfx_consts::kEnseDelayBaseMs * 0.001f * sr;
-  const float ense_base2_smp = modfx_consts::kEnseDelay2Ms * 0.001f * sr;
+  // Chorus (ENSE) base delays (samples) + LFO spread (from DEPTH).
+  const float ense_spread_smp = p.depth * modfx_consts::kEnseMaxSpreadSmp;
+  const float ense_base_l_smp = modfx_consts::kEnseDelayBaseL * 0.001f * sr;
+  const float ense_base_r_smp = modfx_consts::kEnseDelayBaseR * 0.001f * sr;
 
-  // Tape wow delay (samples) + flutter amount.
-  const float tape_wow_smp = modfx_consts::kTapeWowDelaySmp;
+  // TAPE: wow delay base (samples) + flutter/wow depth (from DEPTH).
+  const float tape_wow_smp = modfx_consts::kTapeWowBaseSmp;
+  const float tape_wow_amt = p.depth * modfx_consts::kTapeWowAmt;
   const float tape_flutter_amt = p.depth * modfx_consts::kTapeFlutterAmt;
 
   // ---- Per-sample path ------------------------------------------------------
@@ -403,137 +483,126 @@ private:
   if (fln_wet < 0.f) fln_wet = 0.f; else if (fln_wet > 1.f) fln_wet = 1.f;
   if (tap_wet < 0.f) tap_wet = 0.f; else if (tap_wet > 1.f) tap_wet = 1.f;
 
-    // ENSE: only run the chorus voices when there is actual wet gain.
-    // At ense_wet == 0 the stage is a pure wire (regression-safe, no LPF
-    // artifact, no state accumulation that could cause DC offset / clipping).
-    // Clouds-style: input gain (0.2x) + allpass diffusion + unitary dry/wet mix.
-    // The input is attenuated BEFORE the chorus delays to prevent feedback-loop
-    // overload in the one-pole filters. The allpass filters (unit gain) diffuse
-    // the signal without adding gain. The dry/wet mix is unitary: out = in +
-    // (wet - in) * amount, so the total level doesn't change with the knob.
     const float in_scaled_l = in_l * modfx_consts::kModInputGain;
     const float in_scaled_r = in_r * modfx_consts::kModInputGain;
-    if (ense_wet > 0.f)
-    {
-      // Pre-LPF: soften the high end before the chorus delays (aliasing
-      // suppression). Per-channel state so L and R diffuse independently
-      // (the chorus image is what makes the stage sound stereo).
-      const float pre_l = onelpf(ense_pre_lpf_l_, in_scaled_l, ense_pre_lpf_alpha);
-      const float pre_r = onelpf(ense_pre_lpf_r_, in_scaled_r, ense_pre_lpf_alpha);
+    float L = in_scaled_l;
+    float R = in_scaled_r;
 
+    // ---- ENSE: stereo chorus (2 detuned REAL delay voices + pre/post LPF + allpass)
+    // Real delay lines (lineReadF/lineWrite): the L voice is in-phase, the R
+    // voice is the golden-ratio conjugate (x1.0618, longer base, phase-inverted
+    // LFO) so the two never re-align -> a true stereo chorus image. The delays
+    // run always (so re-enabling is seamless); at ense_wet == 0 the blend is a
+    // pure wire (dry), which is regression-safe.
+    {
       const float ense_lfo = lfoStep(ense_lfo_phase_, ense_freq);
-      const float spread1 = ense_spread_smp * (0.5f + 0.5f * ense_lfo);
-      const float len1 = ense_base1_smp + spread1;
-      const float a1 = 1.f / (1.f + len1 * 0.02f); // one-pole length -> alpha
-      const float v1 = onelpf(ense_delay_l_, pre_l, a1);
-      const float spread2 = ense_spread_smp * (0.5f - 0.5f * ense_lfo);
-      const float len2 = ense_base2_smp + spread2;
-      const float a2 = 1.f / (1.f + len2 * 0.02f);
-      float v2 = onelpf(ense_delay_r_, pre_r, a2);
-      v2 *= modfx_consts::kEnseVoice2; // voice 2 "pitch" (detune stand-in)
+      const float max_delay = static_cast<float>(modfx_consts::kEnseLineLenSmp) - 1.f;
+      // Pre-LPF both channels, then store them at the SAME head position (the
+      // cursor advances once per sample so L/R stay in sync).
+      const float pre_l = onelpf(ense_pre_lpf_l_, L, ense_pre_lpf_alpha);
+      const float pre_r = onelpf(ense_pre_lpf_r_, R, ense_pre_lpf_alpha);
+      lineWrite(ense_buf_, modfx_consts::kEnseLineLenSmp, ense_w_, pre_l, pre_r);
+      for (int ch = 0; ch < 2; ++ch)
+      {
+        const float x = (ch == 0) ? L : R;
+        const float base = (ch == 0) ? ense_base_l_smp : (ense_base_r_smp * modfx_consts::kEnseVoice2);
+        const float lfo = (ch == 0) ? ense_lfo : -ense_lfo;     // R voice phase-inverted
+        float delay = base + ense_spread_smp * lfo;
+        if (delay < 1.f) delay = 1.f;
+        if (delay > max_delay) delay = max_delay;
 
-      // Allpass diffusion (unit gain, no level change). g = 0.5 (stable, |g| < 1).
-      const float ap_g = 0.5f;
-      const float wet_l = allpass(ense_ap_l_, v1, ap_g);
-      const float wet_r = allpass(ense_ap_r_, v2, ap_g);
+        const float delayed = lineReadF(ense_buf_, modfx_consts::kEnseLineLenSmp, ch, ense_w_, delay);
 
-      // Post-LPF: suppress aliasing from the fractional-delay read.
-      const float wet_lpf_l = onelpf(ense_post_lpf_l_, wet_l, ense_post_lpf_alpha);
-      const float wet_lpf_r = onelpf(ense_post_lpf_r_, wet_r, ense_post_lpf_alpha);
+        float &post = (ch == 0) ? ense_post_lpf_l_ : ense_post_lpf_r_;
+        const float post_x = onelpf(post, delayed, ense_post_lpf_alpha); // post LPF
 
-      // Unitary dry/wet mix: out = in + (wet - in) * amount.
-      // At ense_wet = 0: out = in (dry). At ense_wet = 1: out = wet (full chorus).
-      const float chorus_l = in_scaled_l + (wet_lpf_l - in_scaled_l) * ense_wet;
-      const float chorus_r = in_scaled_r + (wet_lpf_r - in_scaled_r) * ense_wet;
-      tremo_low_ = chorus_l;   // L (scratch carrier, consumed by TREMO/FLNG/TAPE)
-      tremo_high_ = chorus_r;  // R (scratch carrier)
+        float &ap = (ch == 0) ? ense_ap_l_ : ense_ap_r_;
+        const float ap_x = allpass(ap, post_x, 0.5f); // unit-gain diffusion
+
+        const float y = x + ense_wet * (ap_x - x); // dry/wet (0 = wire)
+        if (ch == 0) L = y; else R = y;
+      }
     }
-    else
-    {
-      // Wire: reset the one-pole state to the current (per-channel) input so
-      // that a later ramp of ense_wet from 0 does not start from a stale
-      // (accumulated) LPF value. This avoids a transient click / DC offset
-      // when the user turns the ENSE knob up from zero.
-      tremo_low_ = in_scaled_l;
-      tremo_high_ = in_scaled_r;
-      ense_pre_lpf_l_ = in_scaled_l;
-      ense_pre_lpf_r_ = in_scaled_r;
-      ense_delay_l_ = in_scaled_l;
-      ense_delay_r_ = in_scaled_r;
-      ense_post_lpf_l_ = in_scaled_l;
-      ense_post_lpf_r_ = in_scaled_r;
-      ense_ap_l_ = in_scaled_l;
-      ense_ap_r_ = in_scaled_r;
-    }
-    float L = tremo_low_;
-    float R = tremo_high_;
 
-    // ---- TREMO: harmonic/optical (LPF/HPF split, antiphase LFO) -------------
-    // Only run when there is actual wet gain. At tre_wet == 0 the stage is a
-    // pure wire (regression-safe, no LPF/HPF state accumulation).
+    // ---- TREMO: optical (pure AM) tremolo ------------------------------------
+    // Classic optical tremolo: level = 1 - TREMO*DEPTH*depthMax*(0.5 - lfo) so
+    // it DIPS toward the LFO trough and returns to unity at the peak. NO LPF/HPF
+    // split (the old antiphase band split ate the bass -> the "mutes" symptom).
+    // The R channel runs the LFO a quarter-cycle behind for a gentle shimmer.
     if (tre_wet > 0.f)
     {
-      const float tr = lfoStep(tremo_lfo_phase_, tremo_freq);
-      const float amtd = tre_wet * modfx_consts::kTremoDepthScale * (0.5f + 0.5f * tr);
-      const float amtd2 = tre_wet * modfx_consts::kTremoDepthScale * (0.5f - 0.5f * tr);
+      const float tre_depth = tre_wet * p.depth * modfx_consts::kTremoDepthMax; // 0..0.85
+      lfoStep(tremo_lfo_phase_, tremo_freq); // advance the shared LFO once
       for (int ch = 0; ch < 2; ++ch)
       {
+        // The R channel reads the LFO a quarter-cycle behind -> gentle shimmer.
+        const float lfo = (ch == 0) ? lfoSine(tremo_lfo_phase_)
+                                    : lfoSine(phaseShift(tremo_lfo_phase_, -modfx_consts::kTremoPhaseShiftR));
+        const float gain = 1.f - tre_depth * (0.5f - 0.5f * lfo); // dip at trough, unity at peak
         const float x = (ch == 0) ? L : R;
-        float &st = (ch == 0) ? tremo_low_ : tremo_high_;
-        const float low = onelpf(st, x, tremo_alpha); // LPF band
-        const float high = x - low;                         // HPF residual
-        float lowg = 1.f - amtd;
-        if (lowg < modfx_consts::kTremoLowFloor) lowg = modfx_consts::kTremoLowFloor;
-        const float highg = 1.f - amtd2;
-        const float y = low * lowg + high * highg;
+        const float y = x * gain;
         if (ch == 0) L = y; else R = y;
       }
     }
-    else
-    {
-      // Wire: reset the one-pole state to the current input so that a later
-      // ramp of tre_wet from 0 does not start from a stale (accumulated) LPF
-      // value. This avoids a transient click / DC offset when the user turns
-      // the TREMO knob up from zero.
-      tremo_low_ = L;
-      tremo_high_ = R;
-    }
 
-    // ---- FLNG: thru-zero flanger (HPF + modulated short delay + feedback) ---
+    // ---- FLNG: thru-zero flanger (short REAL delay swept by LFO + feedback) ---
+    // Real short delay line (DEPTH^2-scaled length) modulated by an LFO (x3
+    // rate); the R LFO runs half a cycle out -> a stereo comb. The feedback tap
+    // (DEPTH-scaled) builds the flanger's resonant "sweep". The minimum delay
+    // keeps the comb "through zero" (no harsh null at 0). wet == 0 -> wire.
     if (fln_wet > 0.f)
     {
-      const float fl_lfo = lfoStep(flng_lfo_phase_, flng_freq * 3.f); // x3 rate
-      const float mod_len = flng_delay_smp * (1.f + 0.5f * fl_lfo);
-      const float a = 1.f / (1.f + mod_len * 0.05f); // one-pole length -> alpha
+      lfoStep(flng_lfo_phase_, flng_freq * 3.f); // x3 rate
+      const float flng_len_f = static_cast<float>(modfx_consts::kFlngLineLenSmp);
+      lineWrite(flng_buf_, modfx_consts::kFlngLineLenSmp, flng_w_, L, R); // store both, advance once
       for (int ch = 0; ch < 2; ++ch)
       {
         const float x = (ch == 0) ? L : R;
-        float &st = (ch == 0) ? tremo_low_ : tremo_high_;
-        const float hp = onehpf(st, x, flng_hpf_alpha); // first-order HPF
-        const float delayed = onelpf(st, hp, a);        // modulated short delay
-        const float wet = hp + delayed * flng_fb;             // + feedback tap
-        const float y = x + fln_wet * (wet - x);              // dry/wet (0 = wire)
+        // Modulated delay length around the DEPTH-set centre (sweep = DEPTH^2).
+        const float lfo = (ch == 0) ? lfoSine(flng_lfo_phase_)
+                                    : lfoSine(phaseShift(flng_lfo_phase_, modfx_consts::kFlngPhaseShiftR));
+        float mod_len = flng_delay_smp * (1.f + 0.5f * lfo * (d2 + 0.1f));
+        if (mod_len < 1.f) mod_len = 1.f;
+        if (mod_len > flng_len_f - 1.f) mod_len = flng_len_f - 1.f;
+
+        const float delayed = lineReadF(flng_buf_, modfx_consts::kFlngLineLenSmp, ch, flng_w_, mod_len);
+        const float wet = x + delayed * flng_fb; // dry + feedback tap (resonant sweep)
+        const float y = x + fln_wet * (wet - x); // dry/wet (0 = wire)
         if (ch == 0) L = y; else R = y;
       }
     }
 
-    // ---- TAPE: wow (LCG random-walk delay) + flutter (LCG noise level mod) --
+    // ---- TAPE: wow (random-walk delay) + flutter (noise AM) --------------------
+    // Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the
+    // length of a ~3 ms REAL delay line -> slow pitch/speed wander (independent
+    // per channel, so L/R drift slightly apart). Flutter: the same LCG's
+    // smoothed noise amplitude-modulates the level. wet == 0 -> wire.
     if (tap_wet > 0.f)
     {
+      // Flutter: LCG white noise -> one-pole LPF -> level mod (slow, smooth).
       lcg_state_ = (modfx_consts::kLcgA * lcg_state_) & 0x7fffffffu;
       if (lcg_state_ == 0u) lcg_state_ = modfx_consts::kLcgSeed;
       const float noise = static_cast<float>(lcg_state_) * (2.f / 2147483647.f) - 1.f;
       const float flut = onelpf(tape_lpf_, noise, modfx_consts::kTapeLpfAlpha);
       const float gain = 1.f + tape_flutter_amt * flut;
-      lcg_state_ = (modfx_consts::kLcgA * lcg_state_) & 0x7fffffffu;
-      if (lcg_state_ == 0u) lcg_state_ = modfx_consts::kLcgSeed;
-      const float walk = static_cast<float>(lcg_state_) * (2.f / 2147483647.f) - 1.f;
-      const float wow_alpha = 1.f / (1.f + tape_wow_smp * 0.02f * (1.f + 0.5f * walk));
+
+      const float tape_len_f = static_cast<float>(modfx_consts::kTapeLineLenSmp);
+      lineWrite(tape_buf_, modfx_consts::kTapeLineLenSmp, tape_w_, L, R); // store both, advance once
       for (int ch = 0; ch < 2; ++ch)
       {
         const float x = (ch == 0) ? L : R;
-        float &st = (ch == 0) ? tremo_low_ : tremo_high_;
-        const float wow = onelpf(st, x, wow_alpha);
+
+        // Per-channel wow: LCG random-walk -> one-pole-smoothed -> delay mod.
+        lcg_state_ = (modfx_consts::kLcgA * lcg_state_) & 0x7fffffffu;
+        if (lcg_state_ == 0u) lcg_state_ = modfx_consts::kLcgSeed;
+        const float walk = static_cast<float>(lcg_state_) * (2.f / 2147483647.f) - 1.f;
+        float &wow_s = (ch == 0) ? tape_wow_l_ : tape_wow_r_;
+        const float s = onelpf(wow_s, walk, 0.02f); // smoothed wander (slow)
+        float delay = tape_wow_smp * (1.f + tape_wow_amt * s);
+        if (delay < 1.f) delay = 1.f;
+        if (delay > tape_len_f - 1.f) delay = tape_len_f - 1.f;
+
+        const float wow = lineReadF(tape_buf_, modfx_consts::kTapeLineLenSmp, ch, tape_w_, delay);
         const float wet = wow * gain;
         const float y = x + tap_wet * (wet - x);
         if (ch == 0) L = y; else R = y;
@@ -541,13 +610,10 @@ private:
     }
 
     // ---- Makeup gain + write the stereo output -------------------------------
-    // NO DC-block here: a ~20 Hz one-pole HPF (tau ~2 s) ate the entire
-    // low-frequency DRONE signal (the ENSE chorus voices are long one-pole
-    // delays whose outputs carry a DC-leaning envelope; the HPF let only the
-    // slow level modulation through, so MOD-on sounded near-silent). The
-    // DC offset that can accumulate in the one-pole stages is small and is
-    // removed by the platform's / sim's output stage; kModMakeup (0.9) keeps
-    // headroom against it.
+    // NO DC-block here: with REAL delay lines the stages no longer accumulate a
+    // DC-leaning envelope, so a ~20 Hz one-pole HPF (tau ~2 s) would have eaten
+    // the low-frequency DRONE signal for no benefit. kModMakeup (0.9) simply
+    // leaves 1 dB of headroom against the chorus/flanger level peaks.
     out[2 * n]     = L * modfx_consts::kModMakeup;
     out[2 * n + 1] = R * modfx_consts::kModMakeup;
     const float out_abs = (out[2 * n] < 0.f) ? -out[2 * n] : out[2 * n];

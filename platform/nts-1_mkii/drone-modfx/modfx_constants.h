@@ -44,9 +44,9 @@ static constexpr float kEnseLFOMin = 0.05f;  // 0.05 Hz  (TIME = 0)
 static constexpr float kEnseLFOMax = 1.2f;   // 1.2 Hz   (TIME = 1)
 static constexpr float kEnseLFOlnR = 3.17805f; // ln(kEnseLFOMax / kEnseLFOMin)
 
-static constexpr float kTremoLFOMin = 0.03f;  // 0.03 Hz
-static constexpr float kTremoLFOMax = 0.8f;   // 0.8 Hz
-static constexpr float kTremoLFOlnR = 3.27394f; // ln(...)
+static constexpr float kTremoLFOMin = 0.05f;  // 0.05 Hz
+static constexpr float kTremoLFOMax = 0.5f;   // 0.5 Hz
+static constexpr float kTremoLFOlnR = 2.29765f; // ln(kTremoLFOMax / kTremoLFOMin)
 
 static constexpr float kFlngLFOMin = 0.30f;   // 0.30 Hz
 static constexpr float kFlngLFOMax = 5.0f;    // 5.0 Hz
@@ -55,43 +55,48 @@ static constexpr float kFlngLFOlnR = 2.81341f; // ln(...)
 // ---- DEPTH (slot 1) -> per-stage modulation depth --------------------------
 // p.depth is 0..1. Each stage scales its modulation amplitude by a stage
 // constant so a full DEPTH gives a clearly audible (but not destructive)
-// amount. Flanger depth is squared (DEPTH^2 * kFlngMaxDepthMs) so low DEPTH
-// is a gentle shimmer and full DEPTH is a pronounced sweep.
-static constexpr float kEnseSpreadSmp    = 32.0f;  // max chorus LFO delay-spread (samples, full DEPTH)
-static constexpr float kTremoDepthScale  = 0.85f;  // tremolo depth (0..85% of the split)
-static constexpr float kFlngMaxDepthMs   = 3.0f;   // max flanger delay (ms) at DEPTH=1 (squared)
+// amount. Chorus delay-spread and flanger delay are squared (DEPTH^2) so low
+// DEPTH is a gentle shimmer and full DEPTH is a pronounced sweep.
+static constexpr float kEnseMaxSpreadSmp = 48.0f;  // chorus LFO delay-spread (samples) at full DEPTH
+static constexpr float kTremoDepthMax    = 0.85f;  // tremolo depth: at TREMO=DEPTH=1, level dips to 15%
+static constexpr float kFlngMaxDepthSmp  = 120.0f; // flanger delay (samples, ~2.5 ms) at DEPTH=1 (squared)
 
 // ---- ENSEMBLE (stereo chorus) ----------------------------------------------
-// Two detuned voices (x1.0 and x1.0618 = the golden-ratio conjugate, so they
-// never re-align) through short modulated delays (~18 / ~31 ms). The delay is
-// modulated by a slow LFO (freq from TIME, spread from DEPTH).
-static constexpr float kEnseDelayBaseMs = 18.0f;   // voice 1 base delay (ms)
-static constexpr float kEnseDelay2Ms    = 31.0f;   // voice 2 base delay (ms)
-static constexpr float kEnseVoice2      = 1.0618f; // voice 2 detune multiplier
+// Two detuned one-pole "delay" voices: the L voice is in-phase, the R voice is
+// the golden-ratio conjugate (x1.0618, so they never re-align) with a longer
+// base delay and a phase-inverted LFO. The delay is modulated by a slow LFO
+// (freq from TIME, spread from DEPTH). pre/post one-pole LPFs soften the
+// chorus and keep its DC envelope from accumulating.
+static constexpr float kEnseDelayBaseL = 18.0f;  // voice 1 base delay (ms, L, in-phase)
+static constexpr float kEnseDelayBaseR = 31.0f;  // voice 2 base delay (ms, R, x1.0618)
+static constexpr float kEnseVoice2     = 1.0618f; // voice 2 detune multiplier
+static constexpr float kEnsePreLpfHz   = 2000.f; // pre-delay LPF cutoff (Hz)
+static constexpr float kEnsePostLpfHz  = 6000.f; // post-chorus LPF cutoff (Hz)
 
-// ---- TREMOLO (harmonic/optical) --------------------------------------------
-// A first-order LPF/HPF split; the amplitudes are modulated in antiphase by a
-// slow LFO (freq from TIME, depth from DEPTH). The LOW band is barely touched
-// (kTremoLowFloor) so the sub-voice stays a constant anchor (a "sub-anchor").
-static constexpr float kTremoSplitHz  = 400.f;  // LPF/HPF crossover (Hz)
-static constexpr float kTremoLowFloor = 0.35f;  // low-band floor (never below this)
+// ---- TREMOLO (optical / harmonic) ------------------------------------------
+// Classic optical tremolo: a single AM depth knob. The level dips
+// (1 - TREMO*DEPTH*kTremoDepthMax) at the LFO trough and stays at unity at the
+// LFO peak -- the drone's sub-anchor rides in the "on" half of the cycle.
+// (The old LPF/HPF antiphase split was replaced by pure AM: it ate the bass.)
+static constexpr float kTremoPhaseShiftR = 0.25f; // R LFO phase offset (0..1 of a cycle)
 
 // ---- FLANGER (thru-zero) ---------------------------------------------------
-// HPF ~800 Hz, a very short modulated delay (0.2..2.5 ms) swept by an LFO
-// (x3 rate, phase-shifted), feedback from DEPTH. Thru-zero: a small fixed
-// delay keeps the comb "through zero" so there is no harsh null at 0.
-static constexpr float kFlngHPFHz          = 800.f; // HPF cutoff (Hz)
-static constexpr float kFlngDelayMinMs     = 0.2f;  // min flanger delay (ms)
-static constexpr float kFlngDelayMaxMs     = 2.5f;  // max flanger delay (ms, at full DEPTH)
-static constexpr float kFlngFbMax          = 0.6f;  // max feedback (< 1 = stable)
+// One-pole short delay (1..~120 samples, from DEPTH^2) swept by an LFO (x3
+// rate, phase-shifted per channel for a stereo comb), + a feedback tap. The
+// minimum delay keeps the comb "through zero" so there is no harsh null at 0.
+static constexpr float kFlngDelayMinSmp  = 1.0f;  // min flanger delay (samples)
+static constexpr float kFlngDelayMaxSmp  = 120.f; // max flanger delay (samples, ~2.5 ms, at full DEPTH)
+static constexpr float kFlngFbMax        = 0.6f;  // max feedback (< 1 = stable), scaled by DEPTH
+static constexpr float kFlngPhaseShiftR  = 0.5f;  // R LFO phase offset (half-cycle -> stereo comb)
 
 // ---- TAPE (wow + flutter) --------------------------------------------------
-// Wow: an LCG random-walk on a medium delay (~3 ms) gives slow pitch wander
-// (depth = DEPTH * kTapeWowCents cents). Flutter: LCG white noise (LPF'd)
-// amplitude-modulates the level (depth = DEPTH * kTapeFlutterAmt).
-static constexpr float kTapeWowDelaySmp = 144.0f;  // wow delay (samples, ~3 ms)
-static constexpr float kTapeWowCents    = 25.f;    // max wow pitch deviation (cents, full DEPTH)
-static constexpr float kTapeFlutterAmt  = 0.25f;   // max flutter level modulation (0..25%, full DEPTH)
+// Wow: a random-walk (LCG) modulates the length of a ~3 ms one-pole delay ->
+// slow pitch wander (depth = DEPTH * kTapeWowAmt of the delay). Flutter: an
+// LCG white-noise one-pole modulates the level (depth = DEPTH *
+// kTapeFlutterAmt). Both act only while TAPE > 0 (wet blend, 0 = wire).
+static constexpr float kTapeWowBaseSmp  = 144.0f;  // wow delay base (samples, ~3 ms)
+static constexpr float kTapeWowAmt      = 0.60f;   // wow depth: max delay deviation at full DEPTH
+static constexpr float kTapeFlutterAmt  = 0.25f;   // flutter: max level modulation at full DEPTH
 static constexpr float kTapeLpfAlpha    = 0.05f;   // flutter noise LPF one-pole alpha (slow)
 
 // ---- DRIFT (slot 2): the shared self-motion ceiling ------------------------
@@ -132,15 +137,23 @@ static constexpr float kModInputGain = 1.0f;
 // dry. 0.9x leaves 1 dB of headroom.
 static constexpr float kModMakeup = 0.9f;
 
-// ---- Pre/post LPF for ENSE chorus (aliasing suppression, Juno-style) --------
-// Pre-LPF: one-pole, ~2 kHz cutoff, applied to the input BEFORE the chorus
-// delay lines. Softens the high end to emulate the Juno-60 chip's 12 dB/oct
-// pre-sampler LPF (we use 6 dB/oct one-pole as a lightweight stand-in).
-// Post-LPF: one-pole, ~6 kHz cutoff, applied to the chorus sum AFTER the
-// delay lines. Suppresses aliasing artifacts from the fractional-delay read.
-// Alpha = 1 - exp(-2*pi*fc/sr), precomputed at 48 kHz.
-static constexpr float kEnsePreLpfHz  = 2000.f;
-static constexpr float kEnsePostLpfHz = 6000.f;
+// ---- SDRAM layout (real delay lines) ----------------------------------------
+// A genuine chorus / flanger / tape stage needs REAL delay lines, not one-pole
+// filters: a one-pole is a lowpass (that is exactly why the old "modulated
+// one-pole delays" read as mutes/ducking instead of mod-FX). The NTS-1 modfx
+// slot provides 256 KB of allocatable external memory (see the platform
+// README "Supported Modules" table), so we keep 96 KB here for 6 interleaved
+// delay lines (L/R pairs for ENSE, FLNG, TAPE). getBufferSize() reports this;
+// unit.cc allocates it and init() slices it into the 6 line buffers. The web
+// chain (drone-chain/chain.h) slices the same size automatically.
+static constexpr uint32_t kEnseLineLenSmp = 480U;  //  10 ms max chorus delay + margin (per channel)
+static constexpr uint32_t kFlngLineLenSmp = 192U;  //   4 ms max flanger delay + margin (per channel)
+static constexpr uint32_t kTapeLineLenSmp = 384U;  //   8 ms tape wow delay + margin (per channel)
+static constexpr uint32_t kModLineBytesPerPair =
+    2U * (kEnseLineLenSmp + kFlngLineLenSmp + kTapeLineLenSmp) * sizeof(float);
+// 2 * (480 + 192 + 384) * 4 = 7372 bytes per L/R pair, x 6 lines = 44232 bytes
+// (keep the whole thing under 256 KB with wide margin).
+static constexpr uint32_t kModSramBytes = 6U * kModLineBytesPerPair;
 
 } // namespace modfx_consts
 

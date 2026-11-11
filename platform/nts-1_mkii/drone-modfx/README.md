@@ -13,13 +13,13 @@ maps to a 0..1 DSP value. Defaults match `header.c` and
 
 | Slot | Name  | Range | Default     | Display | What it does |
 |------|-------|-------|-------------|---------|--------------|
-| 0    | TIME  | 0..1  | 256 (~25%)  | %       | LFO tempo ceiling. Drives the ENSE / TREMO / FLNG LFO frequencies via stage-specific exp curves (0.05..1.2 Hz, 0.03..0.8 Hz, 0.30..5.0 Hz respectively). |
-| 1    | DEPTH | 0..1  | 511 (~50%)  | %       | Per-stage modulation depth. Flanger delay (DEPTH² × 3 ms), chorus LFO spread (× 32 smp), tape flutter amount, tremolo depth (× 0.85). |
+| 0    | TIME  | 0..1  | 256 (~25%)  | %       | LFO tempo ceiling. Drives the ENSE / TREMO / FLNG LFO frequencies via stage-specific exp curves (0.05..1.2 Hz, 0.05..0.5 Hz, 0.30..5.0 Hz respectively). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
+| 1    | DEPTH | 0..1  | 511 (~50%)  | %       | Per-stage modulation depth. Chorus LFO delay-spread (DEPTH × 48 smp), tremolo dip (DEPTH × 0.85), flanger delay (DEPTH² × ~2.5 ms) and feedback (DEPTH × 0.60), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
 | 2    | DRIFT | 0..1  | 0 (off)     | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/TREMO/FLNG/TAPE within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
-| 3    | ENSE  | 0..1  | 1023 (100%) | %       | Stereo chorus level. 0 = wire. Two detuned one-pole "delay" voices (L in-phase, R × 1.0618 + longer base + phase-shifted LFO). |
-| 4    | TREMO | 0..1  | 307 (~30%)  | %       | Harmonic/optical tremolo level. 0 = wire. One-pole LPF/HPF split at 800 Hz; the two bands are modulated in antiphase by the TREMO LFO; the LOW band is floored at 35% (the "sub-anchor"). |
-| 5    | FLNG  | 0..1  | 0 (off)     | %       | Thru-zero flanger level. 0 = off. First-order HPF + a very short one-pole modulated delay (LFO × 3 rate) + feedback (DEPTH × 0.85, clamped < 0.85). |
-| 6    | TAPE  | 0..1  | 0 (off)     | %       | Tape wow + flutter level. 0 = off. Wow: LCG random-walk one-pole delay. Flutter: LCG white noise → one-pole LPF → amplitude mod (± 0.30 × DEPTH). |
+| 3    | ENSE  | 0..1  | 1023 (100%) | %       | Stereo chorus level. 0 = wire. Two detuned REAL delay voices (L in-phase, R × 1.0618 + longer base + phase-inverted LFO), pre/post one-pole LPF + unit-gain allpass diffusion. |
+| 4    | TREMO | 0..1  | 307 (~30%)  | %       | Optical tremolo level. 0 = wire. Pure AM: level dips (TREMO·DEPTH·0.85) toward the LFO trough and returns to unity at the peak (no LPF/HPF split, so it no longer mutes the bass). R runs a quarter-cycle behind for a gentle shimmer. |
+| 5    | FLNG  | 0..1  | 0 (off)     | %       | Thru-zero flanger level. 0 = off. A short REAL delay line (DEPTH² × ~2.5 ms) swept by an LFO (× 3 rate; R half-cycle out for a stereo comb) + a feedback tap (DEPTH × 0.60, clamped < 0.85). |
+| 6    | TAPE  | 0..1  | 0 (off)     | %       | Tape wow + flutter level. 0 = off. Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the length of a ~3 ms REAL delay line → slow pitch/speed wander. Flutter: LCG white noise → one-pole LPF → level AM (± 0.25 × DEPTH). |
 
 ## Signal path
 
@@ -35,20 +35,24 @@ now reads both channels and every stateful stage (ENSE pre/post LPF, the
 chorus delay voices, TREMO/FLNG/TAPE) is per-channel.
 
     in (stereo L/R)
-      -> ENSE  (stereo chorus: 2 detuned voices, modulated one-pole delays,
-               per-channel pre/post LPF + allpass)
-      -> TREMO (harmonic/optical tremolo: LPF/HPF split, antiphase LFO)
-      -> FLNG  (thru-zero flanger: HPF, modulated short delay + feedback)
-      -> TAPE  (wow: LCG random-walk delay; flutter: LCG noise level mod)
+      -> ENSE  (stereo chorus: 2 detuned REAL delay voices [L in-phase, R
+               x1.0618 + longer base + phase-inverted LFO], per-channel
+               pre/post LPF + unit-gain allpass diffusion)
+      -> TREMO (optical tremolo: pure AM, level dips at the LFO trough;
+               R runs a quarter-cycle behind)
+      -> FLNG  (thru-zero flanger: short REAL delay swept by LFO x3 rate,
+               R half-cycle out for a stereo comb + feedback tap)
+      -> TAPE  (wow: per-channel LCG random-walk on a ~3 ms REAL delay line;
+               flutter: LCG noise -> LPF -> level AM)
       -> makeup gain (0.9)
       -> out (stereo)
 
-Note: there is deliberately NO DC-blocker on the output. The ENSE chorus
-voices are long one-pole delays whose outputs carry a DC-leaning envelope at
-low DRONE frequencies; a ~20 Hz one-pole HPF there (tau ~2 s) let only the
-slow level modulation through and ate the entire signal (MOD-on sounded
-near-silent). The residual DC offset of the one-pole stages is small and the
-0.9 makeup leaves headroom against it.
+Note: there is deliberately NO DC-blocker on the output. With REAL delay lines
+(the chorus/flanger/tape stages are now true line buffers, not one-pole
+lowpasses) the stages no longer accumulate a DC-leaning envelope, so a ~20 Hz
+one-pole HPF there (tau ~2 s) would have eaten the low-frequency DRONE signal
+for no benefit. The 0.9 makeup (kModMakeup) simply leaves 1 dB of headroom
+against the chorus/flanger level peaks.
 
 Every level stage (ENSE / TREMO / FLNG / TAPE) is a dry/wet 0..1 blend: at 0
 the stage is a pure wire (regression-safe). The DEL/REV stages downstream see
@@ -93,13 +97,13 @@ K-rate computation in this unit uses only:
 ## Files
 
 - `modfx.h` — the `Modfx : Processor` class (Params, LFO phase accumulators,
-  DRIFT walk state, LCG state, first-order filter states, `setParameter`,
-  `getParameterStrValue`) AND the full per-sample audio path
+  DRIFT walk state, LCG state, real delay-line heads, one-pole filter states,
+  `setParameter`, `getParameterStrValue`) AND the full per-sample audio path
   (`Modfx::modfx_process_impl`, defined INLINE in the class so it can be
   compiled into both the ARM unit and the web-simulator chain without a
   separate TU).
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget, LCG
-  constants) + the libm-free helpers.
+  constants, delay-line lengths) + the libm-free helpers.
 - `header.c` — the 7 parameter slots (TIME/DEPTH/DRIFT/ENSE/TREMO/FLNG/TAPE)
   with their defaults.
 - `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
@@ -108,15 +112,29 @@ K-rate computation in this unit uses only:
 - `wasm.cc` — the web-simulator embind interface (now only used by the unified
   chain simulator in `drone-chain/` — see below).
 
+## SDRAM (delay lines)
+
+The ENSE / FLNG / TAPE stages use REAL delay lines (true circular line
+buffers), not one-pole lowpasses — a one-pole is a lowpass and reads as a
+mute, which is exactly the bug the old "modulated one-pole delays" had.
+`Modfx::getBufferSize()` reports `kModSramBytes` (six interleaved L/R line
+pairs: ENSE 480 smp, FLNG 192 smp, TAPE 384 smp per channel ≈ 43 KB), well
+inside the NTS-1 modfx slot's 256 KB of allocatable external memory. `unit.cc`
+allocates it from `sdram_alloc` and `init()` slices it into the three L/R line
+pairs; the web chain (`Chain::init`) slices the same size automatically. The
+line heads are plain `uint32_t` (exact wrap, no float drift) and the
+fractional (LFO-modulated) read offset is interpolated between the two
+nearest samples.
+
 ## Web simulator
 
 The unified DRONE web simulator is `drone-chain/` (one wasm worklet running
 OSC -> MOD -> DEL -> REV). The MOD stage's 7 parameters are exposed in
 `websim/index.html` as a 7-slider column below the Parameters card, driven
 through `Module.setFxParam(stage=0, which=0..6, raw)`; every slider shows
-0..100%. The MOD stage's `getBufferSize()` is 0 (no SDRAM state);
-`Chain::init` slices the chain's single SDRAM allocation across
-MOD / DEL / REV in that order (MOD takes none).
+0..100%. The MOD stage's `getBufferSize()` is `kModSramBytes` (the six delay
+line pairs, see *SDRAM* above); `Chain::init` slices the chain's single SDRAM
+allocation across MOD / DEL / REV in that order.
 
 ## Build
 

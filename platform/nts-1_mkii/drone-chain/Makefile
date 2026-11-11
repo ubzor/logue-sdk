@@ -162,11 +162,26 @@ $(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
 # C++ sources are compiled with C++17 as required by the wasm audio worklet
 # engine. chain.cc / wasm.cc both include the DSP headers (Osc / Modfx /
 # Delay / Reverb) from the sibling drone-* dirs (see UINCDIR in config.mk).
-$(WASMOBJDIR)/%.o: %.cc Makefile config.mk | $(WASMOBJDIR)
+#
+# CRITICAL: those DSP headers are in SIBLING module dirs and are NOT under
+# drone-chain, so a naive "%.o: %.cc" rule would never recompile the object
+# when, say, drone-modfx/modfx.h changes -- make only sees chain.cc (unchanged)
+# and links the STALE object, so DSP edits silently fail to reach the sim.
+# The DSP_HEADERS var below lists every header the C++ TU actually includes,
+# and is added as a prerequisite so any DSP edit invalidates chain.o/wasm.o.
+DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
+               $(PROJECT_ROOT)/wasm.cc \
+               $(PROJECT_ROOT)/../drone-osc/osc.h \
+               $(PROJECT_ROOT)/../drone-modfx/modfx.h \
+               $(PROJECT_ROOT)/../drone-modfx/modfx_constants.h \
+               $(PROJECT_ROOT)/../drone-delfx/delay.h \
+               $(PROJECT_ROOT)/../drone-revfx/reverb.h
+
+$(WASMOBJDIR)/%.o: %.cc Makefile config.mk $(DSP_HEADERS) | $(WASMOBJDIR)
 	@echo Compiling wasm C++ object $(<F)
 	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) $(CXXFLAGS_WASM) $< -o $@
 
-$(WASMOBJDIR)/%.o: %.cpp Makefile config.mk | $(WASMOBJDIR)
+$(WASMOBJDIR)/%.o: %.cpp Makefile config.mk $(DSP_HEADERS) | $(WASMOBJDIR)
 	@echo Compiling wasm C++ object $(<F)
 	@$(EMCC_BIN_PATH)/em++ -c $(INCDIR) $(CXXFLAGS_WASM) $< -o $@
 
