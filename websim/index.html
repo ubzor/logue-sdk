@@ -159,8 +159,8 @@
 
     <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
     <!-- Sits BELOW the Parameters card so the oscillator params stay primary.
-         MOD is a full 7-parameter stage (TIME / DEPTH / DRIFT / ENSE / TREMO /
-         FLNG / TAPE), driven through
+         MOD is a full 8-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
+         TREMO / FLNG / TAPE), driven through
          Module.setFxParam(stage, which, raw); DEL / REV keep their own TIME /
          DEPTH. -->
     <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
@@ -176,42 +176,42 @@
           </div>
           <div id="fxmod_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <span class="w-28 text-sm font-medium shrink-0">Time</span>
             <input type="range" min="0" max="1023" value="256" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
             <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">25%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <span class="w-28 text-sm font-medium shrink-0">Depth</span>
             <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1">
             <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">50%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Drift</span>
+            <span class="w-28 text-sm font-medium shrink-0">Drift</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" class="range range-primary range-sm flex-1">
             <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">CMode</span>
+            <span class="w-28 text-sm font-medium shrink-0">Chorus Mode</span>
             <input type="range" min="0" max="1023" value="512" step="1" id="fxmod_cmode" class="range range-primary range-sm flex-1">
             <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">I+II</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-16 text-sm font-medium shrink-0">Dry/Wet</span>
+            <span class="w-28 text-sm font-medium shrink-0">Chorus</span>
             <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
             <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Tremo</span>
+            <span class="w-28 text-sm font-medium shrink-0">Tremo</span>
             <input type="range" min="0" max="1023" value="307" step="1" id="fxmod_tremo" class="range range-primary range-sm flex-1">
             <span id="fxmod_tremo_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">30%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Flng</span>
+            <span class="w-28 text-sm font-medium shrink-0">Flng</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flng" class="range range-primary range-sm flex-1">
             <span id="fxmod_flng_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Tape</span>
+            <span class="w-28 text-sm font-medium shrink-0">Tape</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_tape" class="range range-primary range-sm flex-1">
             <span id="fxmod_tape_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
           </label>
@@ -1445,7 +1445,7 @@
       // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
       // are driven through Module.setFxParam(stage, which, raw):
       //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: MOD -> 0..6 (TIME/DEPTH/DRIFT/ENSE/TREMO/FLNG/TAPE)
+      //   which: MOD -> 0..7 (TIME/DEPTH/DRIFT/CMODE/CHORUS/TREMO/FLNG/TAPE)
       //          DEL/REV -> 0..1 (TIME/DEPTH)
       //   raw:   0..1023 (10-bit knob value)
       // The worklet thread applies the value to the live DSP each block

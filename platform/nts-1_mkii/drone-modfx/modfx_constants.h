@@ -68,11 +68,12 @@ static constexpr float kFlngMaxDepthSmp  = 120.0f; // flanger delay (samples, ~2
 
 // ---- ENSEMBLE (stereo chorus, Juno-60 style) --------------------------------
 // Architecture follows peterall/junologue-chorus (MIT), adapted for the
-// drone-modfx NTS-1 mkII unit. Two parallel BBD chorus voices ("main" and
-// "sub"), each a single REAL delay line (dsp::DelayLine) driven by two
-// triangle LFOs (dsp::SimpleLFO) at fixed rates 0.513 Hz and 0.863 Hz.
+// drone-modfx NTS-1 mkII unit. Two BBD chorus voices ("main" and "sub"), each
+// a single REAL delay line driven by a triangle LFO. The sub-voice LFO is
+// DETUNED against the main by kEnseLfoDetune (x1.0618) so the two voices share
+// one heartbeat and slowly drift in/out of phase -> classic chorus pulsing.
 // Each LFO reads the delay at two fractional taps (t and 1-t) and sums them
-// with per-mode gains -> a smooth, wide, non-vibrato chorus wash.
+// with the CMODE-selected per-voice gains -> a smooth, wide chorus wash.
 // A 1st-order LPF (dsp::BiQuad::setFOLP) runs pre- and post-delay on each
 // channel (emulating the Juno's passive RC anti-alias).
 //
@@ -98,8 +99,8 @@ static constexpr float kEnseDelayMinMs = 15.0f;  // main voice min delay (ms, ta
 static constexpr float kEnseDelayMaxMs = 20.0f;  // main voice max delay (ms)
 static constexpr float kEnseSubDelayMinMs = 28.0f; // sub voice min delay (ms, target ~31 ms)
 static constexpr float kEnseSubDelayMaxMs = 34.0f; // sub voice max delay (ms)
-static constexpr float kEnseLfoRate1 = 0.513f;   // LFO 1 rate (Hz, Juno BBD, when TIME at mid)
-static constexpr float kEnseLfoRate2 = 0.863f;   // LFO 2 rate (Hz, Juno BBD, when TIME at mid)
+static constexpr float kEnseLfoRate1 = 0.513f;   // main-voice LFO base rate (Hz, Juno BBD, TIME at mid)
+static constexpr float kEnseLfoDetune = 1.0618f; // sub-voice LFO detune (x main) -> chorus pulsing
 // TIME knob now sweeps the ENSE LFO rate exponentially: rate = Min * exp(lnR * TIME).
 // At TIME=0.5 the LFO1 lands near the classic Juno 0.513 Hz. Range ~0.05..~4.5 Hz.
 static constexpr float kEnseLfoRateMin = 0.05f;  // slowest LFO sweep (Hz, TIME=0)

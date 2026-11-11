@@ -36,7 +36,7 @@
  *  File: modfx.h
  *
  *  DRONE-MOD (modfx) DSP: a 4-stage modulation stack for the DRONE path.
- *  All 8 header slots are live (TIME / DEPTH / DRIFT / CMODE / DWET / TREMO /
+ *  All 8 header slots are live (TIME / DEPTH / DRIFT / CMODE / CHORUS / TREMO /
  *  FLNG / TAPE, see header.c). The per-sample audio path is defined inline below:
  *    in (stereo) -> ENSE (Juno-60 BBD stereo chorus) -> TREMO (optical) ->
  *    FLNG (thru-zero flanger) -> TAPE (wow+flutter) -> makeup (0.9) -> out.
@@ -184,7 +184,7 @@ public:
     ense_lfo1_phase_ = 0;
     ense_lfo2_phase_ = 0;
     ense_lfo1_w_ = (int32_t)(modfx_consts::kEnseLfoRate1 * 2147483648.0f / modfx_consts::kSr);
-    ense_lfo2_w_ = (int32_t)(modfx_consts::kEnseLfoRate2 * 2147483648.0f / modfx_consts::kSr);
+    ense_lfo2_w_ = (int32_t)(modfx_consts::kEnseLfoRate1 * modfx_consts::kEnseLfoDetune * 2147483648.0f / modfx_consts::kSr);
 
     // ENSE LPFs (1st-order, Juno RC anti-alias). Init alpha at mid-range.
     ense_main_post_lpf_l_ = 0.f;
@@ -226,8 +226,9 @@ private:
   uint32_t drift_next_gap_[kDriftCount];
 
   // ---- LFO phase accumulators (ENSE / TREMO / FLNG) ---------------------------
-  // ENSE uses two q31 triangle LFOs at the base Juno BBD rates 0.513/0.863 Hz,
-  // swept live by TIME (the increment w_ is recomputed K-rate). TREMO / FLNG
+  // ENSE uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
+  // detuned x1.0618; both swept live by TIME (the increments w_ are recomputed
+  // K-rate). TREMO / FLNG
   // use the hand-rolled float phase accumulators.
   // ENSE LFOs are hand-rolled q31 phase accumulators (same as dsp::SimpleLFO
   // but without the CMSIS/arm_math.h dependency needed for the web sim).
@@ -407,13 +408,16 @@ private:
   const float ense_gain_sub  = (ense_mode == 0) ? modfx_consts::kEnseGainI[1]
                             : (ense_mode == 1) ? modfx_consts::kEnseGainI2[1] : modfx_consts::kEnseGainII[1];
 
-  // TIME knob -> ENSE chorus LFO rate (exponential, no libm). Both BBD LFOs
-  // scale together from the base Juno rates (0.513 / 0.863 Hz) by a factor
-  // centered on TIME=0.5 (scale=1 -> classic Juno feel):
+  // TIME knob -> ENSE chorus LFO rate (exponential, no libm). The main-voice
+  // LFO scales from the base Juno rate (0.513 Hz) centered on TIME=0.5:
   //   scale = exp(kEnseLfoRateLnR * (TIME - 0.5));  TIME=0 -> e^-2.25, TIME=1 -> e^2.25.
+  // The sub-voice LFO is DETUNED against the main by kEnseLfoDetune (x1.0618):
+  // the two voices share one "heartbeat" but slowly drift in and out of phase,
+  // producing the classic chorus "swelling" (beating) instead of two static
+  // layers. This is the target spec's "голоса расстроены (x1, x1.0618)".
   const float ense_lfo_scale = modfx_expf(modfx_consts::kEnseLfoRateLnR * (t - 0.5f));
-  const float ense_lfo1_freq = modfx_consts::kEnseLfoRate1 * ense_lfo_scale; // Hz
-  const float ense_lfo2_freq = modfx_consts::kEnseLfoRate2 * ense_lfo_scale; // Hz
+  const float ense_lfo1_freq = modfx_consts::kEnseLfoRate1 * ense_lfo_scale;                    // Hz (main)
+  const float ense_lfo2_freq = ense_lfo1_freq * modfx_consts::kEnseLfoDetune;                  // Hz (sub, detuned)
   // q31 increment = freq * 2^31 / sr (one cycle per 1/freq s). Recomputed
   // every block so TIME moves the rate live with no phase jump: the phase
   // accumulator keeps running, only its step size changes.
@@ -477,11 +481,12 @@ private:
     // ---- ENSE: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------
     // Architecture: peterall/junologue-chorus (MIT), adapted with hand-rolled
     // delay lines / LFOs / LPFs (no CMSIS dependency for the web sim).
-    // Two mono delay lines (main + sub), each driven by two triangle LFOs whose
-    // rate is set K-rate from TIME (base Juno 0.513/0.863 Hz, swept). Each LFO
-    // reads the delay at two fractional taps (t and 1-t) and sums them with the
-    // CMODE-selected per-voice gains. 1st-order LPF post-delay per channel.
-    // ENSE(DWET)=0 -> dry only. ENSE=1 -> full chorus.
+    // Two mono delay lines (main + sub), each driven by a triangle LFO whose
+    // rate is set K-rate from TIME (main = base Juno 0.513 Hz, sub detuned
+    // x1.0618 -> shared heartbeat that drifts in/out of phase = chorus pulsing).
+    // Each LFO reads the delay at two fractional taps (t and 1-t) and sums them
+    // with the CMODE-selected per-voice gains. 1st-order LPF post-delay per
+    // channel. CHORUS(dry/wet)=0 -> dry only. CHORUS=1 -> full chorus.
     if (ense_master > 0.f)
     {
       // Advance the two triangle LFOs (q31 phase accumulators).

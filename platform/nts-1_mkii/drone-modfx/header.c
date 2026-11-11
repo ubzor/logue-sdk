@@ -48,7 +48,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010007U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped minor: 8 params. Added CMODE (3 equal bands -> Juno voice I/I+II/II); TIME now sweeps ENSE LFO rate (0.05..~4.5 Hz); ENSE renamed DWET (dry/wet); DEPTH = chorus LFO spread; 2 Juno BBD voices @ 18/31 ms.
+    .version = 0x00010008U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: sub-voice LFO detuned x1.0618 vs main -> chorus pulsing (target spec "голоса расстроены x1/x1.0618"); shared heartbeat, voices drift in/out of phase.
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
     .num_params = 8,                                       // Number of valid parameter descriptors. (max. 10)
 
@@ -73,8 +73,8 @@ const __unit_header unit_header_t unit_header = {
         //   band 0 = I (main), band 1 = I+II (classic Juno), band 2 = II (sub).
         {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"CMODE"}},
 
-        // [4] DWET: dry/wet of the chorus (0..1). 0 = dry only, 1 = full chorus.
-        {0, 1023, 0, 1023, k_unit_param_type_none, 0, 0, 0, {"DWET"}},
+        // [4] CHORUS: dry/wet level of the chorus (0..1). 0 = dry only, 1 = full chorus.
+        {0, 1023, 0, 1023, k_unit_param_type_none, 0, 0, 0, {"CHORUS"}},
 
         // [5] TREMO: harmonic/optical tremolo level (0..1). 0 = wire.
         {0, 1023, 0, 307, k_unit_param_type_none, 0, 0, 0, {"TREMO"}},

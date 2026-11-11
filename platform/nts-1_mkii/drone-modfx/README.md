@@ -13,11 +13,11 @@ maps to a 0..1 DSP value. Defaults match `header.c` and
 
 | Slot | Name  | Range | Default      | Display | What it does |
 |------|-------|-------|--------------|---------|--------------|
-| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** exponentially (base Juno 0.513/0.863 Hz × `e^(4.5·(TIME−0.5))` → ~0.05..~8 Hz); also drives the TREMO / FLNG LFO frequencies via stage-specific exp curves (TREMO 0.05..0.5 Hz, FLNG 0.30..5.0 Hz). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
+| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** exponentially (main base Juno 0.513 Hz × `e^(4.5·(TIME−0.5))` → ~0.05..~8 Hz; the sub voice is the same rate detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing); also drives the TREMO / FLNG LFO frequencies via stage-specific exp curves (TREMO 0.05..0.5 Hz, FLNG 0.30..5.0 Hz). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
 | 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), tremolo dip (DEPTH × 0.85), flanger delay (DEPTH² × ~2.5 ms) and feedback (DEPTH × 0.60), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
 | 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/TREMO/FLNG/TAPE within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
 | 3    | CMODE | 0..1  | 512 (~50%)   | I/I+II/II | Chorus mode — **3 equal bands** (Formant-Vowel style): band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (≥2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
-| 4    | DWET  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet** (the old "ENSE" knob, renamed). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
+| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/TREMO/FLNG/TAPE per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
 | 5    | TREMO | 0..1  | 307 (~30%)   | %       | Optical tremolo level. 0 = wire. Pure AM: level dips (TREMO·DEPTH·0.85) toward the LFO trough and returns to unity at the peak (no LPF/HPF split, so it no longer mutes the bass). R runs a quarter-cycle behind for a gentle shimmer. |
 | 6    | FLNG  | 0..1  | 0 (off)      | %       | Thru-zero flanger level. 0 = off. A short REAL delay line (DEPTH² × ~2.5 ms) swept by an LFO (× 3 rate; R half-cycle out for a stereo comb) + a feedback tap (DEPTH × 0.60, clamped < 0.85). |
 | 7    | TAPE  | 0..1  | 0 (off)      | %       | Tape wow + flutter level. 0 = off. Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the length of a ~3 ms REAL delay line → slow pitch/speed wander. Flutter: LCG white noise → one-pole LPF → level AM (± 0.25 × DEPTH). |
@@ -29,7 +29,7 @@ maps to a 0..1 DSP value. Defaults match `header.c` and
 > `websim/index.html`. The previous build shipped `frac = 1` (fixed-point,
 > `frac_mode = 0`), which made the device divide by `1 << frac = 2` and show
 > 0..511.5 — fixed in v1.0.3. The Juno-60 BBD-chorus rewrite (2 mono voices
-> @ 18/31 ms, CMODE + TIME-rate + DEPTH-spread + DWET) landed in **v1.0.7**.
+> @ 18/31 ms, CMODE + TIME-rate + DEPTH-spread + CHORUS dry/wet) landed in **v1.0.7**.
 
 ## Signal path
 
@@ -46,13 +46,15 @@ chorus delay voices, TREMO/FLNG/TAPE) is per-channel.
 
     in (stereo L/R)
       -> ENSE  (Juno-60 BBD stereo chorus: 2 MONO REAL delay lines @
-               main 15..20 ms / sub 28..34 ms, each driven by 2 TRIANGLE LFOs
-               at the TIME-swept base Juno rates 0.513/0.863 Hz; each LFO reads
-               the delay at two fractional taps (t and 1-t) and sums them with
+               main 15..20 ms / sub 28..34 ms, each driven by a TRIANGLE LFO
+               set K-rate from TIME (main = base Juno 0.513 Hz, sub detuned
+               x1.0618 -> shared heartbeat, voices drift in/out of phase); each
+               LFO reads the delay at two fractional taps (t and 1-t) and sums
+               them with
                the CMODE-selected voice gains {1,0} / {.707,.707} / {0,1};
                DEPTH scales the LFO delay-spread around each voice center;
                BBD SoftLimit + per-channel 1st-order post-LPF for the stereo
-               image; DWET dry/wet blend, 0 = wire, 1 = dry+wet)
+               image; CHORUS dry/wet blend, 0 = wire, 1 = dry+wet)
       -> TREMO (optical tremolo: pure AM, level dips at the LFO trough;
                R runs a quarter-cycle behind)
       -> FLNG  (thru-zero flanger: short REAL delay swept by LFO x3 rate,
@@ -125,7 +127,7 @@ K-rate computation in this unit uses only:
   separate TU).
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget, LCG
   constants, delay-line lengths) + the libm-free helpers.
-- `header.c` — the 8 parameter slots (TIME/DEPTH/DRIFT/CMODE/DWET/TREMO/FLNG/TAPE)
+- `header.c` — the 8 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/TREMO/FLNG/TAPE)
   with their defaults.
 - `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
   to `Modfx::setParameter`; no multiplexer, unlike the OSC's 4-slot
