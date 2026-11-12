@@ -21,135 +21,107 @@
   <script type="module" src="./flyon.js"></script>
 </head>
 
-<body class="min-h-screen bg-base-100 text-base-content p-4 sm:p-6">
-  <div class="flex flex-col gap-6 max-w-[1200px] mx-auto">
+<body class="min-h-screen bg-base-100 text-base-content p-2">
+  <!-- Full-width (no max-w-[1200px]) layout: at FHD the page uses the entire
+       viewport width. Top row = title + ALL global controls + keyboard +
+       scope, one line; bottom row = OSC parameters (2/3) + MOD/DEL/REV
+       stack (1/3). min-w keeps the top row on one line (wide screen target). -->
+  <div class="flex flex-col gap-2">
 
-    <!-- ---- Top bar: title + theme switch (checked = luxury dark, off = luxury-light light) -->
-    <div class="flex items-center gap-3">
-      <!-- Tabler "drone" mark via Iconify (@iconify/tailwind4, see app.css).
-           The icon-[tabler--drone] utility inlines the SVG as a currentColor
-           CSS mask, so it follows the active text color in every theme. -->
-      <span id="DroneIcon" class="icon-[tabler--drone] text-2xl" role="img" aria-label="Drone"></span>
-      <span class="text-lg font-semibold tracking-wide">DRONE</span>
-      <div class="flex-1"></div>
-      <input type="checkbox" id="ThemeSwitch" class="switch switch-primary switch-xs" title="Toggle dark theme (VSCode) / light theme (Valorant)">
-    </div>
-
-    <div class="flex flex-col xl:flex-row gap-6 items-start">
-
-    <!-- ============================ LEFT COLUMN ============================ -->
-    <div class="flex flex-col gap-6 w-full xl:w-auto xl:flex-1">
-
-      <!-- ---- Global card (Volume + BPM + LFO + Octave) --------------------- -->
-      <!-- All the "performance-time" knobs in one compact block. No sub-
-           headings: each row's label is self-explanatory (LFO F/S mirror the
-           hardware OSC-button A/B knobs, see the row tooltips). -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-6 pt-6">
-
-          <div class="grid grid-cols-2 gap-x-10 gap-y-3" title="Volume/BPM (left column) and LFO F/S (right column): two equal columns to keep the Global card compact.">
-            <div class="flex flex-col gap-2">
-              <label class="flex items-center gap-3">
-                <span class="w-16 text-sm font-medium shrink-0">Volume</span>
-                <input type="range" min="0" max="1" value="1" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
-                <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right"></span>
-              </label>
-
-              <!-- BPM: simulator-only tempo control. Delivered to the DSP
-                   through Module.fx_set_bpm (wasm.cc -> Osc::setTempo ->
-                   tempo_bpm_). On hardware the platform delivers BPM itself
-                   via unit_set_tempo(); the slider here only matters in the
-                   web simulator. -->
-              <label class="flex items-center gap-3">
-                <span class="w-16 text-sm font-medium shrink-0">BPM</span>
-                <input type="range" min="56" max="240" value="120" step="1" id="BpmSlider" class="range range-primary range-sm flex-1">
-                <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right"></span>
-              </label>
-            </div>
-
-            <div class="flex flex-col gap-2">
-              <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO frequency (Hz).">
-                <span class="w-20 text-sm font-medium shrink-0">LFO F (Hz)</span>
-                <input type="range" min="0" max="30" value="0" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
-                <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0.00</span>
-              </label>
-
-              <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO depth (%)">
-                <span class="w-20 text-sm font-medium shrink-0">LFO S (%)</span>
-                <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
-                <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-              </label>
-            </div>
-          </div>
-
-
-          <!-- Octave (FlyonUI "Join radio with btn style", see
-               https://flyonui.com/docs/forms/radio/#join-radio-with-btn-style):
-               <div class="join drop-shadow"> with one input[type=radio]
-               .join-item .btn .btn-soft per option; the checked input is
-               painted primary by the flyonui .btn rule itself (see
-               .octave-join in app.css). JS (setOctaveShift) only applies the
-               shift and mirrors the Z/X hotkeys into .checked. -->
-          <div class="flex items-center gap-3 flex-wrap">
-            <span class="w-16 text-sm font-medium shrink-0">Octave</span>
-            <div class="octave-join drop-shadow" title="Current octave shift of the whole keyboard range">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-2" aria-label="-2" title="Down two octaves (A0..D2)">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="-1" aria-label="-1" title="Down one octave (A1..D3)" checked>
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="0" aria-label="0" title="Base range (A2..D4)">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="1" aria-label="+1" title="Up one octave (A3..D5)">
-              <input class="octave-join-item btn btn-soft btn-primary btn-sm" type="radio" name="Octave" value="2" aria-label="+2" title="Up two octaves (A4..D6)">
-            </div>
-          </div>
-
-          <!-- Keyboard (moved here from the old Oscillator card). No margin-top wrapper:
-               the card-body gap-3 handles spacing after the Octave row. The qwerty-hancock
-               lib rewrites #keyboard's inline style (margin:0) at init, so any inline margin
-               would be clobbered anyway; w-full + the lib's ResizeObserver track the card width. -->
-          <div id="keyboard" class="w-full"></div>
+    <!-- ---- Top section: left controls column + right keyboard/scope -- -->
+    <div class="flex flex-row gap-2">
+      <!-- Left column: title + all global controls + theme switch -->
+      <div class="flex flex-col gap-2 grow">
+        <div class="flex items-center gap-2">
+          <span id="DroneIcon" class="icon-[tabler--drone] text-base" role="img" aria-label="Drone"></span>
+          <span class="text-sm font-semibold tracking-wide">DRONE</span>
         </div>
+
+        <label class="flex items-center gap-3" title="Master output volume">
+          <span class="w-20 text-xs font-medium shrink-0">Volume</span>
+          <input type="range" min="0" max="1" value="1" step="0.01" id="VolumeSlider" class="range range-primary range-sm flex-1">
+          <span id="VolumeLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"></span>
+        </label>
+
+        <!-- BPM: simulator-only tempo control. Delivered to the DSP
+             through Module.fx_set_bpm (wasm.cc -> Osc::setTempo ->
+             tempo_bpm_). On hardware the platform delivers BPM itself
+             via unit_set_tempo(); the slider here only matters in the
+             web simulator. -->
+        <label class="flex items-center gap-3" title="Simulator tempo (delivered to DSP via fx_set_bpm)">
+          <span class="w-20 text-xs font-medium shrink-0">BPM</span>
+          <input type="range" min="56" max="240" value="120" step="1" id="BpmSlider" class="range range-primary range-sm flex-1">
+          <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"></span>
+        </label>
+
+        <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO frequency (Hz).">
+          <span class="w-20 text-xs font-medium shrink-0">LFO F (Hz)</span>
+          <input type="range" min="0" max="30" value="0" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
+          <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right">0.00</span>
+        </label>
+
+        <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO depth (%)">
+          <span class="w-20 text-xs font-medium shrink-0">LFO S (%)</span>
+          <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
+          <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right">0%</span>
+        </label>
       </div>
 
-    </div>
+      <!-- Right column: octave + keyboard + scope -->
+      <div class="flex flex-col gap-2 shrink-0">
+        <!-- Octave (FlyonUI "Join radio with btn style", see
+             https://flyonui.com/docs/forms/radio/#join-radio-with-btn-style):
+             <div class="join drop-shadow"> with one input[type=radio]
+             .join-item .btn .btn-soft per option; the checked input is
+             painted primary by the flyonui .btn rule itself (see
+             .octave-join in app.css). JS (setOctaveShift) only applies the
+             shift and mirrors the Z/X hotkeys into .checked. -->
+        <!-- Keyboard + Octave block (shared 507px width) + Scope -->
+        <div class="flex flex-row items-start gap-2" style="height:128px">
+          <!-- Octave + Keyboard: stacked vertically, shared 507px width -->
+          <div class="flex flex-col shrink-0" style="width:507px;height:128px;justify-content: space-between;">
+            <!-- Octave (FlyonUI "Join radio with btn style") -->
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium w-10 shrink-0">Octave</span>
+              <div class="octave-join drop-shadow" title="Current octave shift of the whole keyboard range">
+                <input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="Octave" value="1" aria-label="1" title="Down two octaves (A0..D2)">
+                <input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="Octave" value="2" aria-label="2" title="Down one octave (A1..D3)" checked>
+                <input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="Octave" value="3" aria-label="3" title="Base range (A2..D4)">
+                <input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="Octave" value="4" aria-label="4" title="Up one octave (A3..D5)">
+                <input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="Octave" value="5" aria-label="5" title="Up two octaves (A4..D6)">
+              </div>
+              <input type="checkbox" id="ThemeSwitch" class="switch switch-primary switch-xs ml-auto" title="Toggle dark theme (VSCode) / light theme (Valorant)">
+            </div>
+            <!-- Keyboard (qwerty-hancock). Fixed 507px width, 96px height -->
+            <div id="keyboard" class="shrink-0" style="width:507px"></div>
+          </div>
 
-    <!-- ============================ RIGHT COLUMN =========================== -->
-    <!-- Only the Scope card lives here now: the Parameters card was moved out
-         below the row so it can span the full page width. No fixed width:
-         the column is sized by its content. .scope-canvas is capped at
-         max-width:512px (app.css), so the Scope card settles at
-         512 + 24+24 card padding = 560px (border-box). -->
-    <div class="flex flex-col gap-6 xl:shrink-0">
-
-      <!-- ---- Scope card --------------------------------------------------- -->
-      <div class="card card-border shadow-none w-full">
-        <div class="card-body flex-col items-stretch !gap-6 pt-6">
-          <!-- width/height attributes = native drawing-buffer resolution
-               (512x128). CSS .scope-canvas { width:100%; max-width:512px }
-               stretches the buffer to fit, but never past 512px - so the
-               512px native buffer is rendered 1:1 on every viewport. The
-               right column is w-140 (560px) on xl, exactly 512 + 24+24
-               card padding, so there is no dead space around the scope. -->
-          <canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
-          <canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
+          <!-- Scope: time-domain oscilloscope + FFT histogram (native buffers
+               512x128, CSS .scope-canvas fixes the render at 512px, see app.css).
+               Side by side in a row; the canvases carry their own
+               --scope-bg background, so no card padding is needed. -->
+          <div class="flex flex-row gap-2 shrink-0">
+            <canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
+            <canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
+          </div>
         </div>
       </div>
-
     </div>
 
-    </div>
+    <!-- ====================== MAIN ROW: OSC 2/3 + FX 1/3 ==================== -->
+    <div class="flex gap-4 items-stretch">
 
-    <!-- ---- Parameters card (full width) ------------------------------------ -->
-    <!-- Moved out of the right column so the card spans the whole page width
-         (max-w-[1200px] mx-auto on the outer container). Three equal columns,
-         each a stack of semantic groups (see PARAM_GROUPS in the script
-         below). Groups are assigned column-by-column (g0, g1 -> col 0;
-         g2, g3 -> col 1; g4, g5 -> col 2) so the heights balance. -->
-    <div class="card card-border shadow-none w-full">
-      <div class="card-body flex-col items-stretch gap-1 pt-6">
-        <div id="Parameters" class="grid grid-cols-3 gap-x-10 gap-y-6 items-stretch">
-          <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
-          <div class="col-span-3 flex items-center gap-2">
-            <div class="flex flex-wrap gap-2" id="Presets"></div>
-          </div>
+    <!-- ==================== OSC: parameters card (2/3 width) ================ -->
+    <!-- The OSC edit-parameter groups (see PARAM_GROUPS in the script below).
+         Three equal columns; groups are assigned column-by-column
+         (MAIN/BREATH/FORMANT -> col 0; WANDER/WANDER TGT -> col 1;
+         CHORD/SUBS/FILTER -> col 2) so the heights balance. The preset bank
+         (Random/Reset buttons) sits above the grid, in one row. -->
+    <div class="card card-border shadow-none min-w-0 flex-[2]">
+      <div class="card-body flex-col items-stretch gap-3 pt-6">
+        <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
+        <div class="flex flex-wrap gap-2" id="Presets"></div>
+        <div id="Parameters" class="grid grid-cols-3 gap-x-8 gap-y-4 items-stretch">
           <div id="ParamCol0" class="flex flex-col justify-between gap-2"></div>
           <div id="ParamCol1" class="flex flex-col gap-2"></div>
           <div id="ParamCol2" class="flex flex-col justify-between gap-2"></div>
@@ -157,15 +129,14 @@
       </div>
     </div>
 
-    <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
-    <!-- Sits BELOW the Parameters card so the oscillator params stay primary.
-         MOD is a full 7-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
-         FLANGER / TAPE), driven through
-         Module.setFxParam(stage, which, raw); DEL / REV keep their own TIME /
-         DEPTH. -->
-    <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
+    <!-- ==================== FX: MOD / DEL / REV stack (1/3) ================== -->
+    <!-- The audio path OSC -> MOD -> DEL -> REV runs inside the wasm worklet;
+         each stage card is driven through Module.setFxParam(stage, which, raw).
+         MOD is a full 8-parameter stage; DEL / REV keep their own TIME / DEPTH.
+         The three cards stack vertically in the right third of the page. -->
+    <div class="flex flex-col gap-4 min-w-0 flex-[1]">
 
-    <!-- ---- MOD column (8 params) ---------------------------------------- -->
+    <!-- ---- MOD card (8 params) ---------------------------------------- -->
       <div class="card card-border shadow-none w-full">
         <div class="card-body flex-col items-stretch !gap-3 pt-4">
           <div class="flex items-center justify-between">
@@ -176,50 +147,50 @@
           </div>
           <div id="fxmod_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Time</span>
+            <span class="w-10 text-xs font-medium shrink-0">Time</span>
             <input type="range" min="0" max="1023" value="256" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
-            <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">25%</span>
+            <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">25%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Depth</span>
+            <span class="w-11 text-xs font-medium shrink-0">Depth</span>
             <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1">
-            <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">50%</span>
+            <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Drift</span>
+            <span class="w-10 text-xs font-medium shrink-0">Drift</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" class="range range-primary range-sm flex-1">
-            <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Chorus Mode</span>
+            <span class="w-16 text-xs font-medium shrink-0">Chorus Mode</span>
             <input type="range" min="0" max="1023" value="512" step="1" id="fxmod_cmode" class="range range-primary range-sm flex-1">
-            <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">I+II</span>
+            <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">I+II</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Chorus</span>
+            <span class="w-11 text-xs font-medium shrink-0">Chorus</span>
             <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
-            <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
+            <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">100%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Flanger</span>
+            <span class="w-12 text-xs font-medium shrink-0">Flanger</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" class="range range-primary range-sm flex-1">
-            <span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Noise</span>
+            <span class="w-11 text-xs font-medium shrink-0">Noise</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_noise" class="range range-primary range-sm flex-1">
-            <span id="fxmod_noise_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxmod_noise_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">N Rate</span>
+            <span class="w-10 text-xs font-medium shrink-0">N Rate</span>
             <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_nrate" class="range range-primary range-sm flex-1">
-            <span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">50%</span>
+            <span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
           </label>
           </div><!-- /fxmod_body -->
         </div>
       </div>
 
-      <!-- ---- DEL column ---------------------------------------------------- -->
+      <!-- ---- DEL card ---------------------------------------------------- -->
       <div class="card card-border shadow-none w-full">
         <div class="card-body flex-col items-stretch !gap-3 pt-4">
           <div class="flex items-center justify-between">
@@ -230,20 +201,20 @@
           </div>
           <div id="fxdel_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <span class="w-10 text-xs font-medium shrink-0">Time</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_time" class="range range-primary range-sm flex-1">
-            <span id="fxdel_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxdel_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <span class="w-11 text-xs font-medium shrink-0">Depth</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1">
-            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           </div><!-- /fxdel_body -->
         </div>
       </div>
 
-      <!-- ---- REV column ---------------------------------------------------- -->
+      <!-- ---- REV card ---------------------------------------------------- -->
       <div class="card card-border shadow-none w-full">
         <div class="card-body flex-col items-stretch !gap-3 pt-4">
           <div class="flex items-center justify-between">
@@ -254,20 +225,22 @@
           </div>
           <div id="fxrev_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Time</span>
+            <span class="w-10 text-xs font-medium shrink-0">Time</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_time" class="range range-primary range-sm flex-1">
-            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-14 text-sm font-medium shrink-0">Depth</span>
+            <span class="w-11 text-xs font-medium shrink-0">Depth</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1">
-            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           </div><!-- /fxrev_body -->
         </div>
       </div>
 
-    </div>
+    </div><!-- /FX stack -->
+
+    </div><!-- /main row -->
 
   </div>
 
@@ -359,10 +332,10 @@
         // ---- Column 0 ----
         { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 33, 34, 31, 32, 0] },
         { title: "BREATH",   col: 0, items: [25, 26, 27] },
-        { title: "FORMANT",  col: 0, className: "mt-auto", items: [39, 40] },
+        { title: "FORMANT",  col: 0, items: [39, 40] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
-        { title: "WANDER TGT", col: 1, className: "mt-auto", items: [19, 24, 20, 21, 35, 36] },
+        { title: "WANDER TGT", col: 1, items: [19, 24, 20, 21, 35, 36] },
         // ---- Column 2 ----
         { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
@@ -634,10 +607,10 @@
         // No width: the container is w-full (see #keyboard in the markup,
         // inside the Global card) and the library reads the computed width
         // once at init. The keyboard therefore resizes with the Global card.
-        // 154 px: sized so the Global card (Volume/BPM/LFO/Octave/keyboard)
-        // matches the Scope card (2x128 canvases + gaps) on the xl breakpoint.
-        // Black keys auto-scale to height/1.5 (~103 px) in qwerty-hancock.
-        height: 154,
+        // 128 px: compact, so the whole top row (controls + keyboard + scope)
+        // fits on one screen line at FHD. Black keys auto-scale to
+        // height/1.5 (~85 px) in qwerty-hancock.
+        height: 96,
         keyMap: {
           65: "A2", 87: "A#2", 83: "B2", 68: "C3", 82: "C#3",
           70: "D3", 84: "D#3", 71: "E3", 72: "F3", 85: "F#3",
@@ -712,8 +685,11 @@
       // Octave switching: radio group (the "Octave" buttons below the
       // keyboard, FlyonUI "Join radio with btn style") + Z/X hotkeys. Both go
       // through setOctaveShift(), so whichever one fires, the other is
-      // updated. Range: -2..+2 from the base A2..D4 (keys are relabeled,
-      // count and layout stay the same).
+      // updated. The buttons are labeled 1..5 (button N = base A2..D4 shifted
+      // by N-3, i.e. 1=A0..D2 .. 5=A4..D6); internally octaveShift stays on
+      // the -2..+2 scale (keys are relabeled, count and layout stay the same).
+      const OCTAVE_BTN_MIN = 1;
+      const OCTAVE_BTN_MAX = 5;
       const octaveRadios = Array.from(document.querySelectorAll('input[name="Octave"]'));
       function setOctaveShift(value, source) {
         value = Math.max(-2, Math.min(2, Math.round(value)));
@@ -722,19 +698,23 @@
           // and apply the shift.
         } else {
           // Z/X hotkey: check the matching radio so the button group reflects
-          // the current octave.
-          const r = octaveRadios.find((x) => x.value === String(value));
+          // the current octave (radio values are the 1..5 button numbers).
+          const r = octaveRadios.find((x) => x.value === String(value + 3));
           if (r) r.checked = true;
         }
         octaveShift = value;
         keyboard.setKeyOctave(octaveShift);
       }
       octaveRadios.forEach((r) => {
-        r.addEventListener("change", () => setOctaveShift(parseInt(r.value, 10), "radio"));
+        r.addEventListener("change", () => {
+          // Radio values are the 1..5 button numbers; shift = value - 3.
+          const btn = Math.max(OCTAVE_BTN_MIN, Math.min(OCTAVE_BTN_MAX, parseInt(r.value, 10)));
+          setOctaveShift(btn - 3, "radio");
+        });
       });
-      // Apply the initial shift (keyboard starts at -1, i.e. A1..D3) to the
-      // just-built keyboard: relabels the keys and syncs with the checked
-      // radio in the markup (see the value="-1" checked attribute above).
+      // Apply the initial shift (keyboard starts at -1, i.e. A1..D3 = button
+      // 2) to the just-built keyboard: relabels the keys and syncs with the
+      // checked radio in the markup (see the value="2" checked attribute above).
       setOctaveShift(octaveShift, "radio");
 
       // Z/X shift the whole range by one octave.
@@ -748,11 +728,13 @@
         }
       });
 
-      // scope
+      // scope (guarded: canvases may be absent in headless / minimal DOM;
+      // the rest of setupWebAudioAndUI must still run so sliders/presets
+      // are created even if the scope cannot start).
       let canvasWave = document.getElementById("TimeDomain");
       let canvasFFT = document.getElementById("FrequencyDomain");
-      let canvasWaveContext = canvasWave.getContext("2d");
-      let canvasFFTContext = canvasFFT.getContext("2d");
+      let canvasWaveContext = canvasWave ? canvasWave.getContext("2d") : null;
+      let canvasFFTContext = canvasFFT ? canvasFFT.getContext("2d") : null;
 
       // Theme-aware drawing colors, cached outside the per-frame loop. app.css
       // exposes --scope-bg/--scope-fg on .scope-canvas (mapped to the active
@@ -762,15 +744,18 @@
       let scopeBg = "";
       let scopeFg = "";
       function refreshScopeColors() {
+        if (!canvasWave) return;
         const s = getComputedStyle(canvasWave);
         scopeBg = s.getPropertyValue("--scope-bg").trim() || "#fff";
         scopeFg = s.getPropertyValue("--scope-fg").trim() || "#000";
       }
       refreshScopeColors();
-      new MutationObserver(refreshScopeColors).observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme"],
-      });
+      if (canvasWave) {
+        new MutationObserver(refreshScopeColors).observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-theme"],
+        });
+      }
 
       // Vertical gain for the time-domain trace. The analyser is tapped at the
       // unity-gain `envelope` node, i.e. it sees the RAW DSP output (before the
@@ -781,8 +766,11 @@
       // it can never leave the canvas even when the DSP peaks near 1.0.
       const WAVE_GAIN = 1.0;
 
-      draw();
+      if (canvasWaveContext && canvasFFTContext) {
+        draw();
+      }
       function draw() {
+        if (!canvasWaveContext || !canvasFFTContext) return;
         analyser.getFloatTimeDomainData(data);
 
         canvasWaveContext.fillStyle = scopeBg;
