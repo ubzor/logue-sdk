@@ -5,22 +5,21 @@ Sits between the DRONE-OSC (generator) and the DRONE-DELAY / DRONE-REVERB
 stages on the NTS-1 mkII; in the web simulator it runs inside the unified
 `drone-chain` wasm worklet (see `drone-chain/chain.h`).
 
-## The 8 parameters
+## The 7 parameters
 
-The MOD unit is an 8-slot unit. Every slot is a 10-bit knob (0..1023) that
+The MOD unit is a 7-slot unit. Every slot is a 10-bit knob (0..1023) that
 maps to a 0..1 DSP value. Defaults match `header.c` and
 `Modfx::Params::reset()`.
 
 | Slot | Name  | Range | Default      | Display | What it does |
 |------|-------|-------|--------------|---------|--------------|
-| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** exponentially (main base Juno 0.513 Hz × `e^(4.5·(TIME−0.5))` → ~0.05..~8 Hz; the sub voice is the same rate detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing); also drives the TREMO / FLNG LFO frequencies via stage-specific exp curves (TREMO 0.05..0.5 Hz, FLNG 0.30..5.0 Hz). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
-| 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), tremolo dip (DEPTH × 0.85), flanger delay (DEPTH² × ~2.5 ms) and feedback (DEPTH × 0.60), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
-| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/TREMO/FLNG/TAPE within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
+| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** and the FLNG LFO frequency via a shared exp curve (ENSE 0.0167..0.6 Hz = 60 s..1.7 s; FLNG 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
+| 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), flanger center delay (DEPTH²: 1..7.5 ms), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
+| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/FLNG/TAPE within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
 | 3    | CMODE | 0..1  | 512 (~50%)   | I/I+II/II | Chorus mode — **3 equal bands** (Formant-Vowel style): band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (≥2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
-| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/TREMO/FLNG/TAPE per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
-| 5    | TREMO | 0..1  | 307 (~30%)   | %       | Optical tremolo level. 0 = wire. Pure AM: level dips (TREMO·DEPTH·0.85) toward the LFO trough and returns to unity at the peak (no LPF/HPF split, so it no longer mutes the bass). R runs a quarter-cycle behind for a gentle shimmer. |
-| 6    | FLNG  | 0..1  | 0 (off)      | %       | Thru-zero flanger level. 0 = off. A short REAL delay line (DEPTH² × ~2.5 ms) swept by an LFO (× 3 rate; R half-cycle out for a stereo comb) + a feedback tap (DEPTH × 0.60, clamped < 0.85). |
-| 7    | TAPE  | 0..1  | 0 (off)      | %       | Tape wow + flutter level. 0 = off. Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the length of a ~3 ms REAL delay line → slow pitch/speed wander. Flutter: LCG white noise → one-pole LPF → level AM (± 0.25 × DEPTH). |
+| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/FLNG/TAPE per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
+| 5    | FLNG  | 0..1  | 0 (off)      | %       | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, 48..360 smp, center set by DEPTH²), each with its OWN LFO phase; the LFO sweeps each read tap ±20% × DEPTH² (0.02..2.0 Hz; R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH (no resonant peaks, no “locking” at the LFO turnaround). Small feedback (FLNG × 0.15, re-injected into the line, Q ~1.18, no self-oscillation). |
+| 6    | TAPE  | 0..1  | 0 (off)      | %       | Tape wow + flutter level. 0 = off. Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the length of a ~3 ms REAL delay line → slow pitch/speed wander. Flutter: LCG white noise → one-pole LPF → level AM (± 0.25 × DEPTH). |
 
 > **Display (device):** all 8 slots are `frac = 0`, `type_none` — the NTS-1
 > display shows the raw 10-bit value 0..1023 (e.g. `TIME 1023`), NOT a
@@ -42,12 +41,12 @@ layout) from the interleaved buffer -- i.e. it consumed the L half only and
 walked the R half as if it were the next L frames (a half-rate garbled
 signal; clean in the web chain only because L==R there). The per-sample path
 now reads both channels and every stateful stage (ENSE pre/post LPF, the
-chorus delay voices, TREMO/FLNG/TAPE) is per-channel.
+chorus delay voices, FLNG/TAPE) is per-channel.
 
     in (stereo L/R)
       -> ENSE  (Juno-60 BBD stereo chorus: 2 MONO REAL delay lines @
                main 15..20 ms / sub 28..34 ms, each driven by a TRIANGLE LFO
-               set K-rate from TIME (main = base Juno 0.513 Hz, sub detuned
+               set K-rate from TIME (main = shared exp curve, sub detuned
                x1.0618 -> shared heartbeat, voices drift in/out of phase); each
                LFO reads the delay at two fractional taps (t and 1-t) and sums
                them with
@@ -55,10 +54,9 @@ chorus delay voices, TREMO/FLNG/TAPE) is per-channel.
                DEPTH scales the LFO delay-spread around each voice center;
                BBD SoftLimit + per-channel 1st-order post-LPF for the stereo
                image; CHORUS dry/wet blend, 0 = wire, 1 = dry+wet)
-      -> TREMO (optical tremolo: pure AM, level dips at the LFO trough;
-               R runs a quarter-cycle behind)
-      -> FLNG  (thru-zero flanger: short REAL delay swept by LFO x3 rate,
-               R half-cycle out for a stereo comb + feedback tap)
+      -> FLNG  (thru-zero flanger, multi-line: 4 mono REAL delay lines 1..7.5 ms,
+               each own LFO phase, small feedback re-injected; the 4 de-tuned
+               comb gratings average into a smooth wash; R half-cycle out per line)
       -> TAPE  (wow: per-channel LCG random-walk on a ~3 ms REAL delay line;
                flutter: LCG noise -> LPF -> level AM)
       -> makeup gain (0.9)
@@ -71,7 +69,7 @@ one-pole HPF there (tau ~2 s) would have eaten the low-frequency DRONE signal
 for no benefit. The 0.9 makeup (kModMakeup) simply leaves 1 dB of headroom
 against the chorus/flanger level peaks.
 
-Every level stage (ENSE / TREMO / FLNG / TAPE) is a dry/wet 0..1 blend: at 0
+Every level stage (ENSE / FLNG / TAPE) is a dry/wet 0..1 blend: at 0
 the stage is a pure wire (regression-safe). The DEL/REV stages downstream see
 the MOD output as their input. (The formant + comb resonators are part of the
 upstream DRONE-OSC unit — see `drone-osc/README.md`.)
@@ -79,7 +77,7 @@ upstream DRONE-OSC unit — see `drone-osc/README.md`.)
 ## DRIFT (the shared self-motion ceiling)
 
 Like RATE in the oscillator, DRIFT is a single knob that gates how far the
-four "level" stages (ENSE/TREMO/FLNG/TAPE) wander on their own. The design is
+three "level" stages (ENSE/FLNG/TAPE) wander on their own. The design is
 a K-rate random-walk:
 
 - Each of the 4 stages gets a target offset within [−d, +d] (d = DRIFT, 0..1)
@@ -127,7 +125,7 @@ K-rate computation in this unit uses only:
   separate TU).
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget, LCG
   constants, delay-line lengths) + the libm-free helpers.
-- `header.c` — the 8 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/TREMO/FLNG/TAPE)
+- `header.c` — the 7 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLNG/TAPE)
   with their defaults.
 - `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
   to `Modfx::setParameter`; no multiplexer, unlike the OSC's 4-slot

@@ -159,8 +159,8 @@
 
     <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
     <!-- Sits BELOW the Parameters card so the oscillator params stay primary.
-         MOD is a full 8-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
-         TREMO / FLNG / TAPE), driven through
+         MOD is a full 7-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
+         FLNG / TAPE), driven through
          Module.setFxParam(stage, which, raw); DEL / REV keep their own TIME /
          DEPTH. -->
     <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
@@ -199,11 +199,6 @@
             <span class="w-28 text-sm font-medium shrink-0">Chorus</span>
             <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
             <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
-          </label>
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Tremo</span>
-            <input type="range" min="0" max="1023" value="307" step="1" id="fxmod_tremo" class="range range-primary range-sm flex-1">
-            <span id="fxmod_tremo_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">30%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-28 text-sm font-medium shrink-0">Flng</span>
@@ -1445,13 +1440,13 @@
       // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
       // are driven through Module.setFxParam(stage, which, raw):
       //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: MOD -> 0..7 (TIME/DEPTH/DRIFT/CMODE/CHORUS/TREMO/FLNG/TAPE)
+      //   which: MOD -> 0..6 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLNG/TAPE)
       //          DEL/REV -> 0..1 (TIME/DEPTH)
       //   raw:   0..1023 (10-bit knob value)
       // The worklet thread applies the value to the live DSP each block
       // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "tremo", "flng", "tape"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flng", "tape"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];
