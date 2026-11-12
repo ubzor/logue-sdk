@@ -58,7 +58,7 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // [0] TIME: LFO tempo (0..1) — sweeps ENSE chorus LFO rate (0.05..~4.5 Hz)
-        // exponentially; also drives FLNG LFO rate.
+        // exponentially; also drives FLANGER LFO rate.
         {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"TIME"}},
 
         // [1] DEPTH: per-stage modulation depth (0..1) — chorus LFO spread,
@@ -76,10 +76,7 @@ const __unit_header unit_header_t unit_header = {
         // [4] CHORUS: dry/wet level of the chorus (0..1). 0 = dry only, 1 = full chorus.
         {0, 1023, 0, 1023, k_unit_param_type_none, 0, 0, 0, {"CHORUS"}},
 
-        // [5] FLNG: thru-zero flanger level (0..1). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLNG"}},
-
-        // [6] TAPE: tape wow+flutter level (0..1). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"TAPE"}},
+        // [5] FLANGER: thru-zero flanger level (0..1). 0 = off.
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLANGER"}},
     },
 };

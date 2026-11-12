@@ -37,9 +37,9 @@
  *
  *  DRONE-MOD (modfx) DSP: a 3-stage modulation stack for the DRONE path.
  *  All 7 header slots are live (TIME / DEPTH / DRIFT / CMODE / CHORUS /
- *  FLNG / TAPE, see header.c). The per-sample audio path is defined inline below:
+ *  FLANGER / TAPE, see header.c). The per-sample audio path is defined inline below:
  *    in (stereo) -> ENSE (Juno-60 BBD stereo chorus) ->
- *    FLNG (thru-zero flanger) -> TAPE (wow+flutter) -> makeup (0.9) -> out.
+ *    FLANGER (thru-zero flanger) -> TAPE (wow+flutter) -> makeup (0.9) -> out.
  *  DRIFT is a K-rate LCG random-walk on the three wet levels (shared ceiling,
  *  L1 budget); the walk state is in place but the levels are currently driven
  *  from the manual knobs (DRIFT default 0 = static, regression-safe).
@@ -64,14 +64,12 @@ public:
     DRIFT,      // shared self-motion ceiling (0..1, 0 = static)
     CMODE,      // chorus mode (0..1) -> 3 equal bands: I / I+II / II
     ENSE,       // dry/wet of the chorus (0..1). 0 = dry, 1 = full.
-    FLNG,       // thru-zero flanger level (0..1)
-    TAPE,       // tape wow+flutter level (0..1)
-    NUM_PARAMS  // = 7
+    FLANGER,    // thru-zero flanger level (0..1)
+    NUM_PARAMS  // = 6
   };
 
   // Note: Make sure that default param values correspond to declarations in header.c
-  // (header.c: TIME 512, DEPTH 511, DRIFT 0, CMODE 512, CHORUS 1023,
-  //  FLNG 0, TAPE 0).
+  // (header.c: TIME 512, DEPTH 511, DRIFT 0, CMODE 512, CHORUS 1023, FLANGER 0).
   struct Params
   {
     float time;   // 0..1 (LFO tempo -> ENSE chorus LFO rate)
@@ -79,8 +77,7 @@ public:
     float drift;  // 0..1 (shared self-motion ceiling, 0 = static)
     float cmode;  // 0..1 (chorus mode, 3 equal bands: I / I+II / II)
     float ense;   // 0..1 (chorus dry/wet: 0=dry, 1=full)
-    float flng;   // 0..1 (flanger wet)
-    float tape;   // 0..1 (tape wow+flutter wet)
+    float flanger;   // 0..1 (flanger wet)
 
     void reset()
     {
@@ -89,8 +86,7 @@ public:
       drift = 0.f;    // 0 (static, regression-safe)
       cmode = 0.5f;   // 512/1023 (band 1 = I+II, classic Juno)
       ense = 0.f;     // 0/1023 (dry by default; user enables chorus)
-      flng = 0.f;     // 0 (off)
-      tape = 0.f;     // 0 (off)
+      flanger = 0.f;     // 0 (off)
     }
 
     Params() { reset(); }
@@ -115,11 +111,8 @@ public:
     case ENSE:
       params_.ense = param_10bit_to_f32(value);
       break;
-    case FLNG:
-      params_.flng = param_10bit_to_f32(value);
-      break;
-    case TAPE:
-      params_.tape = param_10bit_to_f32(value);
+    case FLANGER:
+      params_.flanger = param_10bit_to_f32(value);
       break;
     default:
       break;
@@ -137,7 +130,7 @@ public:
   void init(float *allocated_buffer) override final
   {
     // Slice the single SDRAM allocation (getBufferSize() floats) into the six
-    // interleaved delay lines (ENSE L/R, FLNG L/R, TAPE L/R). On the NTS-1 this
+    // interleaved delay lines (ENSE L/R, FLANGER L/R, TAPE L/R). On the NTS-1 this
     // comes from unit.cc's sdram_alloc; in the web chain, Chain::init slices
     // the chain's single allocation and passes the MOD slice here.
     buffer_ = allocated_buffer;
@@ -147,13 +140,12 @@ public:
     ense_sub_delay_  = p; p += modfx_consts::kEnseLineLenSmp;
     ense_main_w_ = 0U;
     ense_sub_w_ = 0U;
-    // FLNG: kFlngLineCount MONO delay lines (bucket-brigade), each kFlngLineLenSmp.
-    flng_buf_  = p;  p += modfx_consts::kFlngLineCount * modfx_consts::kFlngLineLenSmp;
-    for (uint32_t i = 0; i < modfx_consts::kFlngLineCount; ++i) flng_w_[i] = 0U;
-    // TAPE: interleaved L/R pair.
-    tape_buf_  = p;  p += 2 * modfx_consts::kTapeLineLenSmp;
+    // FLANGER: kFlangerLineCount MONO delay lines (bucket-brigade), each kFlangerLineLenSmp.
+    flanger_buf_  = p;  p += modfx_consts::kFlangerLineCount * modfx_consts::kFlangerLineLenSmp;
+    for (uint32_t i = 0; i < modfx_consts::kFlangerLineCount; ++i) flanger_w_[i] = 0U;
 
-    // Zero-clear the rest (FLNG + TAPE lines).
+
+    // Zero-clear the rest (FLANGER + TAPE lines).
     if (buffer_)
     {
       // ENSE delay lines already cleared via .clear(); clear the remaining.
@@ -161,17 +153,14 @@ public:
       for (uint32_t i = ense_bytes; i < getBufferSize(); ++i) buffer_[i] = 0.f;
     }
 
-    // Line heads + FLNG filter state.
-    for (uint32_t i = 0; i < modfx_consts::kFlngLineCount; ++i) flng_w_[i] = 0U;
-    flng_hpf_x_ = 0.f; flng_hpf_y_ = 0.f; flng_lpf_l_ = 0.f; flng_lpf_r_ = 0.f;
-    tape_w_ = 0U;
-    tape_wow_l_ = 0.f;
-    tape_wow_r_ = 0.f;
+    // Line heads + FLANGER filter state.
+    for (uint32_t i = 0; i < modfx_consts::kFlangerLineCount; ++i) flanger_w_[i] = 0U;
+    flanger_hpf_x_ = 0.f; flanger_hpf_y_ = 0.f; flanger_lpf_l_ = 0.f; flanger_lpf_r_ = 0.f;
+
 
     params_.reset();
 
-    lcg_state_ = modfx_consts::kLcgSeed;
-    flng_lfo_phase_ = 0.f;
+    flanger_lfo_phase_ = 0.f;
 
     // ENSE Juno-chorus LFOs. q31 phase accumulators; the increment (w_) is
     // recomputed every block in K-rate from TIME (LFO rate sweep). Seed here
@@ -197,8 +186,6 @@ public:
       drift_tau_[i] = 1.f;
       drift_next_gap_[i] = 1U;
     }
-
-    tape_lpf_ = 0.f;
   }
 
   void teardown() override final { buffer_ = nullptr; }
@@ -214,30 +201,26 @@ public:
   volatile float mod_output_peak_ = 0.f;
 
 private:
-  // ---- DRIFT walk (one per level stage: ENSE/FLNG/TAPE) -------------------
+  // ---- DRIFT walk (one per level stage: ENSE/FLANGER/TAPE) -------------------
   static constexpr int kDriftCount = 3;
   float drift_target_[kDriftCount];
   float drift_cur_[kDriftCount];
   float drift_tau_[kDriftCount];
   uint32_t drift_next_gap_[kDriftCount];
 
-  // ---- LFO phase accumulators (ENSE / FLNG) ---------------------------------
+  // ---- LFO phase accumulators (ENSE / FLANGER) ---------------------------------
   // ENSE uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
   // detuned x1.0618; both swept live by TIME (the increments w_ are recomputed
-  // K-rate). FLNG uses a hand-rolled float phase accumulator.
+  // K-rate). FLANGER uses a hand-rolled float phase accumulator.
   // ENSE LFOs are hand-rolled q31 phase accumulators (same as dsp::SimpleLFO
   // but without the CMSIS/arm_math.h dependency needed for the web sim).
   int32_t ense_lfo1_phase_ = 0;  // Juno LFO 1 phase (q31)
   int32_t ense_lfo1_w_ = 0;      // Juno LFO 1 increment (q31, set K-rate from TIME)
   int32_t ense_lfo2_phase_ = 0;  // Juno LFO 2 phase (q31)
   int32_t ense_lfo2_w_ = 0;      // Juno LFO 2 increment (q31, set K-rate from TIME)
-  float flng_lfo_phase_;
-
-  // ---- LCG (Park-Miller-Carta) state -----------------------------------------
-  uint32_t lcg_state_;
+  float flanger_lfo_phase_;
 
   // ---- Filter / feedback states ----------------------------------------------
-  float tape_lpf_;    // flutter noise one-pole LPF state
   // ENSE Juno-chorus LPFs: hand-rolled 1st-order LPF (one-pole) states,
   // per-channel, per-voice. Same math as dsp::BiQuad::setFOLP + process_fo
   // but without the CMSIS dependency. State: y = ff0*x + z; z = ff1*x - fb1*y.
@@ -260,18 +243,14 @@ private:
   float *ense_sub_delay_ = nullptr;   // Juno sub voice (mono, 512 smp)
   uint32_t ense_main_w_ = 0U;         // main delay write head
   uint32_t ense_sub_w_ = 0U;          // sub delay write head
-  float *flng_buf_;  // flanger delay lines: kFlngLineCount MONO lines x kFlngLineLenSmp
-  float *tape_buf_;  // tape wow delay lines [2 * kTapeLineLenSmp]
-  uint32_t flng_w_[modfx_consts::kFlngLineCount]; // per-line write head, FLNG
-  uint32_t tape_w_;  // line head, TAPE
-  float tape_wow_l_; // per-channel smoothed wow-walk state (L)
-  float tape_wow_r_; // per-channel smoothed wow-walk state (R)
+  float *flanger_buf_;  // flanger delay lines: kFlangerLineCount MONO lines x kFlangerLineLenSmp
+  uint32_t flanger_w_[modfx_consts::kFlangerLineCount]; // per-line write head, FLANGER
 
-  // FLNG filter state (cFlanger-inspired: HPF on feedback + LPF on wet output).
-  float flng_hpf_x_ = 0.f;  // HPF: previous input (feedback tap)
-  float flng_hpf_y_ = 0.f;  // HPF: previous output (filtered feedback)
-  float flng_lpf_l_ = 0.f;  // LPF: L wet output state
-  float flng_lpf_r_ = 0.f;  // LPF: R wet output state
+  // FLANGER filter state (cFlanger-inspired: HPF on feedback + LPF on wet output).
+  float flanger_hpf_x_ = 0.f;  // HPF: previous input (feedback tap)
+  float flanger_hpf_y_ = 0.f;  // HPF: previous output (filtered feedback)
+  float flanger_lpf_l_ = 0.f;  // LPF: L wet output state
+  float flanger_lpf_r_ = 0.f;  // LPF: R wet output state
   float *buffer_; // SDRAM base (getBufferSize() floats, owned by the runtime)
 
   // ---- Per-sample DSP helper functions (static inline, no libm) ----
@@ -387,7 +366,7 @@ private:
   // RE-INJECTED into the delay line (not summed at the output), so the
   // resonant "jet" build-up happens inside the line and stays smooth. `head`
   // is advanced once per sample (both channels), exactly like lineWrite.
-  static void flngWrite(float *buf, uint32_t len, uint32_t &head, float xl, float xr,
+  static void flangerWrite(float *buf, uint32_t len, uint32_t &head, float xl, float xr,
                         float fb, float prevl, float prevr)
   {
     head = (head + 1U) % len;
@@ -405,7 +384,7 @@ private:
     return p;
   }
 
-  // The per-sample audio path (upmix -> ENSE -> FLNG -> TAPE ->
+  // The per-sample audio path (upmix -> ENSE -> FLANGER -> TAPE ->
   // makeup -> out). Defined INLINE inside the class so that
   // multiple translation units can each #include modfx.h through different
   // absolute paths without a duplicate-symbol link error (ODR: inline
@@ -418,7 +397,7 @@ private:
 
   // ---- K-rate LFO frequencies (from TIME; Taylor exp, no libm) --------------
   const float t = p.time;
-  const float flng_freq = modfx_consts::kFlngLFOMin * modfx_expf(modfx_consts::kFlngLFOlnR * t);
+  const float flanger_freq = modfx_consts::kFlangerLFOMin * modfx_expf(modfx_consts::kFlangerLFOlnR * t);
 
   // ---- ENSE Juno-chorus K-rate setup ----------------------------------------
   // CMODE knob -> Juno voice blend, 3 EQUAL bands (Formant-Vowel style):
@@ -432,7 +411,7 @@ private:
   const float ense_gain_sub  = (ense_mode == 0) ? modfx_consts::kEnseGainI[1]
                             : (ense_mode == 1) ? modfx_consts::kEnseGainI2[1] : modfx_consts::kEnseGainII[1];
 
-  // TIME knob -> ENSE chorus LFO rate (shared exp curve, same as FLNG).
+  // TIME knob -> ENSE chorus LFO rate (shared exp curve, same as FLANGER).
   // The main-voice LFO frequency comes from the common
   // kEnseLFOMin * exp(kEnseLFOlnR * TIME) curve (0.0167 Hz = 60 s at TIME=0
   // -> 0.6 Hz = 1.7 s at TIME=1). The sub-voice LFO is DETUNED against the
@@ -457,17 +436,17 @@ private:
   // swept by TIME: CMODE selects the voice, TIME drives the LFO rate.
   ense_lpf_alpha_ = 0.5f;
 
-  // FLNG (multi-line / bucket-brigade): small feedback + center delay. FOUR mono
-  // lines, each with its own LFO phase (kFlngLinePhase), average into a smooth
-  // thru-zero comb WASH. Small feedback (FLNG × 0.15, Q ~1.18) smooths the comb
+  // FLANGER (multi-line / bucket-brigade): small feedback + center delay. FOUR mono
+  // lines, each with its own LFO phase (kFlangerLinePhase), average into a smooth
+  // thru-zero comb WASH. Small feedback (FLANGER × 0.15, Q ~1.18) smooths the comb
   // peaks; the 4 de-tuned lines do not align at the LFO turnaround. Center delay
   // scales with DEPTH^2 (48..360 smp = 1..7.5 ms); each line's LFO sweeps the
   // read tap ±20% × DEPTH^2.
-  float flng_fb = p.flng > 0.f ? (p.flng * modfx_consts::kFlngFbMax) : 0.f;
-  if (flng_fb > modfx_consts::kFlngFbMax) flng_fb = modfx_consts::kFlngFbMax;
+  float flanger_fb = p.flanger > 0.f ? (p.flanger * modfx_consts::kFlangerFbMax) : 0.f;
+  if (flanger_fb > modfx_consts::kFlangerFbMax) flanger_fb = modfx_consts::kFlangerFbMax;
   const float d2 = p.depth * p.depth;
-  const float flng_delay_smp = modfx_consts::kFlngDelayMinSmp +
-      d2 * (modfx_consts::kFlngDelayMaxSmp - modfx_consts::kFlngDelayMinSmp);
+  const float flanger_delay_smp = modfx_consts::kFlangerDelayMinSmp +
+      d2 * (modfx_consts::kFlangerDelayMaxSmp - modfx_consts::kFlangerDelayMinSmp);
 
   // ENSE Juno-chorus delay ranges (samples). The LFO sweeps within these.
   const float ense_main_dmin = modfx_consts::kEnseDelayMinMs * 0.001f * sr;
@@ -475,10 +454,7 @@ private:
   const float ense_sub_dmin  = modfx_consts::kEnseSubDelayMinMs * 0.001f * sr;
   const float ense_sub_dmax  = modfx_consts::kEnseSubDelayMaxMs * 0.001f * sr;
 
-  // TAPE: wow delay base (samples) + flutter/wow depth (from DEPTH).
-  const float tape_wow_smp = modfx_consts::kTapeWowBaseSmp;
-  const float tape_wow_amt = p.depth * modfx_consts::kTapeWowAmt;
-  const float tape_flutter_amt = p.depth * modfx_consts::kTapeFlutterAmt;
+
 
   // ---- Per-sample path ------------------------------------------------------
   for (uint32_t n = 0; n < frames; ++n)
@@ -502,8 +478,7 @@ private:
     // Per-channel working vars (L/R) + per-stage wet amounts.
     float L = in_l;
     float R = in_r;
-    float fln_wet = p.flng;
-    float tap_wet = p.tape;
+    float fln_wet = p.flanger;
 
     // ---- ENSE: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------
     // Architecture: peterall/junologue-chorus (MIT), adapted with hand-rolled
@@ -575,10 +550,10 @@ private:
       R = R + ense_master * wet_r;
     }
 
-    // ---- FLNG: thru-zero flanger (multi-line / bucket-brigade) ----------------
+    // ---- FLANGER: thru-zero flanger (multi-line / bucket-brigade) ----------------
     // Based on the cFlanger reference (calgoheen/cgo_modules Flanger.h):
     //   - 4 mono delay lines, average into a smooth comb WASH.
-    //   - Feedback (FLNG x 0.15, Q ~1.18) re-injected through a HPF (~200 Hz)
+    //   - Feedback (FLANGER x 0.15, Q ~1.18) re-injected through a HPF (~200 Hz)
     //     so bass does NOT build up in the feedback loop (cFlanger's
     //     "safeBass" -- the fix for the "distorted peaks" / "harsh" symptom).
     //   - Wet output goes through a LPF (~2 kHz) to tame the comb's high-end
@@ -589,27 +564,27 @@ private:
     //     triangle, not sine).
     //   - LFO sweeps +/-10% x DEPTH^2 around the DEPTH^2 center (48..360 smp).
     //   - R is half a cycle out of L (stereo comb).
-    // out = dry + FLNG * 0.5 * LPF(mean of 4 line wet taps). fln_wet == 0 -> wire.
+    // out = dry + FLANGER * 0.5 * LPF(mean of 4 line wet taps). fln_wet == 0 -> wire.
     if (fln_wet > 0.f)
     {
       // Triangle LFO (constant velocity) instead of sine: no dwelling at peaks.
-      lfoStep(flng_lfo_phase_, flng_freq);
-      const float lfo_tri_l = lfoTri(flng_lfo_phase_);
-      const float lfo_tri_r = lfoTri(phaseShift(flng_lfo_phase_, 0.5f)); // R half-cycle out
+      lfoStep(flanger_lfo_phase_, flanger_freq);
+      const float lfo_tri_l = lfoTri(flanger_lfo_phase_);
+      const float lfo_tri_r = lfoTri(phaseShift(flanger_lfo_phase_, 0.5f)); // R half-cycle out
 
-      const uint32_t LEN = modfx_consts::kFlngLineLenSmp;
-      const float flng_len_f = static_cast<float>(LEN);
-      const float sweep = flng_delay_smp * 0.15f * d2; // +/-15% x DEPTH^2 (deeper wash)
-      const float ninv = 0.75f / (float)modfx_consts::kFlngLineCount; // 0.75 wet gain / 4 lines (deeper wash)
+      const uint32_t LEN = modfx_consts::kFlangerLineLenSmp;
+      const float flanger_len_f = static_cast<float>(LEN);
+      const float sweep = flanger_delay_smp * 0.15f * d2; // +/-15% x DEPTH^2 (deeper wash)
+      const float ninv = 0.75f / (float)modfx_consts::kFlangerLineCount; // 0.75 wet gain / 4 lines (deeper wash)
 
       float wetsum_l = 0.f, wetsum_r = 0.f;
-      for (uint32_t li = 0; li < modfx_consts::kFlngLineCount; ++li)
+      for (uint32_t li = 0; li < modfx_consts::kFlangerLineCount; ++li)
       {
-        float *line = flng_buf_ + li * LEN;   // mono line li
-        const uint32_t H = flng_w_[li];
+        float *line = flanger_buf_ + li * LEN;   // mono line li
+        const uint32_t H = flanger_w_[li];
         const uint32_t Hp = (H > 0U) ? (H - 1U) : (LEN - 1U); // one slot back (feedback tap)
 
-        const float lfo_l = lfo_tri_l;  // all lines share the same LFO phase (kFlngLinePhase = {0,0,0,0})
+        const float lfo_l = lfo_tri_l;  // all lines share the same LFO phase (kFlangerLinePhase = {0,0,0,0})
         const float lfo_r = lfo_tri_r;  // R is half a cycle out
 
         // cFlanger: feedback goes through a HPF (safeBass) before re-injection.
@@ -620,18 +595,18 @@ private:
         const float prev = line[Hp];
         // HPF the feedback tap (per line, shared state -- use a single HPF for
         // all 4 lines since they all process the same signal L==R).
-        const float fb_hpf = (1.f - hpf_a) * (prev - flng_hpf_x_);
-        flng_hpf_x_ = prev;
-        flng_hpf_y_ = hpf_a * flng_hpf_y_ + fb_hpf;
+        const float fb_hpf = (1.f - hpf_a) * (prev - flanger_hpf_x_);
+        flanger_hpf_x_ = prev;
+        flanger_hpf_y_ = hpf_a * flanger_hpf_y_ + fb_hpf;
         // Write (x + fb * HPF(prev)) at the new head.
-        flngWrite(line, LEN, flng_w_[li], x, x, flng_fb, flng_hpf_y_, flng_hpf_y_);
+        flangerWrite(line, LEN, flanger_w_[li], x, x, flanger_fb, flanger_hpf_y_, flanger_hpf_y_);
 
-        const float mod_l = flng_delay_smp + sweep * lfo_l;
-        const float mod_r = flng_delay_smp + sweep * lfo_r;
-        const float d_l = (mod_l < 1.f) ? 1.f : ((mod_l > flng_len_f - 1.f) ? (flng_len_f - 1.f) : mod_l);
-        const float d_r = (mod_r < 1.f) ? 1.f : ((mod_r > flng_len_f - 1.f) ? (flng_len_f - 1.f) : mod_r);
-        const float w_l = lineReadF(line, LEN, 0, flng_w_[li], d_l);
-        const float w_r = lineReadF(line, LEN, 0, flng_w_[li], d_r);
+        const float mod_l = flanger_delay_smp + sweep * lfo_l;
+        const float mod_r = flanger_delay_smp + sweep * lfo_r;
+        const float d_l = (mod_l < 1.f) ? 1.f : ((mod_l > flanger_len_f - 1.f) ? (flanger_len_f - 1.f) : mod_l);
+        const float d_r = (mod_r < 1.f) ? 1.f : ((mod_r > flanger_len_f - 1.f) ? (flanger_len_f - 1.f) : mod_r);
+        const float w_l = lineReadF(line, LEN, 0, flanger_w_[li], d_l);
+        const float w_r = lineReadF(line, LEN, 0, flanger_w_[li], d_r);
         wetsum_l += w_l;
         wetsum_r += w_r;
       }
@@ -639,49 +614,12 @@ private:
       // One-pole LPF: y[n] = a*x[n] + (1-a)*y[n-1], a = 1-exp(-2*pi*fc/sr).
       // fc = 2000 Hz @ 48 kHz -> a = 1-exp(-2*pi*2000/48000) = 1-exp(-0.2618) = 0.2301.
       const float lpf_a = 0.5768f; // precomputed: 1-exp(-2*pi*5000/48000) (5 kHz cutoff: more "sparkle" in the wash)
-      flng_lpf_l_ = lpf_a * (wetsum_l * ninv) + (1.f - lpf_a) * flng_lpf_l_;
-      flng_lpf_r_ = lpf_a * (wetsum_r * ninv) + (1.f - lpf_a) * flng_lpf_r_;
-      // out = dry + FLNG * LPF(wet_mean)  (ninv already includes 0.5 normalization)
-      const float y_l = L + fln_wet * flng_lpf_l_;
-      const float y_r = R + fln_wet * flng_lpf_r_;
+      flanger_lpf_l_ = lpf_a * (wetsum_l * ninv) + (1.f - lpf_a) * flanger_lpf_l_;
+      flanger_lpf_r_ = lpf_a * (wetsum_r * ninv) + (1.f - lpf_a) * flanger_lpf_r_;
+      // out = dry + FLANGER * LPF(wet_mean)  (ninv already includes 0.5 normalization)
+      const float y_l = L + fln_wet * flanger_lpf_l_;
+      const float y_r = R + fln_wet * flanger_lpf_r_;
       L = y_l; R = y_r;
-    }
-
-    // ---- TAPE: wow (random-walk delay) + flutter (noise AM) --------------------
-    // Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the
-    // length of a ~3 ms REAL delay line -> slow pitch/speed wander (independent
-    // per channel, so L/R drift slightly apart). Flutter: the same LCG's
-    // smoothed noise amplitude-modulates the level. wet == 0 -> wire.
-    if (tap_wet > 0.f)
-    {
-      // Flutter: LCG white noise -> one-pole LPF -> level mod (slow, smooth).
-      lcg_state_ = (modfx_consts::kLcgA * lcg_state_) & 0x7fffffffu;
-      if (lcg_state_ == 0u) lcg_state_ = modfx_consts::kLcgSeed;
-      const float noise = static_cast<float>(lcg_state_) * (2.f / 2147483647.f) - 1.f;
-      const float flut = onelpf(tape_lpf_, noise, modfx_consts::kTapeLpfAlpha);
-      const float gain = 1.f + tape_flutter_amt * flut;
-
-      const float tape_len_f = static_cast<float>(modfx_consts::kTapeLineLenSmp);
-      lineWrite(tape_buf_, modfx_consts::kTapeLineLenSmp, tape_w_, L, R); // store both, advance once
-      for (int ch = 0; ch < 2; ++ch)
-      {
-        const float x = (ch == 0) ? L : R;
-
-        // Per-channel wow: LCG random-walk -> one-pole-smoothed -> delay mod.
-        lcg_state_ = (modfx_consts::kLcgA * lcg_state_) & 0x7fffffffu;
-        if (lcg_state_ == 0u) lcg_state_ = modfx_consts::kLcgSeed;
-        const float walk = static_cast<float>(lcg_state_) * (2.f / 2147483647.f) - 1.f;
-        float &wow_s = (ch == 0) ? tape_wow_l_ : tape_wow_r_;
-        const float s = onelpf(wow_s, walk, 0.02f); // smoothed wander (slow)
-        float delay = tape_wow_smp * (1.f + tape_wow_amt * s);
-        if (delay < 1.f) delay = 1.f;
-        if (delay > tape_len_f - 1.f) delay = tape_len_f - 1.f;
-
-        const float wow = lineReadF(tape_buf_, modfx_consts::kTapeLineLenSmp, ch, tape_w_, delay);
-        const float wet = wow * gain;
-        const float y = x + tap_wet * (wet - x);
-        if (ch == 0) L = y; else R = y;
-      }
     }
 
     // ---- Makeup gain + write the stereo output -------------------------------

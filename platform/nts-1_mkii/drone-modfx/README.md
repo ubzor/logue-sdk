@@ -13,13 +13,12 @@ maps to a 0..1 DSP value. Defaults match `header.c` and
 
 | Slot | Name  | Range | Default      | Display | What it does |
 |------|-------|-------|--------------|---------|--------------|
-| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** and the FLNG LFO frequency via a shared exp curve (ENSE 0.0167..0.6 Hz = 60 s..1.7 s; FLNG 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
+| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** and the FLANGER LFO frequency via a shared exp curve (ENSE 0.0167..0.6 Hz = 60 s..1.7 s; FLANGER 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). TAPE uses LCG noise, not an LFO, so TIME does not move it. |
 | 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), flanger center delay (DEPTH²: 1..7.5 ms), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
-| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/FLNG/TAPE within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
+| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all four level stages stay at their manual values. > 0, a K-rate random-walk (LCG-driven) nudges each of ENSE/FLANGER within [manual·(1−d), manual·(1+d)], with an L1 budget (1.5) so the wandering "percolates" between layers instead of all four moving at once. |
 | 3    | CMODE | 0..1  | 512 (~50%)   | I/I+II/II | Chorus mode — **3 equal bands** (Formant-Vowel style): band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (≥2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
-| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/FLNG/TAPE per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
-| 5    | FLNG  | 0..1  | 0 (off)      | %       | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, 48..360 smp, center set by DEPTH²), each with its OWN LFO phase; the LFO sweeps each read tap ±20% × DEPTH² (0.02..2.0 Hz; R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH (no resonant peaks, no “locking” at the LFO turnaround). Small feedback (FLNG × 0.15, re-injected into the line, Q ~1.18, no self-oscillation). |
-| 6    | TAPE  | 0..1  | 0 (off)      | %       | Tape wow + flutter level. 0 = off. Wow: a per-channel LCG random-walk (one-pole smoothed) modulates the length of a ~3 ms REAL delay line → slow pitch/speed wander. Flutter: LCG white noise → one-pole LPF → level AM (± 0.25 × DEPTH). |
+| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/FLANGER per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
+| 5    | FLANGER  | 0..1  | 0 (off)      | %       | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, 48..360 smp, center set by DEPTH²), each with its OWN LFO phase; the LFO sweeps each read tap ±20% × DEPTH² (0.02..2.0 Hz; R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH (no resonant peaks, no “locking” at the LFO turnaround). Small feedback (FLANGER × 0.15, re-injected into the line, Q ~1.18, no self-oscillation). |
 
 > **Display (device):** all 8 slots are `frac = 0`, `type_none` — the NTS-1
 > display shows the raw 10-bit value 0..1023 (e.g. `TIME 1023`), NOT a
@@ -41,7 +40,7 @@ layout) from the interleaved buffer -- i.e. it consumed the L half only and
 walked the R half as if it were the next L frames (a half-rate garbled
 signal; clean in the web chain only because L==R there). The per-sample path
 now reads both channels and every stateful stage (ENSE pre/post LPF, the
-chorus delay voices, FLNG/TAPE) is per-channel.
+chorus delay voices, FLANGER) is per-channel.
 
     in (stereo L/R)
       -> ENSE  (Juno-60 BBD stereo chorus: 2 MONO REAL delay lines @
@@ -54,7 +53,7 @@ chorus delay voices, FLNG/TAPE) is per-channel.
                DEPTH scales the LFO delay-spread around each voice center;
                BBD SoftLimit + per-channel 1st-order post-LPF for the stereo
                image; CHORUS dry/wet blend, 0 = wire, 1 = dry+wet)
-      -> FLNG  (thru-zero flanger, multi-line: 4 mono REAL delay lines 1..7.5 ms,
+      -> FLANGER  (thru-zero flanger, multi-line: 4 mono REAL delay lines 1..7.5 ms,
                each own LFO phase, small feedback re-injected; the 4 de-tuned
                comb gratings average into a smooth wash; R half-cycle out per line)
       -> TAPE  (wow: per-channel LCG random-walk on a ~3 ms REAL delay line;
@@ -69,7 +68,7 @@ one-pole HPF there (tau ~2 s) would have eaten the low-frequency DRONE signal
 for no benefit. The 0.9 makeup (kModMakeup) simply leaves 1 dB of headroom
 against the chorus/flanger level peaks.
 
-Every level stage (ENSE / FLNG / TAPE) is a dry/wet 0..1 blend: at 0
+Every level stage (ENSE / FLANGER / TAPE) is a dry/wet 0..1 blend: at 0
 the stage is a pure wire (regression-safe). The DEL/REV stages downstream see
 the MOD output as their input. (The formant + comb resonators are part of the
 upstream DRONE-OSC unit — see `drone-osc/README.md`.)
@@ -77,7 +76,7 @@ upstream DRONE-OSC unit — see `drone-osc/README.md`.)
 ## DRIFT (the shared self-motion ceiling)
 
 Like RATE in the oscillator, DRIFT is a single knob that gates how far the
-three "level" stages (ENSE/FLNG/TAPE) wander on their own. The design is
+three "level" stages (ENSE/FLANGER) wander on their own. The design is
 a K-rate random-walk:
 
 - Each of the 4 stages gets a target offset within [−d, +d] (d = DRIFT, 0..1)
@@ -125,7 +124,7 @@ K-rate computation in this unit uses only:
   separate TU).
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget, LCG
   constants, delay-line lengths) + the libm-free helpers.
-- `header.c` — the 7 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLNG/TAPE)
+- `header.c` — the 7 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER)
   with their defaults.
 - `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
   to `Modfx::setParameter`; no multiplexer, unlike the OSC's 4-slot
@@ -135,14 +134,14 @@ K-rate computation in this unit uses only:
 
 ## SDRAM (delay lines)
 
-The ENSE / FLNG / TAPE stages use REAL delay lines (true circular line
+The ENSE / FLANGER / TAPE stages use REAL delay lines (true circular line
 buffers), not one-pole lowpasses — a one-pole is a lowpass and reads as a
 mute, which is exactly the bug the old "modulated one-pole delays" had.
 `Modfx::getBufferSize()` reports `kModSramBytes` (two MONO ENSE delay lines at
-2048 smp each for the Juno main/sub voices, plus the FLNG L/R pair at 192 smp
+2048 smp each for the Juno main/sub voices, plus the FLANGER L/R pair at 192 smp
 and the TAPE L/R pair at 384 smp per channel ≈ 20.5 KB), well inside the NTS-1
 modfx slot's 256 KB of allocatable external memory. `unit.cc` allocates it from
-`sdram_alloc` and `init()` slices it into the ENSE (2 mono) + FLNG + TAPE lines;
+`sdram_alloc` and `init()` slices it into the ENSE (2 mono) + FLANGER + TAPE lines;
 the web chain (`Chain::init`) slices the same size automatically. The
 line heads are plain `uint32_t` (exact wrap, no float drift) and the
 fractional (LFO-modulated) read offset is interpolated between the two
@@ -155,7 +154,7 @@ OSC -> MOD -> DEL -> REV). The MOD stage's 8 parameters are exposed in
 `websim/index.html` as an 8-slider column below the Parameters card, driven
 through `Module.setFxParam(stage=0, which=0..7, raw)`; every slider shows
 0..100% except CMODE, which shows its Juno voice band (`I` / `I+II` / `II`).
-The MOD stage's `getBufferSize()` is `kModSramBytes` (the ENSE + FLNG + TAPE
+The MOD stage's `getBufferSize()` is `kModSramBytes` (the ENSE + FLANGER + TAPE
 delay lines, see *SDRAM* above); `Chain::init` slices the chain's single SDRAM
 allocation across MOD / DEL / REV in that order.
 

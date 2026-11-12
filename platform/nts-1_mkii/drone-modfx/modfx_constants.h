@@ -44,13 +44,13 @@ static constexpr float kEnseLFOMin = 0.01667f; // 0.0167 Hz = 60 s period (TIME 
 static constexpr float kEnseLFOMax = 0.6f;   // 0.6 Hz   = 1.7 s period (TIME = 1)
 static constexpr float kEnseLFOlnR = 3.58332f; // ln(kEnseLFOMax / kEnseLFOMin) = ln(36)
 
-// FLNG LFO: SAME time-curve as the ENSE chorus LFO (kEnseLFOMin/kEnseLFOlnR),
+// FLANGER LFO: SAME time-curve as the ENSE chorus LFO (kEnseLFOMin/kEnseLFOlnR),
 // so the flanger sweep and the chorus sweep move in lockstep at every TIME.
 // (Previously the flanger ran at 0.02..2.0 Hz = 50..0.5 s, which did NOT match
 // the chorus 0.0167..0.6 Hz = 60..1.7 s -- the flanger read as "faster".)
-static constexpr float kFlngLFOMin = 0.01667f; // 0.0167 Hz = 60 s period (TIME = 0) -- matches ENSE
-static constexpr float kFlngLFOMax = 0.6f;     // 0.6 Hz (TIME = 1) -- matches ENSE main-voice max
-static constexpr float kFlngLFOlnR = 3.58332f; // ln(0.6 / 0.01667) = ln(36) -- matches ENSE
+static constexpr float kFlangerLFOMin = 0.01667f; // 0.0167 Hz = 60 s period (TIME = 0) -- matches ENSE
+static constexpr float kFlangerLFOMax = 0.6f;     // 0.6 Hz (TIME = 1) -- matches ENSE main-voice max
+static constexpr float kFlangerLFOlnR = 3.58332f; // ln(0.6 / 0.01667) = ln(36) -- matches ENSE
 
 // ---- DEPTH (slot 1) -> per-stage modulation depth --------------------------
 // p.depth is 0..1. Each stage scales its modulation amplitude by a stage
@@ -87,7 +87,7 @@ static constexpr float kEnseWetMax = 0.5f;   // ENSE=1 -> 50% wet (max)
 //
 // The ENSE knob is the master level of this stage: 0 = wire (bypass),
 // 1 = full chorus (the dry/wet blend above). This keeps the DRONE MOD unit's
-// 7-slot shape (ENSE is slot 3, same as FLNG/TAPE).
+// 7-slot shape (ENSE is slot 3, same as FLANGER/TAPE).
 //
 // Delay line: 512 samples (next-pow2 of 5.4 ms x 48 kHz), ~27 KB SDRAM.
 // Two delay lines (main + sub) = 54 KB. LFOs are q31 phase accumulators
@@ -117,39 +117,29 @@ static constexpr float kEnseGainI2[2]  = {0.7071f, 0.7071f}; // _3db
 static constexpr float kEnseGainII[2]  = {0.0f, 1.0f}; // post-chorus LPF cutoff (Hz, Juno RC anti-alias)
 
 // ---- FLANGER (thru-zero, multi-line / bucket-brigade) -----------------------
-// FOUR mono delay lines, each with a SMALL feedback (kFlngFbMax = 0.15, Q ~1.18),
+// FOUR mono delay lines, each with a SMALL feedback (kFlangerFbMax = 0.15, Q ~1.18),
 // average into a smooth thru-zero comb WASH. The small feedback smooths the
 // comb peaks (reduces the "metallic" spikes); the 4 lines spread the comb
 // gratings (via per-line LFO phase offsets) so the wash is smooth. No "locking"
 // at the LFO turnaround (the 4 de-tuned lines do not align).
-//   - 4 mono lines of kFlngLineLenSmp each (4 x 1024 smp = 16 KB).
+//   - 4 mono lines of kFlangerLineLenSmp each (4 x 1024 smp = 16 KB).
 //   - center delay 48..360 smp (1..7.5 ms) set by DEPTH^2; each line's LFO
 //     sweeps the read tap +/-20% x DEPTH^2 around the center.
-//   - per-line LFO phase offsets (kFlngLinePhase[4]) spread the comb peaks.
-//   - feedback = FLNG x kFlngFbMax (re-injected into the line, capped 0.15).
-static constexpr uint32_t kFlngLineCount = 4U;   // number of parallel mono delay lines
-static constexpr float kFlngDelayMinSmp  = 48.0f;  // min flanger delay (48 smp = 1.0 ms)
-static constexpr float kFlngDelayMaxSmp  = 360.f; // max flanger delay (360 smp = 7.5 ms, at full DEPTH)
-static constexpr float kFlngFbMax        = 0.15f; // max feedback (small -> low Q ~1.18, smooths comb peaks)
+//   - per-line LFO phase offsets (kFlangerLinePhase[4]) spread the comb peaks.
+//   - feedback = FLANGER x kFlangerFbMax (re-injected into the line, capped 0.15).
+static constexpr uint32_t kFlangerLineCount = 4U;   // number of parallel mono delay lines
+static constexpr float kFlangerDelayMinSmp  = 48.0f;  // min flanger delay (48 smp = 1.0 ms)
+static constexpr float kFlangerDelayMaxSmp  = 360.f; // max flanger delay (360 smp = 7.5 ms, at full DEPTH)
+static constexpr float kFlangerFbMax        = 0.15f; // max feedback (small -> low Q ~1.18, smooths comb peaks)
 // Per-line LFO phase offsets (fraction of a cycle). KEEP ALL ZERO: de-tuning
 // the 4 lines creates a 4x-LFO beat between L/R ("R/L alternating every 4 s")
 // which reads as a shimmer. The smooth wash comes from the 4 lines AVERAGING
 // the comb, not from de-tuning. Stereo comes ONLY from the R +0.5 cycle shift.
-static constexpr float kFlngLinePhase[4] = { 0.00f, 0.00f, 0.00f, 0.00f };
-
-// ---- TAPE (wow + flutter) --------------------------------------------------
-// Wow: a random-walk (LCG) modulates the length of a ~3 ms one-pole delay ->
-// slow pitch wander (depth = DEPTH * kTapeWowAmt of the delay). Flutter: an
-// LCG white-noise one-pole modulates the level (depth = DEPTH *
-// kTapeFlutterAmt). Both act only while TAPE > 0 (wet blend, 0 = wire).
-static constexpr float kTapeWowBaseSmp  = 144.0f;  // wow delay base (samples, ~3 ms)
-static constexpr float kTapeWowAmt      = 0.60f;   // wow depth: max delay deviation at full DEPTH
-static constexpr float kTapeFlutterAmt  = 0.25f;   // flutter: max level modulation at full DEPTH
-static constexpr float kTapeLpfAlpha    = 0.05f;   // flutter noise LPF one-pole alpha (slow)
+static constexpr float kFlangerLinePhase[4] = { 0.00f, 0.00f, 0.00f, 0.00f };
 
 // ---- DRIFT (slot 2): the shared self-motion ceiling ------------------------
 // Like RATE in the oscillator: a single ceiling that gates how far the four
-// "level" stages (ENSE / FLNG / TAPE) wander on their own. DRIFT = 0 -> every level stays at its manual value (static,
+// "level" stages (ENSE / FLANGER / TAPE) wander on their own. DRIFT = 0 -> every level stays at its manual value (static,
 // regression-safe). DRIFT > 0 -> a K-rate random-walk nudges each level
 // within [manual * (1 - d), manual * (1 + d)] where d = DRIFT (0..1), using
 // exponential target gaps (tempo from TIME) + one-pole tracking (5..20 s).
@@ -161,16 +151,6 @@ static constexpr float kDriftWalkTauMin  = 5.0f;  // min one-pole tracking time 
 static constexpr float kDriftWalkTauMax  = 20.0f; // max one-pole tracking time constant (s)
 static constexpr float kDriftGapMinSec   = 2.0f;  // min exponential target-gap mean (s)
 static constexpr float kDriftGapMaxSec   = 12.0f; // max exponential target-gap mean (s)
-
-// ---- LCG (Park-Miller-Carta) -----------------------------------------------
-// The DRIFT walk and the tape flutter/wow noise are driven by an INTEGER
-// linear congruential generator (Park-Miller-Carta), NOT osc_white/osc_rand
-// (those belong to the OSC runtime and are NOT available to an FX unit). The
-// generator is pure 32-bit integer math: no libm, no state beyond a uint32_t,
-// so check-und is satisfied. The same seed is used on the device and in the
-// web simulator (drone-chain/wasm.cc uses the identical pmc_rand()).
-static constexpr uint32_t kLcgA    = 16807u;   // multiplier
-static constexpr uint32_t kLcgSeed = 83647u;   // non-zero seed
 
 // ---- Input gain (unity, no attenuation) -------------------------------------
 // The OSC output (mono) is upmixed to L/R by Chain::process with NO
@@ -194,21 +174,18 @@ static constexpr float kModMakeup = 0.9f;
 // allocates it and init() slices it into the line buffers. The web chain
 // (drone-chain/chain.h) slices the same size automatically.
 static constexpr uint32_t kEnseLineLenSmp = 2048U;  // 34 ms @ 48 kHz (target 18/31 ms chorus); next-pow2
-static constexpr uint32_t kFlngLineLenSmp = 1024U; //  21 ms max flanger delay + margin (per channel)
-static constexpr uint32_t kTapeLineLenSmp = 384U;  //   8 ms tape wow delay + margin (per channel)
+static constexpr uint32_t kFlangerLineLenSmp = 1024U; //  21 ms max flanger delay + margin (per channel)
 // ENSE: 2 MONO delay lines (Juno main + sub voices), 2048 smp each.
-// FLNG: 4 MONO delay lines (bucket-brigade), 1024 smp each. TAPE: 1 L/R pair (384 smp).
+// FLANGER: 4 MONO delay lines (bucket-brigade), 1024 smp each.
 static constexpr uint32_t kModLineBytesPerPair =
-    2U * (kEnseLineLenSmp + kFlngLineLenSmp + kTapeLineLenSmp) * sizeof(float);
+    2U * (kEnseLineLenSmp + kFlangerLineLenSmp) * sizeof(float);
 // ENSE: 2 mono lines x 2048 x 4 = 16384 bytes
-// FLNG: 4 mono lines x 1024 x 4 = 16384 bytes
-// TAPE: 1 pair x 2 x 384 x 4 = 3072 bytes
-// Total: 35840 bytes (~35 KB, well under 256 KB).
+// FLANGER: 4 mono lines x 1024 x 4 = 16384 bytes
+// Total: 32768 bytes (~32 KB, well under 256 KB).
 static constexpr uint32_t kModSramBytes =
     2U * kEnseLineLenSmp * sizeof(float) +        // 2 ENSE delay lines (main + sub, mono each)
-    kFlngLineCount * kFlngLineLenSmp * sizeof(float) +  // 4 FLNG mono lines
-    1U * 2U * kTapeLineLenSmp * sizeof(float);    // 1 TAPE L/R pair
-// = 2*2048*4 + 4*1024*4 + 2*384*4 = 16384 + 16384 + 3072 = 35840 bytes (~35 KB)
+    kFlangerLineCount * kFlangerLineLenSmp * sizeof(float);  // 4 FLANGER mono lines
+// = 2*2048*4 + 4*1024*4 = 16384 + 16384 = 32768 bytes (~32 KB)
 
 } // namespace modfx_consts
 

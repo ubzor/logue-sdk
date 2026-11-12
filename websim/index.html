@@ -160,7 +160,7 @@
     <!-- ---- FX chain card: MOD / DEL / REV (3 columns) ----------------------- -->
     <!-- Sits BELOW the Parameters card so the oscillator params stay primary.
          MOD is a full 7-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
-         FLNG / TAPE), driven through
+         FLANGER / TAPE), driven through
          Module.setFxParam(stage, which, raw); DEL / REV keep their own TIME /
          DEPTH. -->
     <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
@@ -201,14 +201,9 @@
             <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">100%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Flng</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flng" class="range range-primary range-sm flex-1">
-            <span id="fxmod_flng_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
-          </label>
-          <label class="flex items-center gap-3">
-            <span class="w-28 text-sm font-medium shrink-0">Tape</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_tape" class="range range-primary range-sm flex-1">
-            <span id="fxmod_tape_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+            <span class="w-28 text-sm font-medium shrink-0">Flanger</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" class="range range-primary range-sm flex-1">
+            <span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
           </label>
           </div><!-- /fxmod_body -->
         </div>
@@ -1440,13 +1435,13 @@
       // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
       // are driven through Module.setFxParam(stage, which, raw):
       //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: MOD -> 0..6 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLNG/TAPE)
+      //   which: MOD -> 0..6 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER/TAPE)
       //          DEL/REV -> 0..1 (TIME/DEPTH)
       //   raw:   0..1023 (10-bit knob value)
       // The worklet thread applies the value to the live DSP each block
       // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flng", "tape"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flanger"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];
