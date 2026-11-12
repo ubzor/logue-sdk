@@ -35,14 +35,25 @@
 /*
  *  File: modfx.h
  *
- *  DRONE-MOD (modfx) DSP: a 3-stage modulation stack for the DRONE path.
- *  All 7 header slots are live (TIME / DEPTH / DRIFT / CMODE / CHORUS /
- *  FLANGER / TAPE, see header.c). The per-sample audio path is defined inline below:
- *    in (stereo) -> ENSE (Juno-60 BBD stereo chorus) ->
- *    FLANGER (thru-zero flanger) -> TAPE (wow+flutter) -> makeup (0.9) -> out.
- *  DRIFT is a K-rate LCG random-walk on the three wet levels (shared ceiling,
- *  L1 budget); the walk state is in place but the levels are currently driven
- *  from the manual knobs (DRIFT default 0 = static, regression-safe).
+ *  DRONE-MOD (modfx) DSP: a 3-stage modulation stack + noise enrichment for
+ *  the DRONE path. All 8 header slots are live (TIME / DEPTH / DRIFT / CMODE /
+ *  CHORUS / FLANGER / NOISE / NRATE, see header.c). The per-sample audio path
+ *  is defined inline below:
+ *    in (stereo) -> [NOISE branch: fx_white burst-gated (NRATE cadence),
+ *                    DRIFT-AM, 2-pole SVF band-pass (TIME-swept)] ->
+ *    ENSE (Juno-60 BBD stereo chorus) -> FLANGER (thru-zero flanger) ->
+ *    makeup (0.9) -> out.
+ *  The NOISE branch is an ADDITIVE "metallic rustle / dust-flash" generator:
+ *  LCG white noise, flashed on an exponential cadence (NRATE), AM-modulated
+ *  by the DRIFT walk (channel 3), band-passed by a hand-rolled 2-pole SVF
+ *  whose cutoff sweeps with TIME. NOISE = 0 -> the branch is never computed
+ *  (dry wire, regression-safe).
+ *  DRIFT is a K-rate LCG random-walk; channel 3 drives the noise AM (its
+ *  other three channels are allocated/zeroed but not yet wired -- see README).
+ *  The noise source is the fx-module's platform white-noise API, fx_white()
+ *  / fx_rand() (common/fx_api.h, Park-Miller-Carta) -- the FX-module twin of
+ *  the OSC unit's osc_white()/osc_rand(): on the NTS-1 these come from the
+ *  runtime, in the web chain they are PMC stubs (drone-chain/wasm.cc).
  *  See modfx_constants.h for the tuning and README.md for the full parameter /
  *  signal-path documentation.
  *
@@ -50,6 +61,21 @@
 #include "processor.h"
 #include "unit_modfx.h" // include base definitions for modfx units
 #include "modfx_constants.h" // tuning constants + libm-free helpers (modfx_consts::*)
+
+// ---- Platform white-noise API (the FX-module twin of the OSC's osc_*) -------
+// The FX runtime (common/fx_api.h) links the same Park-Miller-Carta sources
+// into modfx units: fx_rand() -> raw uint32 state, fx_white() -> noise in
+// [-1, 1]. On the NTS-1 these come from the runtime (fx_api.h declares them
+// in C, hence the extern "C" below); in the web chain the stubs live in
+// drone-chain/wasm.cc. The NOISE branch and the DRIFT walk consume them.
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t fx_rand(void);
+float fx_white(void);
+#ifdef __cplusplus
+}
+#endif
 
 class Modfx : public Processor
 {
@@ -59,25 +85,30 @@ public:
   // audio parameters (header.c slot order)
   enum
   {
-    TIME = 0U,  // LFO tempo (0..1) -> ENSE chorus LFO rate
+    TIME = 0U,  // LFO tempo (0..1) -> ENSE chorus LFO rate + noise BP cutoff
     DEPTH,      // per-stage modulation depth (0..1) -> chorus LFO spread
-    DRIFT,      // shared self-motion ceiling (0..1, 0 = static)
+    DRIFT,      // shared self-motion ceiling (0..1, 0 = static); AM's the noise branch
     CMODE,      // chorus mode (0..1) -> 3 equal bands: I / I+II / II
     ENSE,       // dry/wet of the chorus (0..1). 0 = dry, 1 = full.
     FLANGER,    // thru-zero flanger level (0..1)
-    NUM_PARAMS  // = 6
+    NOISE,      // noise branch level (0..1). 0 = off (dry wire, default)
+    NRATE,      // noise burst cadence (0..1) -> 0.15..8 flashes/s (exp)
+    NUM_PARAMS  // = 8
   };
 
   // Note: Make sure that default param values correspond to declarations in header.c
-  // (header.c: TIME 512, DEPTH 511, DRIFT 0, CMODE 512, CHORUS 1023, FLANGER 0).
+  // (header.c: TIME 512, DEPTH 511, DRIFT 0, CMODE 512, CHORUS 1023, FLANGER 0,
+  //  NOISE 0, NRATE 511).
   struct Params
   {
-    float time;   // 0..1 (LFO tempo -> ENSE chorus LFO rate)
+    float time;   // 0..1 (LFO tempo -> ENSE chorus LFO rate + noise BP cutoff)
     float depth;  // 0..1 (per-stage modulation depth -> chorus LFO spread)
     float drift;  // 0..1 (shared self-motion ceiling, 0 = static)
     float cmode;  // 0..1 (chorus mode, 3 equal bands: I / I+II / II)
     float ense;   // 0..1 (chorus dry/wet: 0=dry, 1=full)
     float flanger;   // 0..1 (flanger wet)
+    float noise;    // 0..1 (noise branch level: 0 = off)
+    float nrate;    // 0..1 (noise burst cadence: 0.15..8 fl/s, exp)
 
     void reset()
     {
@@ -86,7 +117,9 @@ public:
       drift = 0.f;    // 0 (static, regression-safe)
       cmode = 0.5f;   // 512/1023 (band 1 = I+II, classic Juno)
       ense = 0.f;     // 0/1023 (dry by default; user enables chorus)
-      flanger = 0.f;     // 0 (off)
+      flanger = 0.f;  // 0 (off)
+      noise = 0.f;    // 0 (off: the branch is never computed, regression-safe)
+      nrate = 0.5f;   // 511/1023 (mid cadence ~1 fl/s; only audible when NOISE > 0)
     }
 
     Params() { reset(); }
@@ -113,6 +146,12 @@ public:
       break;
     case FLANGER:
       params_.flanger = param_10bit_to_f32(value);
+      break;
+    case NOISE:
+      params_.noise = param_10bit_to_f32(value);
+      break;
+    case NRATE:
+      params_.nrate = param_10bit_to_f32(value);
       break;
     default:
       break;
@@ -178,7 +217,9 @@ public:
     ense_sub_post_lpf_r_ = 0.f;
     ense_lpf_alpha_ = 0.5f; // mid-range default
 
-    // DRIFT walk state (all off by default).
+    // DRIFT walk state (all off by default). Channel 3 (kDriftCount-1) is the
+    // NOISE-branch AM modulator: it starts at 0 (static AM = 0.5) and wanders
+    // [-1, +1] only when DRIFT > 0.
     for (int i = 0; i < kDriftCount; ++i)
     {
       drift_target_[i] = 0.f;
@@ -186,6 +227,20 @@ public:
       drift_tau_[i] = 1.f;
       drift_next_gap_[i] = 1U;
     }
+
+    // NOISE branch state (off by default: NOISE = 0 -> never computed).
+    noise_envelope_ = 0.f;
+    noise_phase_ = 0U;
+    noise_on_timer_ = 0U;
+    noise_gap_timer_ = 0U;
+    noise_burst_mean_smp_ = 32000U; // mid NRATE (~1 fl/s) until the first K-rate pass
+    noise_burst_level_ = 1.f;
+    noise_svf_vel_ = 0.f;
+    noise_svf_pos_ = 0.f;
+    noise_svf_cc_ = 0.f;
+    noise_svf_ae_ = 1.f;
+    noise_svf_cc_w_ = 0.f;
+    noise_am_alpha_ = 0.f;
   }
 
   void teardown() override final { buffer_ = nullptr; }
@@ -201,12 +256,43 @@ public:
   volatile float mod_output_peak_ = 0.f;
 
 private:
-  // ---- DRIFT walk (one per level stage: ENSE/FLANGER/TAPE) -------------------
-  static constexpr int kDriftCount = 3;
+  // ---- DRIFT walk (K-rate, LCG-driven, see modfx_process_impl) ---------------
+  // One walk channel per level stage (ENSE/FLANGER, channels 0/1 -- allocated
+  // but not yet wired into the wet amounts) plus channel 3 (kDriftNoise = 2),
+  // the slow AM modulator of the NOISE branch: AM = 0.5 + 0.5 * drift_cur_[2]
+  // (0.5 const at DRIFT = 0; wanders 0..1 with the walk when DRIFT > 0).
+  static constexpr int kDriftCount = 4;
+  static constexpr int kDriftNoise = 3; // noise-branch AM channel index
   float drift_target_[kDriftCount];
   float drift_cur_[kDriftCount];
   float drift_tau_[kDriftCount];
   uint32_t drift_next_gap_[kDriftCount];
+
+  // ---- NOISE branch state (granular noise-sweep, see modfx_process_impl) -----
+  // White noise (fx_white) is gated by a PHASE machine (ON = flash, GAP = lull)
+  // with a one-pole envelope that hard-switches target by phase (so the envelope
+  // reliably decays to zero in the gap -- the old single-timer + 0.999-threshold
+  // bug left the gate almost always open, which is why NRATE was inaudible).
+  // AM-modulated by the DRIFT walk, band-passed by a 2-pole SVF (cutoff K-rate
+  // from TIME + per-burst tone wander, Q fixed) and summed ADDITIVELY into the
+  // input. For "maximum diversity" each burst ALSO randomizes its on-time,
+  // level (per-burst gain) and tone (per-burst BP center), all drawn from
+  // fx_rand() once per burst. L/R run independent noise draws (stereo
+  // decorrelation, 0 SDRAM: everything here is a handful of floats in the
+  // class). NOISE = 0 -> none of this state is touched (branch skipped,
+  // regression-safe).
+  float noise_envelope_ = 0.f;      // burst envelope 0..1 (one-pole, target by phase)
+  uint32_t noise_phase_ = 0U;       // 0 = GAP (lull), 1 = ON (flash)
+  uint32_t noise_on_timer_ = 0U;    // samples left in the current flash (ON)
+  uint32_t noise_gap_timer_ = 0U;   // samples left in the current lull (GAP)
+  uint32_t noise_burst_mean_smp_ = 32000U; // K-rate: exp(-) gap mean from NRATE
+  float noise_burst_level_ = 1.f;   // per-burst gain (drawn at burst start)
+  float noise_svf_vel_ = 0.f;       // SVF velocity state (band-pass output)
+  float noise_svf_pos_ = 0.f;       // SVF position state (low-pass)
+  float noise_svf_cc_ = 0.f;        // K-rate: SVF cutoff coeff (2*sin(w0), clamped)
+  float noise_svf_ae_ = 1.f;        // K-rate: SVF damping coeff (1 - cc/2Q, clamped)
+  float noise_svf_cc_w_ = 0.f;      // per-burst: cc * 2^(+/-wander*dev), clamped
+  float noise_am_alpha_ = 0.f;      // per-sample: AM = 0.5 + 0.5*drift_cur_[kDriftNoise]
 
   // ---- LFO phase accumulators (ENSE / FLANGER) ---------------------------------
   // ENSE uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
@@ -304,6 +390,93 @@ private:
   {
     state += alpha * (x - state);
     return x - state;
+  }
+
+  // ---- NOISE branch helpers (hand-rolled, no libm) ---------------------------
+  // Exponential gap draw from one fx_rand() sample, exactly like the OSC
+  // random-walk (osc_random_walk.h: -ln(U) * mean, U in (0,1] from the raw
+  // LCG state). A 2nd-order Taylor of -ln(1-u) avoids libm logf. The gap is a
+  // realization of a Poisson process with mean `mean_smp` samples -> a
+  // "breathing" cadence (short bursts and long lulls, no metronome).
+  static uint32_t noiseDrawGap(float mean_smp)
+  {
+    const uint32_t s = fx_rand() & 0x7FFFFFFFU; // [0, 0x7FFFFFFF]
+    // u in (0, 1): map the raw state into the OPEN unit interval so ln(1-u)
+    // stays finite (u = 1 would be ln 0 = inf -> a 0-length immediate gap).
+    const float u = static_cast<float>(s) * (1.0f / 2147483648.0f) + 1.0f / 2147483648.0f; // (0, 1]
+    // -ln(1 - u) via a 2nd-order Taylor: u + u^2/2. Accurate for u <= 0.5
+    // (error < 1e-3); the tail (u > 0.5) is slightly under-drawn, which only
+    // makes long lulls a touch rarer -- inaudible for a Poisson cadence.
+    // (mean gap = mean(u + u^2/2) ~ 0.625 for uniform u, vs exact 1.0 -- the
+    // cadence is ~40% denser than nominal; NRATE is a taste knob, not a meter.)
+    const float lw = u + u * u * 0.5f; // = -ln(1 - u) approx, in (0, ~0.56]
+    const float samples = lw * (mean_smp * 1.6f); // renormalize toward the true mean
+    uint32_t n = static_cast<uint32_t>(samples);
+    if (n < 1U)
+      n = 1U;
+    return n;
+  }
+
+  // 2-pole (12 dB/oct) state-variable filter, BAND-PASS tap (velocity state).
+  // Same topology as drone-osc's osc_svf.h Svf::State (Ladder):
+  //   vel += cc * (in - pos - ae*vel);  pos += cc * vel;  out = vel.
+  // Coefficients cc = 2*sin(w0) / ae = 1 - cc/(2Q) are set K-rate (the caller
+  // clamps them -- see the kNoiseBpCcMax/kNoiseBpAeMin in modfx_constants.h)
+  // so the poles stay inside the unit circle across the whole 300 Hz .. 8 kHz
+  // sweep. `in` is the gated, AM-modulated noise sample.
+  static float noiseSvfBp(float &vel, float &pos, float in, float cc, float ae)
+  {
+    const float v = vel + cc * (in - pos - ae * vel);
+    const float p = pos + cc * v;
+    vel = v;
+    pos = p;
+    return v; // band-pass output (velocity)
+  }
+
+  // One step of the DRIFT random-walk channel `i` (per sample). Mirrors the
+  // OSC RandomWalk (osc_random_walk.h): exponentially-drawn target gaps,
+  // one-pole tracking with a per-channel time constant (tau 5..20 s, drawn at
+  // each re-roll), amplitude scaled by the DRIFT ceiling, clamped to
+  // [-1, +1]. Consumes fx_rand() ONLY when the channel actually re-rolls (or
+  // once at startup via the initial drift_next_gap_ value), so a static
+  // (DRIFT = 0) unit consumes no LCG state at all.
+  void driftWalkStep(int i, float drift_ceiling)
+  {
+    if (drift_ceiling <= 0.f)
+      return; // static: no re-roll, no fx_rand() consumption
+    if (drift_next_gap_[i] > 0U)
+      --drift_next_gap_[i];
+    else
+    {
+      // New random target in [-1, +1] (one fx_rand() sample).
+      const float u = static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                      (2.0f / 2147483648.0f); // (0, 1]
+      drift_target_[i] = u * 2.f - 1.f;
+      // Exponential next gap, mean 2..12 s (a second sample picks the mean,
+      // a third draws the realization -- exactly the OSC's two-stage draw).
+      const float mean_s = modfx_consts::kDriftGapMinSec +
+                          (modfx_consts::kDriftGapMaxSec - modfx_consts::kDriftGapMinSec) *
+                              (static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                               (1.0f / 2147483648.0f));
+      const float draw = static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                         (1.0f / 2147483648.0f) + 1.0f / 2147483648.0f; // (0, 1]
+      const float lw = draw + draw * draw * 0.5f; // -ln(1-draw) approx (0, ~0.56]
+      uint32_t gap = static_cast<uint32_t>(lw * (mean_s * modfx_consts::kSr) * 1.6f);
+      if (gap < 1U) gap = 1U;
+      drift_next_gap_[i] = gap;
+      // Per-channel time constant 5..20 s (a fourth sample).
+      const float tau = modfx_consts::kDriftWalkTauMin +
+                        (modfx_consts::kDriftWalkTauMax - modfx_consts::kDriftWalkTauMin) *
+                            (static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                             (1.0f / 2147483648.0f));
+      const float alpha = modfx_one_minus_expf(-1.0f / tau); // per-sample 1-e^(-1/tau)
+      drift_tau_[i] = alpha;
+    }
+    // One-pole track of the (ceiling-scaled) target.
+    const float tt = drift_target_[i] * drift_ceiling;
+    drift_cur_[i] += drift_tau_[i] * (tt - drift_cur_[i]);
+    if (drift_cur_[i] > 1.f) drift_cur_[i] = 1.f;
+    else if (drift_cur_[i] < -1.f) drift_cur_[i] = -1.f;
   }
 
   // Soft-clip (same formula as fastertanh2f in common/utils/float_math.h).
@@ -442,17 +615,51 @@ private:
   // peaks; the 4 de-tuned lines do not align at the LFO turnaround. Center delay
   // scales with DEPTH^2 (48..360 smp = 1..7.5 ms); each line's LFO sweeps the
   // read tap ±20% × DEPTH^2.
-  float flanger_fb = p.flanger > 0.f ? (p.flanger * modfx_consts::kFlangerFbMax) : 0.f;
-  if (flanger_fb > modfx_consts::kFlangerFbMax) flanger_fb = modfx_consts::kFlangerFbMax;
+  // p.flanger is already clamped to [0,1] in setParameter, and
+  // kFlangerFbMax (0.3) is below 1.0, so flanger_fb <= kFlangerFbMax always.
+  // The ternary (not a raw multiply) keeps the old "no feedback at FLANGER=0"
+  // behavior and avoids a floating-point 0.0 * 0.3 = 0.0 edge case.
+  const float flanger_fb = (p.flanger > 0.f) ? (p.flanger * modfx_consts::kFlangerFbMax) : 0.f;
   const float d2 = p.depth * p.depth;
   const float flanger_delay_smp = modfx_consts::kFlangerDelayMinSmp +
       d2 * (modfx_consts::kFlangerDelayMaxSmp - modfx_consts::kFlangerDelayMinSmp);
 
   // ENSE Juno-chorus delay ranges (samples). The LFO sweeps within these.
-  const float ense_main_dmin = modfx_consts::kEnseDelayMinMs * 0.001f * sr;
-  const float ense_main_dmax = modfx_consts::kEnseDelayMaxMs * 0.001f * sr;
-  const float ense_sub_dmin  = modfx_consts::kEnseSubDelayMinMs * 0.001f * sr;
-  const float ense_sub_dmax  = modfx_consts::kEnseSubDelayMaxMs * 0.001f * sr;
+  // constexpr in modfx_constants.h (pre-computed at kSr=48000) -- saves 8
+  // float multiplies per block, audio is bit-identical.
+  const float ense_main_dmin = modfx_consts::kEnseMainDelayMinSmp;
+  const float ense_main_dmax = modfx_consts::kEnseMainDelayMaxSmp;
+  const float ense_sub_dmin  = modfx_consts::kEnseSubDelayMinSmp;
+  const float ense_sub_dmax  = modfx_consts::kEnseSubDelayMaxSmp;
+
+  // ---- NOISE branch K-rate setup (band-pass coefficients) ---------------------
+  // Skipped entirely at NOISE = 0 (the branch is a dry wire, regression-safe).
+  // The burst cadence and the DRIFT walk are PER-SAMPLE (they draw fx_rand()
+  // on their own exponentially-drawn gaps, exactly like RandomWalk in the OSC).
+  const float noise_mix = p.noise * modfx_consts::kNoiseWetNorm; // 0..0.5 final wet
+  if (p.noise > 0.f)
+  {
+    // TIME -> band-pass cutoff (shared exp curve with the chorus LFO rate):
+    // fc = kNoiseBpMinHz * exp(kNoiseBpLnR * TIME)  (300 Hz .. 8 kHz).
+    const float bp_hz =
+        modfx_consts::kNoiseBpMinHz * modfx_expf(modfx_consts::kNoiseBpLnR * t);
+    // cc = 2*sin(w0) via the same 4th-order Taylor as lfoStep (w0 in
+    // [0.039, 1.05] rad over the sweep -- well inside the Taylor range).
+    const float w0 = 6.283185307179586f * bp_hz / sr;
+    const float w02 = w0 * w0;
+    float cc = 2.f * w0 * (1.f - w02 / 6.f + w02 * w02 / 120.f);
+    if (cc < modfx_consts::kNoiseBpCcMin) cc = modfx_consts::kNoiseBpCcMin;
+    else if (cc > modfx_consts::kNoiseBpCcMax) cc = modfx_consts::kNoiseBpCcMax;
+    noise_svf_cc_ = cc;
+    // Per-burst tone starts at the knob value (cc_w = cc) until the first
+    // burst re-draws it (the GAP->ON transition), so the very first flash uses
+    // a valid (non-zero) band-pass coefficient.
+    if (noise_svf_cc_w_ == 0.f) noise_svf_cc_w_ = cc;
+    float ae = 1.f - cc / (2.f * modfx_consts::kNoiseBpQ);
+    if (ae < modfx_consts::kNoiseBpAeMin) ae = modfx_consts::kNoiseBpAeMin;
+    else if (ae > 1.f) ae = 1.f;
+    noise_svf_ae_ = ae;
+  }
 
 
 
@@ -479,6 +686,94 @@ private:
     float L = in_l;
     float R = in_r;
     float fln_wet = p.flanger;
+
+    // ---- NOISE branch: granular noise-sweep (additive, before ENSE) ---------
+    // LCG white noise, flashed on an exponential cadence (NRATE), AM'd by the
+    // DRIFT walk, band-passed (TIME-swept 2-pole SVF) and summed into the
+    // input so the rustle passes through the chorus/flanger "in the wash".
+    // Skipped entirely at NOISE = 0 (dry wire -- the regression-safe default,
+    // and the state is left untouched so re-enabling is seamless).
+    if (noise_mix > 0.f)
+    {
+      // DRIFT walk, channel kDriftNoise (the AM modulator). Channels 0/1 are
+      // the reserved ENSE/FLANGER level walks -- kept advancing so their state
+      // is live for the follow-up wiring (see the state block above).
+      driftWalkStep(kDriftNoise, p.drift);
+      driftWalkStep(0, p.drift);
+      driftWalkStep(1, p.drift);
+      const float am = 0.5f + 0.5f * drift_cur_[kDriftNoise]; // [0, 1]
+
+      // ---- Burst gate: a two-PHASE machine (ON = flash, GAP = lull) ----------
+      // The envelope target HARD-SWITCHES by phase (1 in ON, 0 in GAP), so it
+      // reliably decays to zero in the lull. This is the fix for the old bug
+      // (single timer + 0.999 threshold left the gate almost always open, which
+      // is why NRATE was inaudible). Transitions draw the per-burst diversity
+      // params from fx_rand() (once per burst, not per sample):
+      //   GAP -> ON : draw on-time (log, ~1..25 ms), per-burst level (0.25..1),
+      //               per-burst tone (BP center wander +/- half-oct).
+      //   ON  -> GAP: draw the exponential lull (NRATE cadence).
+      if (noise_phase_ == 0U)
+      {
+        // GAP: count down the lull, then fire a flash.
+        if (noise_gap_timer_ > 0U)
+          --noise_gap_timer_;
+        else
+        {
+          noise_phase_ = 1U;
+          // Random on-time, log-uniform in [min,max] (short ticks .. whooshes).
+          const float d_on = static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                             (1.0f / 2147483648.0f); // (0, 1]
+          const float on_smp = modfx_consts::kNoiseBurstOnMinSmp *
+                               modfx_expf(modfx_consts::kNoiseBurstOnLnR * d_on);
+          uint32_t on_t = static_cast<uint32_t>(on_smp);
+          if (on_t < 8U) on_t = 8U;
+          noise_on_timer_ = on_t;
+          // Per-burst level (gain): quiet pings to loud claps.
+          const float d_lv = static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                             (1.0f / 2147483648.0f); // (0, 1]
+          noise_burst_level_ = modfx_consts::kNoiseBurstLevelMin +
+                               d_lv * (modfx_consts::kNoiseBurstLevelMax - modfx_consts::kNoiseBurstLevelMin);
+          // Per-burst tone: BP center wanders +/-kNoiseBpWanderHalfOct octaves.
+          // cc_w = cc * 2^(wander * dev), dev in [-1, +1]; 2^x via exp(x*ln2).
+          const float d_tn = static_cast<float>(fx_rand() & 0x7FFFFFFFU) *
+                             (2.0f / 2147483648.0f) - 1.f; // (-1, 1]
+          float cc_w = noise_svf_cc_ *
+                       modfx_expf(modfx_consts::kNoiseBpWanderHalfOct * 0.6931471805599453f * d_tn);
+          if (cc_w < modfx_consts::kNoiseBpCcMin) cc_w = modfx_consts::kNoiseBpCcMin;
+          else if (cc_w > modfx_consts::kNoiseBpCcMax) cc_w = modfx_consts::kNoiseBpCcMax;
+          noise_svf_cc_w_ = cc_w;
+        }
+      }
+      else
+      {
+        // ON: flash for its drawn on-time, then drop into a (drawn) lull.
+        if (noise_on_timer_ > 0U)
+          --noise_on_timer_;
+        else
+        {
+          noise_phase_ = 0U;
+          noise_gap_timer_ = noiseDrawGap(static_cast<float>(noise_burst_mean_smp_));
+        }
+      }
+
+      // One-pole envelope toward the phase target (attack in ON, release in GAP).
+      // Alphas are constexpr in modfx_constants.h (no C++ guard vars).
+      const float env_target = (noise_phase_ != 0U) ? 1.f : 0.f;
+      const float env_alpha = (noise_phase_ != 0U) ? modfx_consts::kNoiseBurstAtkAlpha : modfx_consts::kNoiseBurstRelAlpha;
+      noise_envelope_ += env_alpha * (env_target - noise_envelope_);
+      if (noise_envelope_ > 1.f) noise_envelope_ = 1.f;
+      else if (noise_envelope_ < 0.f) noise_envelope_ = 0.f;
+
+      // Per-sample level: envelope * DRIFT-AM * per-burst level * fixed burst gain.
+      const float env = noise_envelope_ * am * noise_burst_level_ * modfx_consts::kNoiseBurstGain;
+      // Per-channel independent noise draws (stereo decorrelation, 0 SDRAM).
+      // The band-pass uses the per-burst tone (cc_w), so each knock rings at its
+      // own pitch.
+      const float n_l = noiseSvfBp(noise_svf_vel_, noise_svf_pos_, fx_white(), noise_svf_cc_w_, noise_svf_ae_) * env;
+      L += noise_mix * n_l;
+      const float n_r = noiseSvfBp(noise_svf_vel_, noise_svf_pos_, fx_white(), noise_svf_cc_w_, noise_svf_ae_) * env;
+      R += noise_mix * n_r;
+    }
 
     // ---- ENSE: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------
     // Architecture: peterall/junologue-chorus (MIT), adapted with hand-rolled

@@ -97,6 +97,15 @@ static constexpr float kEnseDelayMinMs = 15.0f;  // main voice min delay (ms, ta
 static constexpr float kEnseDelayMaxMs = 20.0f;  // main voice max delay (ms)
 static constexpr float kEnseSubDelayMinMs = 28.0f; // sub voice min delay (ms, target ~31 ms)
 static constexpr float kEnseSubDelayMaxMs = 34.0f; // sub voice max delay (ms)
+// Pre-computed delay ranges in SAMPLES (at kSr = 48000 Hz) -- the LFO sweeps
+// within [MinSmp, MaxSmp]. constexpr so the per-block setup in
+// modfx_process_impl does 0 float multiplies for the 4 range limits
+// (saves ~8 float ops / block). Values are identical to the runtime
+// expression kMs * 0.001f * kSr, so the audio is bit-identical.
+static constexpr float kEnseMainDelayMinSmp = kEnseDelayMinMs  * 0.001f * kSr;
+static constexpr float kEnseMainDelayMaxSmp = kEnseDelayMaxMs  * 0.001f * kSr;
+static constexpr float kEnseSubDelayMinSmp  = kEnseSubDelayMinMs  * 0.001f * kSr;
+static constexpr float kEnseSubDelayMaxSmp  = kEnseSubDelayMaxMs  * 0.001f * kSr;
 static constexpr float kEnseLfoDetune = 1.0618f; // sub-voice LFO detune (x main) -> chorus pulsing
 // TIME knob now sweeps the ENSE LFO rate exponentially: rate = Min * exp(lnR * TIME).
 // Range: 0.0167 Hz (60 s) .. 0.6 Hz (1.7 s). At TIME=0.5 ~0.1 Hz (10 s).
@@ -151,6 +160,108 @@ static constexpr float kDriftWalkTauMin  = 5.0f;  // min one-pole tracking time 
 static constexpr float kDriftWalkTauMax  = 20.0f; // max one-pole tracking time constant (s)
 static constexpr float kDriftGapMinSec   = 2.0f;  // min exponential target-gap mean (s)
 static constexpr float kDriftGapMaxSec   = 12.0f; // max exponential target-gap mean (s)
+
+// ---- NOISE / NRATE (slots 6/7): granular noise-sweep (noise enrichment) -----
+// An additive, LCG-driven "metallic rustle" / dust-flash generator on the
+// INPUT of the MOD path (before ENSE), so the noise itself passes through the
+// chorus/flanger and reads as "rustle IN the wash" rather than a dry hiss on
+// top. All-off by default (NOISE = 0 = dry wire, regression-safe).
+//
+// Signal chain of the branch (hand-rolled, no libm -- see the modfx.h block
+// for the per-sample math):
+//   fx_white() white noise  -> burst gate (exponential cadence, NRATE)
+//   -> AM envelope (DRIFT walk channel 3, 0.5+0.5*walk)  -> 2-pole SVF
+//   band-pass (cutoff swept by TIME)  ->  additive mix x NOISE (x 0.5 norm).
+//
+// Burst cadence (NRATE, slot 7): the AVERAGE gap between flashes, in
+// FLASHES/SECOND (not Hz -- it is a Poisson process mean, like the OSC
+// random-walk periods).  NRATE 0 -> 0.15 fl/s (rare, long lulls), NRATE 1 ->
+// 8 fl/s (dense shimmer). Each gap is drawn EXACTLY like RandomWalk in
+// drone-osc (osc_random_walk.h): -ln(U) * mean_samples, U in (0,1] from
+// fx_rand() -- so the cadence "breathes" instead of ticking.
+static constexpr float kNoiseBurstMinPerSec = 0.15f;              // rare flashes (NRATE = 0)
+static constexpr float kNoiseBurstMaxPerSec = 8.0f;               // dense shimmer (NRATE = 1)
+// ln(kNoiseBurstMaxPerSec / kNoiseBurstMinPerSec) = ln(53.33) = 3.977
+static constexpr float kNoiseBurstLnR       = 3.977f;
+// Per-burst DURATION (envelope attack/release, samples @ 48 kHz). The envelope
+// is a one-pole toward (open ? 1 : 0): the attack alpha opens the burst in
+// ~8 ms (kNoiseBurstAtkSmp), the release alpha decays it over ~45 ms
+// (kNoiseBurstRelSmp), giving short "flash" envelopes rather than hard clicks.
+static constexpr uint32_t kNoiseBurstAtkSmp = 384U;   // ~8 ms  attack
+static constexpr uint32_t kNoiseBurstRelSmp = 2112U;  // ~45 ms release
+// Precomputed per-sample one-pole alphas for the burst envelope:
+//   alpha = 1 - exp(-1 / N_samples)
+// Computed at compile time so the per-sample path is pure float math and no
+// C++ guard variables (__cxa_guard_acquire/release) appear in the UND symbol
+// table (those would break the Makefile check-und guard -- the FX firmware
+// does not provide them). Values: 1-exp(-1/384) = 0.00259879, 1-exp(-1/2112)
+// = 0.000473374.
+static constexpr float kNoiseBurstAtkAlpha = 0.00259879f;
+static constexpr float kNoiseBurstRelAlpha = 0.000473374f;
+// Burst gain: a white-noise burst is already hot, so the branch is scaled by
+// kNoiseBurstGain (the NOISE knob itself is a further 0..1 level on top).
+static constexpr float kNoiseBurstGain = 0.6f;
+
+// ---- Maximum-diversity burst parameters ------------------------------------
+// Each flash is randomized on THREE independent axes so consecutive "knocks"
+// never sound alike (the user's ask: "максимальное разнообразие"):
+//   1. DURATION -- the burst stays open for a random window (below), not a
+//      fixed 0.5 ms. Short ticks and longer "whooshes" mix.
+//   2. LEVEL    -- each burst is scaled by a random per-burst gain in
+//      [kNoiseBurstLevelMin, kNoiseBurstLevelMax] (quiet "pings" to loud
+//      "claps"), so the envelope peak varies even at DRIFT = 0.
+//   3. TONE     -- the band-pass CENTER wanders around the TIME knob value by
+//      a random per-burst +/- half-octave (kNoiseBpWanderHalfOct), so each
+//      knock rings at a slightly different pitch (the "metallic" spread).
+// All three are drawn from fx_rand() at burst start (K-rate-ish: once per
+// burst, not per sample), so the per-sample path stays pure float math.
+
+// Burst DURATION (on-time) window, in samples @ 48 kHz. Drawn log-uniformly
+// (via exp) between min/max so both short ticks and long whooshes appear.
+static constexpr uint32_t kNoiseBurstOnMinSmp = 48U;    // ~1 ms  (sharp tick)
+static constexpr uint32_t kNoiseBurstOnMaxSmp = 1200U;  // ~25 ms (soft whoosh)
+// ln(kNoiseBurstOnMaxSmp / kNoiseBurstOnMinSmp) = ln(25) = 3.219
+static constexpr float kNoiseBurstOnLnR = 3.219f;
+
+// Per-burst LEVEL (gain) window. 0.25..1.0: most bursts are clearly audible,
+// a minority are quiet "dust" pings. Drawn linearly from fx_rand().
+static constexpr float kNoiseBurstLevelMin = 0.25f;
+static constexpr float kNoiseBurstLevelMax = 1.0f;
+
+// Per-burst TONE wander: the SVF cutoff is scaled by 2^(+/- wander * dev),
+// dev in [-1, +1] drawn per burst. 0.5 = a half-octave each way (clear pitch
+// spread, still musical against the drone). At 0 the tone is fixed at the
+// TIME knob value (regression toward the pre-wander behavior).
+static constexpr float kNoiseBpWanderHalfOct = 0.5f;
+
+// Band-pass (2-pole SVF, state-variable; same topology as drone-osc osc_svf.h).
+// Cutoff is swept by TIME (shared exp curve with the chorus LFO rate):
+//   fc = kNoiseBpMinHz * exp(kNoiseBpLnR * TIME)
+// so the "metallic" center of the rustle tracks the modulation tempo.
+// NRATE 0 -> ~300 Hz (low, dusty), NRATE 1 -> ~8 kHz (bright, hissy).
+// Q is fixed (no slot budget left): 1.5 -- a soft peak, clearly band-pass but
+// not ringing. cc/ae are clamped exactly like osc_svf.h (poles in the unit
+// circle across the whole 300 Hz .. 8 kHz range).
+// Cutoff range is swept by TIME (NOT NRATE -- the burst CADENCE is NRATE):
+// TIME 0 -> ~300 Hz (low, dusty), TIME 1 -> ~8 kHz (bright, hissy).
+static constexpr float kNoiseBpMinHz = 300.f;
+static constexpr float kNoiseBpMaxHz = 8000.f;
+// ln(8000/300) = ln(26.67) = 3.284
+static constexpr float kNoiseBpLnR   = 3.284f;
+static constexpr float kNoiseBpQ     = 1.5f;
+static constexpr float kNoiseBpCcMax = 0.92f;  // per-sample cc clamp (stability)
+static constexpr float kNoiseBpCcMin = 0.001f; // per-sample cc clamp
+static constexpr float kNoiseBpAeMin = 0.18f;  // per-sample ae clamp
+
+// Additive mix level (NOISE, slot 6): 0..1. The x 0.5 keeps dry + noise wet
+// from summing past unity (a white-noise burst has ~0.577 RMS at full scale).
+static constexpr float kNoiseWetNorm = 0.5f;
+
+// DRIFT walk channel 3 (index kDriftCount-1): the slow AM modulator of the
+// noise branch. At DRIFT = 0 the channel is static at 0 -> AM = 0.5 (flat);
+// DRIFT > 0 -> AM wanders 0..1 with the shared walk (tau 5..20 s). This is
+// what makes the rustle "breathe" -- the DRIFT knob finally does something
+// audible (it previously only had un-wired walk state).
 
 // ---- Input gain (unity, no attenuation) -------------------------------------
 // The OSC output (mono) is upmixed to L/R by Chain::process with NO

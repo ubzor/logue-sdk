@@ -245,11 +245,12 @@ $(BUILDDIR)/$(PRODUCT): | $(OBJS) $(OUTFILES)
 #
 # ALLOWED_UND: the symbols the firmware is expected to provide. Add a new one
 # here ONLY when the firmware genuinely provides it.
-# FX modules use no firmware LUTs, so this list is empty: any undefined
-# dynamic symbol (e.g. a stray libm powf/sinf) means the unit will fail to
-# load on device. If you need a LUT, add its name here AND verify the firmware
-# actually exports it.
-ALLOWED_UND :=
+# FX modules use no firmware LUTs, so this list is normally empty: any
+# undefined dynamic symbol (e.g. a stray libm powf/sinf) means the unit will
+# fail to load on device. The exception is the platform white-noise API
+# (fx_rand / fx_white, declared in common/fx_api.h and linked into every fx
+# unit by the runtime) -- the NOISE branch and the DRIFT walk consume them.
+ALLOWED_UND := fx_rand fx_white
 READELF := $(GCC_BIN_PATH)/$(GCC_TARGET)readelf
 
 check-und: $(BUILDDIR)/$(PRODUCT)

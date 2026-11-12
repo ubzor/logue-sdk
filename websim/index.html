@@ -165,7 +165,7 @@
          DEPTH. -->
     <div class="grid grid-cols-3 gap-x-10 gap-y-4 w-full">
 
-    <!-- ---- MOD column (7 params) ---------------------------------------- -->
+    <!-- ---- MOD column (8 params) ---------------------------------------- -->
       <div class="card card-border shadow-none w-full">
         <div class="card-body flex-col items-stretch !gap-3 pt-4">
           <div class="flex items-center justify-between">
@@ -204,6 +204,16 @@
             <span class="w-28 text-sm font-medium shrink-0">Flanger</span>
             <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" class="range range-primary range-sm flex-1">
             <span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">Noise</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_noise" class="range range-primary range-sm flex-1">
+            <span id="fxmod_noise_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-28 text-sm font-medium shrink-0">N Rate</span>
+            <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_nrate" class="range range-primary range-sm flex-1">
+            <span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-12 text-right">50%</span>
           </label>
           </div><!-- /fxmod_body -->
         </div>
@@ -1435,13 +1445,13 @@
       // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
       // are driven through Module.setFxParam(stage, which, raw):
       //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: MOD -> 0..6 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER/TAPE)
+      //   which: MOD -> 0..7 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER/NOISE/NRATE)
       //          DEL/REV -> 0..1 (TIME/DEPTH)
       //   raw:   0..1023 (10-bit knob value)
       // The worklet thread applies the value to the live DSP each block
       // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flanger"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flanger", "noise", "nrate"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];

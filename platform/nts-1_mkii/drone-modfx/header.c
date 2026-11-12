@@ -48,9 +48,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010008U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: sub-voice LFO detuned x1.0618 vs main -> chorus pulsing (target spec "голоса расстроены x1/x1.0618"); shared heartbeat, voices drift in/out of phase.
+    .version = 0x00010009U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: NOISE/NRATE slots (granular noise-sweep branch: LCG white noise, exponential burst cadence, DRIFT-AM, 2-pole SVF band-pass swept by TIME).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 7,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 8,                                       // Number of valid parameter descriptors. (max. 10)
 
     .params = {
         // Format: min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -78,5 +78,18 @@ const __unit_header unit_header_t unit_header = {
 
         // [5] FLANGER: thru-zero flanger level (0..1). 0 = off.
         {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLANGER"}},
+
+        // [6] NOISE: granular noise-sweep branch level (0..1). 0 = off (dry
+        // wire, default -- regression-safe). >0 adds an LCG white-noise
+        // "metallic rustle / dust-flash" generator on the path input: burst-
+        // gated (NRATE cadence), AM-modulated by the DRIFT walk, band-passed
+        // by a 2-pole SVF (cutoff swept by TIME), summed additively before the
+        // ENSE chorus.
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"NOISE"}},
+
+        // [7] NRATE: noise burst cadence (0..1) -> average flashes/second
+        // 0.15..8 (exp curve). 0 = rare long-lull flashes, 1 = dense shimmer.
+        // Only audible when NOISE > 0.
+        {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"NRATE"}},
     },
 };

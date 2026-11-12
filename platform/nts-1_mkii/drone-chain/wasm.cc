@@ -91,6 +91,30 @@ extern "C" uint32_t osc_rand(void)
   return s_pmc_state;
 }
 
+// The MOD stage (Modfx) consumes the FX-module noise API -- fx_white() /
+// fx_rand() (common/fx_api.h), the FX twin of osc_white()/osc_rand(). On the
+// NTS-1 the fx runtime links them into modfx units; in the web chain the MOD
+// stage is inlined into THIS worklet (chain.h -> modfx.h declares them extern
+// "C"), so the stubs must live here. They share the SAME Park-Miller-Carta
+// state as the OSC stubs above (one LCG stream for the whole chain), which is
+// fine: the burst cadence / DRIFT walk / white noise are all just consumers of
+// the same 31-bit state.
+extern "C" uint32_t fx_rand(void)
+{
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return s_pmc_state;
+}
+
+extern "C" float fx_white(void)
+{
+  // Uniform noise in [-1, 1] from a Park-Miller-Carta sample (same mapping as
+  // osc_white() above). The ARM fx runtime uses a Box-Muller Gaussian; the
+  // difference between uniform and Gaussian white noise is inaudible here (the
+  // burst gate + band-pass shape it either way).
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return static_cast<float>(s_pmc_state) * (2.0f / 2147483647.0f) - 1.0f;
+}
+
 struct AudioWorkletParameter
 {
   int min;

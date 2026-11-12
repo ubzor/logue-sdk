@@ -38,6 +38,38 @@ float fx_get_bpmf(void)
   return BPM_WASM;
 }
 
+// ---- Web-sim stubs for the platform noise API --------------------------------
+// modfx.h declares fx_rand() / fx_white() (the FX-module twin of the OSC's
+// osc_rand()/osc_white(), see common/fx_api.h). The standalone modfx page
+// links Modfx into this one worklet, so the stubs must live here too. (The
+// unified chain simulator has its own copies in drone-chain/wasm.cc -- the two
+// builds are separate wasm binaries.) Park-Miller-Carta, same seed as the
+// platform so the burst cadence / DRIFT walk / noise match the device.
+namespace {
+uint32_t s_pmc_state = 83647U; // Park-Miller-Carta seed (matches websim DEFAULT_SEED)
+inline uint32_t pmc_rand(uint32_t s)
+{
+  uint32_t lo = 16807u * (s & 0xFFFFu);
+  const uint32_t hi = 16807u * (s >> 16);
+  lo += (hi & 0x7FFFu) << 16;
+  lo += hi >> 15;
+  return (lo & 0x7FFFFFFFu) + (lo >> 31);
+}
+} // namespace
+
+extern "C" uint32_t fx_rand(void)
+{
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return s_pmc_state;
+}
+
+extern "C" float fx_white(void)
+{
+  // Uniform noise in [-1, 1] from a Park-Miller-Carta sample.
+  s_pmc_state = pmc_rand(s_pmc_state);
+  return static_cast<float>(s_pmc_state) * (2.0f / 2147483647.0f) - 1.0f;
+}
+
 struct AudioWorkletParameter
 {
   int min;
