@@ -41,7 +41,7 @@
  *  is defined inline below:
  *    in (stereo) -> [NOISE branch: fx_white burst-gated (NRATE cadence),
  *                    DRIFT-AM, 2-pole SVF band-pass (TIME-swept)] ->
- *    ENSE (Juno-60 BBD stereo chorus) -> FLANGER (thru-zero flanger) ->
+ *    CHORUS (Juno-60 BBD stereo chorus) -> FLANGER (thru-zero flanger) ->
  *    makeup (0.9) -> out.
  *  The NOISE branch is an ADDITIVE "metallic rustle / dust-flash" generator:
  *  LCG white noise, flashed on an exponential cadence (NRATE), AM-modulated
@@ -85,11 +85,11 @@ public:
   // audio parameters (header.c slot order)
   enum
   {
-    TIME = 0U,  // LFO tempo (0..1) -> ENSE chorus LFO rate + noise BP cutoff
+    TIME = 0U,  // LFO tempo (0..1) -> chorus LFO rate + noise BP cutoff
     DEPTH,      // per-stage modulation depth (0..1) -> chorus LFO spread
     DRIFT,      // shared self-motion ceiling (0..1, 0 = static); AM's the noise branch
     CMODE,      // chorus mode (0..1) -> 3 equal bands: I / I+II / II
-    ENSE,       // dry/wet of the chorus (0..1). 0 = dry, 1 = full.
+    CHORUS,       // dry/wet of the chorus (0..1). 0 = dry, 1 = full.
     FLANGER,    // thru-zero flanger level (0..1)
     NOISE,      // noise branch level (0..1). 0 = off (dry wire, default)
     NRATE,      // noise burst cadence (0..1) -> 0.15..8 flashes/s (exp)
@@ -101,11 +101,11 @@ public:
   //  NOISE 0, NRATE 511).
   struct Params
   {
-    float time;   // 0..1 (LFO tempo -> ENSE chorus LFO rate + noise BP cutoff)
+    float time;   // 0..1 (LFO tempo -> chorus LFO rate + noise BP cutoff)
     float depth;  // 0..1 (per-stage modulation depth -> chorus LFO spread)
     float drift;  // 0..1 (shared self-motion ceiling, 0 = static)
     float cmode;  // 0..1 (chorus mode, 3 equal bands: I / I+II / II)
-    float ense;   // 0..1 (chorus dry/wet: 0=dry, 1=full)
+    float chorus;   // 0..1 (chorus dry/wet: 0=dry, 1=full)
     float flanger;   // 0..1 (flanger wet)
     float noise;    // 0..1 (noise branch level: 0 = off)
     float nrate;    // 0..1 (noise burst cadence: 0.15..8 fl/s, exp)
@@ -116,7 +116,7 @@ public:
       depth = 0.f;    // 0/1023 (no modulation by default, regression-safe)
       drift = 0.f;    // 0 (static, regression-safe)
       cmode = 0.5f;   // 512/1023 (band 1 = I+II, classic Juno)
-      ense = 0.f;     // 0/1023 (dry by default; user enables chorus)
+      chorus = 0.f;     // 0/1023 (dry by default; user enables chorus)
       flanger = 0.f;  // 0 (off)
       noise = 0.f;    // 0 (off: the branch is never computed, regression-safe)
       nrate = 0.5f;   // 511/1023 (mid cadence ~1 fl/s; only audible when NOISE > 0)
@@ -141,8 +141,8 @@ public:
     case CMODE:
       params_.cmode = param_10bit_to_f32(value);
       break;
-    case ENSE:
-      params_.ense = param_10bit_to_f32(value);
+    case CHORUS:
+      params_.chorus = param_10bit_to_f32(value);
       break;
     case FLANGER:
       params_.flanger = param_10bit_to_f32(value);
@@ -169,16 +169,16 @@ public:
   void init(float *allocated_buffer) override final
   {
     // Slice the single SDRAM allocation (getBufferSize() floats) into the six
-    // interleaved delay lines (ENSE L/R, FLANGER L/R, TAPE L/R). On the NTS-1 this
+    // interleaved delay lines (CHORUS L/R, FLANGER L/R, TAPE L/R). On the NTS-1 this
     // comes from unit.cc's sdram_alloc; in the web chain, Chain::init slices
     // the chain's single allocation and passes the MOD slice here.
     buffer_ = allocated_buffer;
     float *p = allocated_buffer;
-    // ENSE: two mono delay lines (Juno main + sub), each kEnseLineLenSmp floats.
-    ense_main_delay_ = p; p += modfx_consts::kEnseLineLenSmp;
-    ense_sub_delay_  = p; p += modfx_consts::kEnseLineLenSmp;
-    ense_main_w_ = 0U;
-    ense_sub_w_ = 0U;
+    // CHORUS: two mono delay lines (Juno main + sub), each kChorusLineLenSmp floats.
+    chorus_main_delay_ = p; p += modfx_consts::kChorusLineLenSmp;
+    chorus_sub_delay_  = p; p += modfx_consts::kChorusLineLenSmp;
+    chorus_main_w_ = 0U;
+    chorus_sub_w_ = 0U;
     // FLANGER: kFlangerLineCount MONO delay lines (bucket-brigade), each kFlangerLineLenSmp.
     flanger_buf_  = p;  p += modfx_consts::kFlangerLineCount * modfx_consts::kFlangerLineLenSmp;
     for (uint32_t i = 0; i < modfx_consts::kFlangerLineCount; ++i) flanger_w_[i] = 0U;
@@ -187,9 +187,9 @@ public:
     // Zero-clear the rest (FLANGER + TAPE lines).
     if (buffer_)
     {
-      // ENSE delay lines already cleared via .clear(); clear the remaining.
-      const uint32_t ense_bytes = 2U * modfx_consts::kEnseLineLenSmp;
-      for (uint32_t i = ense_bytes; i < getBufferSize(); ++i) buffer_[i] = 0.f;
+      // CHORUS delay lines already cleared via .clear(); clear the remaining.
+      const uint32_t chorus_bytes = 2U * modfx_consts::kChorusLineLenSmp;
+      for (uint32_t i = chorus_bytes; i < getBufferSize(); ++i) buffer_[i] = 0.f;
     }
 
     // Line heads + FLANGER filter state.
@@ -201,21 +201,21 @@ public:
 
     flanger_lfo_phase_ = 0.f;
 
-    // ENSE Juno-chorus LFOs. q31 phase accumulators; the increment (w_) is
+    // CHORUS Juno-chorus LFOs. q31 phase accumulators; the increment (w_) is
     // recomputed every block in K-rate from TIME (LFO rate sweep). Seed here
     // at the base Juno rates so the very first block before the first
     // K-rate pass has a sane rate.
-    ense_lfo1_phase_ = 0;
-    ense_lfo2_phase_ = 0;
-    ense_lfo1_w_ = (int32_t)(modfx_consts::kEnseLFOMin * 2147483648.0f / modfx_consts::kSr);
-    ense_lfo2_w_ = (int32_t)(modfx_consts::kEnseLFOMin * modfx_consts::kEnseLfoDetune * 2147483648.0f / modfx_consts::kSr);
+    chorus_lfo1_phase_ = 0;
+    chorus_lfo2_phase_ = 0;
+    chorus_lfo1_w_ = (int32_t)(modfx_consts::kChorusLFOMin * 2147483648.0f / modfx_consts::kSr);
+    chorus_lfo2_w_ = (int32_t)(modfx_consts::kChorusLFOMin * modfx_consts::kChorusLfoDetune * 2147483648.0f / modfx_consts::kSr);
 
-    // ENSE LPFs (1st-order, Juno RC anti-alias). Init alpha at mid-range.
-    ense_main_post_lpf_l_ = 0.f;
-    ense_main_post_lpf_r_ = 0.f;
-    ense_sub_post_lpf_l_ = 0.f;
-    ense_sub_post_lpf_r_ = 0.f;
-    ense_lpf_alpha_ = 0.5f; // mid-range default
+    // CHORUS LPFs (1st-order, Juno RC anti-alias). Init alpha at mid-range.
+    chorus_main_post_lpf_l_ = 0.f;
+    chorus_main_post_lpf_r_ = 0.f;
+    chorus_sub_post_lpf_l_ = 0.f;
+    chorus_sub_post_lpf_r_ = 0.f;
+    chorus_lpf_alpha_ = 0.5f; // mid-range default
 
     // DRIFT walk state (all off by default). Channel 3 (kDriftCount-1) is the
     // NOISE-branch AM modulator: it starts at 0 (static AM = 0.5) and wanders
@@ -257,7 +257,7 @@ public:
 
 private:
   // ---- DRIFT walk (K-rate, LCG-driven, see modfx_process_impl) ---------------
-  // One walk channel per level stage (ENSE/FLANGER, channels 0/1 -- allocated
+  // One walk channel per level stage (CHORUS/FLANGER, channels 0/1 -- allocated
   // but not yet wired into the wet amounts) plus channel 3 (kDriftNoise = 2),
   // the slow AM modulator of the NOISE branch: AM = 0.5 + 0.5 * drift_cur_[2]
   // (0.5 const at DRIFT = 0; wanders 0..1 with the walk when DRIFT > 0).
@@ -294,20 +294,20 @@ private:
   float noise_svf_cc_w_ = 0.f;      // per-burst: cc * 2^(+/-wander*dev), clamped
   float noise_am_alpha_ = 0.f;      // per-sample: AM = 0.5 + 0.5*drift_cur_[kDriftNoise]
 
-  // ---- LFO phase accumulators (ENSE / FLANGER) ---------------------------------
-  // ENSE uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
+  // ---- LFO phase accumulators (CHORUS / FLANGER) ---------------------------------
+  // CHORUS uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
   // detuned x1.0618; both swept live by TIME (the increments w_ are recomputed
   // K-rate). FLANGER uses a hand-rolled float phase accumulator.
-  // ENSE LFOs are hand-rolled q31 phase accumulators (same as dsp::SimpleLFO
+  // CHORUS LFOs are hand-rolled q31 phase accumulators (same as dsp::SimpleLFO
   // but without the CMSIS/arm_math.h dependency needed for the web sim).
-  int32_t ense_lfo1_phase_ = 0;  // Juno LFO 1 phase (q31)
-  int32_t ense_lfo1_w_ = 0;      // Juno LFO 1 increment (q31, set K-rate from TIME)
-  int32_t ense_lfo2_phase_ = 0;  // Juno LFO 2 phase (q31)
-  int32_t ense_lfo2_w_ = 0;      // Juno LFO 2 increment (q31, set K-rate from TIME)
+  int32_t chorus_lfo1_phase_ = 0;  // Juno LFO 1 phase (q31)
+  int32_t chorus_lfo1_w_ = 0;      // Juno LFO 1 increment (q31, set K-rate from TIME)
+  int32_t chorus_lfo2_phase_ = 0;  // Juno LFO 2 phase (q31)
+  int32_t chorus_lfo2_w_ = 0;      // Juno LFO 2 increment (q31, set K-rate from TIME)
   float flanger_lfo_phase_;
 
   // ---- Filter / feedback states ----------------------------------------------
-  // ENSE Juno-chorus LPFs: hand-rolled 1st-order LPF (one-pole) states,
+  // CHORUS Juno-chorus LPFs: hand-rolled 1st-order LPF (one-pole) states,
   // per-channel, per-voice. Same math as dsp::BiQuad::setFOLP + process_fo
   // but without the CMSIS dependency. State: y = ff0*x + z; z = ff1*x - fb1*y.
   // For setFOLP(k): ff0=ff1=k/(k+1), fb1=(k-1)/(k+1).
@@ -315,20 +315,20 @@ private:
   // is: y[n] = y[n-1] + alpha*(x[n] - y[n-1]) where alpha = (k-1)/(k+1) + k/(k+1)
   // Actually simplest: use the standard one-pole: y += alpha*(x-y), alpha from k.
   // We store the LPF state (z1) per channel per voice.
-  float ense_main_post_lpf_l_ = 0.f;  // main voice post-LPF state, L
-  float ense_main_post_lpf_r_ = 0.f;  // main voice post-LPF state, R
-  float ense_sub_post_lpf_l_ = 0.f;   // sub voice post-LPF state, L
-  float ense_sub_post_lpf_r_ = 0.f;   // sub voice post-LPF state, R
+  float chorus_main_post_lpf_l_ = 0.f;  // main voice post-LPF state, L
+  float chorus_main_post_lpf_r_ = 0.f;  // main voice post-LPF state, R
+  float chorus_sub_post_lpf_l_ = 0.f;   // sub voice post-LPF state, L
+  float chorus_sub_post_lpf_r_ = 0.f;   // sub voice post-LPF state, R
   // K-rate LPF alpha (computed per block from the TIME knob).
-  float ense_lpf_alpha_ = 0.f;        // 1st-order LPF alpha (0..1)
+  float chorus_lpf_alpha_ = 0.f;        // 1st-order LPF alpha (0..1)
 
   // ---- Real delay lines (SDRAM, see getBufferSize()/init) --------------------
-  // ENSE: two mono delay lines (Juno main + sub voices, 512 smp each).
+  // CHORUS: two mono delay lines (Juno main + sub voices, 512 smp each).
   // Hand-rolled (raw float* + write_idx) to avoid the CMSIS dependency.
-  float *ense_main_delay_ = nullptr;  // Juno main voice (mono, 512 smp)
-  float *ense_sub_delay_ = nullptr;   // Juno sub voice (mono, 512 smp)
-  uint32_t ense_main_w_ = 0U;         // main delay write head
-  uint32_t ense_sub_w_ = 0U;          // sub delay write head
+  float *chorus_main_delay_ = nullptr;  // Juno main voice (mono, 512 smp)
+  float *chorus_sub_delay_ = nullptr;   // Juno sub voice (mono, 512 smp)
+  uint32_t chorus_main_w_ = 0U;         // main delay write head
+  uint32_t chorus_sub_w_ = 0U;          // sub delay write head
   float *flanger_buf_;  // flanger delay lines: kFlangerLineCount MONO lines x kFlangerLineLenSmp
   uint32_t flanger_w_[modfx_consts::kFlangerLineCount]; // per-line write head, FLANGER
 
@@ -370,7 +370,7 @@ private:
   // Triangle LFO of a phase in [0,1): -1..+1 with constant slope (no phase
   // advance, no libm). A triangle gives the constant-velocity sweep of a BBD
   // chorus (the smooth swishing wash); a sine dwells at the peaks and reads as
-  // pitch-vibrato wobble. Used for the ENSE chorus LFO. Pure float math.
+  // pitch-vibrato wobble. Used for the chorus LFO. Pure float math.
   static float lfoTri(float phase)
   {
     // phase in [0,1): 0 -> -1, 0.5 -> +1, 1 -> -1 (linear ramps).
@@ -557,7 +557,7 @@ private:
     return p;
   }
 
-  // The per-sample audio path (upmix -> ENSE -> FLANGER -> TAPE ->
+  // The per-sample audio path (upmix -> CHORUS -> FLANGER -> TAPE ->
   // makeup -> out). Defined INLINE inside the class so that
   // multiple translation units can each #include modfx.h through different
   // absolute paths without a duplicate-symbol link error (ODR: inline
@@ -572,42 +572,42 @@ private:
   const float t = p.time;
   const float flanger_freq = modfx_consts::kFlangerLFOMin * modfx_expf(modfx_consts::kFlangerLFOlnR * t);
 
-  // ---- ENSE Juno-chorus K-rate setup ----------------------------------------
+  // ---- CHORUS Juno-chorus K-rate setup ----------------------------------------
   // CMODE knob -> Juno voice blend, 3 EQUAL bands (Formant-Vowel style):
   //   band 0 (CMODE < 1/3)  -> mode I    (main voice only)
   //   band 1 (1/3..2/3)     -> mode I+II (both voices, classic Juno)
   //   band 2 (>= 2/3)       -> mode II   (sub voice only)
   // Equal thirds of 0..1 so every knob value lands cleanly in a band.
-  const int ense_mode = (p.cmode < 1.f/3.f) ? 0 : (p.cmode < 2.f/3.f) ? 1 : 2;
-  const float ense_gain_main = (ense_mode == 0) ? modfx_consts::kEnseGainI[0]
-                            : (ense_mode == 1) ? modfx_consts::kEnseGainI2[0] : modfx_consts::kEnseGainII[0];
-  const float ense_gain_sub  = (ense_mode == 0) ? modfx_consts::kEnseGainI[1]
-                            : (ense_mode == 1) ? modfx_consts::kEnseGainI2[1] : modfx_consts::kEnseGainII[1];
+  const int chorus_mode = (p.cmode < 1.f/3.f) ? 0 : (p.cmode < 2.f/3.f) ? 1 : 2;
+  const float chorus_gain_main = (chorus_mode == 0) ? modfx_consts::kChorusGainI[0]
+                            : (chorus_mode == 1) ? modfx_consts::kChorusGainI2[0] : modfx_consts::kChorusGainII[0];
+  const float chorus_gain_sub  = (chorus_mode == 0) ? modfx_consts::kChorusGainI[1]
+                            : (chorus_mode == 1) ? modfx_consts::kChorusGainI2[1] : modfx_consts::kChorusGainII[1];
 
-  // TIME knob -> ENSE chorus LFO rate (shared exp curve, same as FLANGER).
+  // TIME knob -> chorus LFO rate (shared exp curve, same as FLANGER).
   // The main-voice LFO frequency comes from the common
-  // kEnseLFOMin * exp(kEnseLFOlnR * TIME) curve (0.0167 Hz = 60 s at TIME=0
+  // kChorusLFOMin * exp(kChorusLFOlnR * TIME) curve (0.0167 Hz = 60 s at TIME=0
   // -> 0.6 Hz = 1.7 s at TIME=1). The sub-voice LFO is DETUNED against the
-  // main by kEnseLfoDetune (x1.0618): the two voices share one "heartbeat"
+  // main by kChorusLfoDetune (x1.0618): the two voices share one "heartbeat"
   // but slowly drift in and out of phase, producing the classic chorus
   // "swelling" (beating) instead of two static layers.
-  const float ense_lfo1_freq = modfx_consts::kEnseLFOMin * modfx_expf(modfx_consts::kEnseLFOlnR * t); // Hz (main)
-  const float ense_lfo2_freq = ense_lfo1_freq * modfx_consts::kEnseLfoDetune;                        // Hz (sub, detuned)
+  const float chorus_lfo1_freq = modfx_consts::kChorusLFOMin * modfx_expf(modfx_consts::kChorusLFOlnR * t); // Hz (main)
+  const float chorus_lfo2_freq = chorus_lfo1_freq * modfx_consts::kChorusLfoDetune;                        // Hz (sub, detuned)
   // q31 increment = freq * 2^31 / sr. Recomputed every block so TIME moves
   // the rate live with no phase jump: the phase accumulator keeps running,
   // only its step size changes.
-  ense_lfo1_w_ = (int32_t)(ense_lfo1_freq * 2147483648.0f / sr);
-  ense_lfo2_w_ = (int32_t)(ense_lfo2_freq * 2147483648.0f / sr);
+  chorus_lfo1_w_ = (int32_t)(chorus_lfo1_freq * 2147483648.0f / sr);
+  chorus_lfo2_w_ = (int32_t)(chorus_lfo2_freq * 2147483648.0f / sr);
 
   // DEPTH knob -> LFO spread (how far the LFO modulates the delay).
   // DEPTH=0 -> no modulation (delay stays at center, chorus is "dry").
   // DEPTH=1 -> full modulation (delay sweeps min..max, chorus is "deep").
-  // ENSE knob -> dry/wet crossfade (0=dry only, 1=full chorus).
-  const float ense_depth = p.depth; // 0..1 (LFO spread)
-  const float ense_master = p.ense; // 0..1 (dry/wet)
+  // CHORUS knob -> dry/wet crossfade (0=dry only, 1=full chorus).
+  const float chorus_depth = p.depth; // 0..1 (LFO spread)
+  const float chorus_master = p.chorus; // 0..1 (dry/wet)
   // Fixed 1st-order LPF alpha (Juno RC anti-alias, mid cutoff). No longer
   // swept by TIME: CMODE selects the voice, TIME drives the LFO rate.
-  ense_lpf_alpha_ = 0.5f;
+  chorus_lpf_alpha_ = 0.5f;
 
   // FLANGER (multi-line / bucket-brigade): small feedback + center delay. FOUR mono
   // lines, each with its own LFO phase (kFlangerLinePhase), average into a smooth
@@ -624,13 +624,13 @@ private:
   const float flanger_delay_smp = modfx_consts::kFlangerDelayMinSmp +
       d2 * (modfx_consts::kFlangerDelayMaxSmp - modfx_consts::kFlangerDelayMinSmp);
 
-  // ENSE Juno-chorus delay ranges (samples). The LFO sweeps within these.
+  // CHORUS Juno-chorus delay ranges (samples). The LFO sweeps within these.
   // constexpr in modfx_constants.h (pre-computed at kSr=48000) -- saves 8
   // float multiplies per block, audio is bit-identical.
-  const float ense_main_dmin = modfx_consts::kEnseMainDelayMinSmp;
-  const float ense_main_dmax = modfx_consts::kEnseMainDelayMaxSmp;
-  const float ense_sub_dmin  = modfx_consts::kEnseSubDelayMinSmp;
-  const float ense_sub_dmax  = modfx_consts::kEnseSubDelayMaxSmp;
+  const float chorus_main_dmin = modfx_consts::kChorusMainDelayMinSmp;
+  const float chorus_main_dmax = modfx_consts::kChorusMainDelayMaxSmp;
+  const float chorus_sub_dmin  = modfx_consts::kChorusSubDelayMinSmp;
+  const float chorus_sub_dmax  = modfx_consts::kChorusSubDelayMaxSmp;
 
   // ---- NOISE branch K-rate setup (band-pass coefficients) ---------------------
   // Skipped entirely at NOISE = 0 (the branch is a dry wire, regression-safe).
@@ -687,7 +687,7 @@ private:
     float R = in_r;
     float fln_wet = p.flanger;
 
-    // ---- NOISE branch: granular noise-sweep (additive, before ENSE) ---------
+    // ---- NOISE branch: granular noise-sweep (additive, before CHORUS) ---------
     // LCG white noise, flashed on an exponential cadence (NRATE), AM'd by the
     // DRIFT walk, band-passed (TIME-swept 2-pole SVF) and summed into the
     // input so the rustle passes through the chorus/flanger "in the wash".
@@ -696,7 +696,7 @@ private:
     if (noise_mix > 0.f)
     {
       // DRIFT walk, channel kDriftNoise (the AM modulator). Channels 0/1 are
-      // the reserved ENSE/FLANGER level walks -- kept advancing so their state
+      // the reserved CHORUS/FLANGER level walks -- kept advancing so their state
       // is live for the follow-up wiring (see the state block above).
       driftWalkStep(kDriftNoise, p.drift);
       driftWalkStep(0, p.drift);
@@ -775,7 +775,7 @@ private:
       R += noise_mix * n_r;
     }
 
-    // ---- ENSE: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------
+    // ---- CHORUS: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------
     // Architecture: peterall/junologue-chorus (MIT), adapted with hand-rolled
     // delay lines / LFOs / LPFs (no CMSIS dependency for the web sim).
     // Two mono delay lines (main + sub), each driven by a triangle LFO whose
@@ -784,16 +784,16 @@ private:
     // Each LFO reads the delay at two fractional taps (t and 1-t) and sums them
     // with the CMODE-selected per-voice gains. 1st-order LPF post-delay per
     // channel. CHORUS(dry/wet)=0 -> dry only. CHORUS=1 -> full chorus.
-    if (ense_master > 0.f)
+    if (chorus_master > 0.f)
     {
       // Advance the two triangle LFOs (q31 phase accumulators).
-      ense_lfo1_phase_ += ense_lfo1_w_;
-      ense_lfo2_phase_ += ense_lfo2_w_;
+      chorus_lfo1_phase_ += chorus_lfo1_w_;
+      chorus_lfo2_phase_ += chorus_lfo2_w_;
       // Triangle unipolar 0..1 from q31 phase: |q31_to_f32(phase)|
-      const float lfo1 = (ense_lfo1_phase_ < 0) ? -(ense_lfo1_phase_ * 4.6566128730773926e-10f)
-                                                 :  (ense_lfo1_phase_ * 4.6566128730773926e-10f);
-      const float lfo2 = (ense_lfo2_phase_ < 0) ? -(ense_lfo2_phase_ * 4.6566128730773926e-10f)
-                                                 :  (ense_lfo2_phase_ * 4.6566128730773926e-10f);
+      const float lfo1 = (chorus_lfo1_phase_ < 0) ? -(chorus_lfo1_phase_ * 4.6566128730773926e-10f)
+                                                 :  (chorus_lfo1_phase_ * 4.6566128730773926e-10f);
+      const float lfo2 = (chorus_lfo2_phase_ < 0) ? -(chorus_lfo2_phase_ * 4.6566128730773926e-10f)
+                                                 :  (chorus_lfo2_phase_ * 4.6566128730773926e-10f);
 
       // SoftLimit (Juno BBD saturation, stmlib).
       const float in_mono = (L + R) * 0.5f;
@@ -801,9 +801,9 @@ private:
       const float sl_in = in_mono * (27.f + x2) / (27.f + 9.f * x2);
 
       // Write to the mono delay lines (raw, power-of-2 mask).
-      const uint32_t dl_mask = modfx_consts::kEnseLineLenSmp - 1U;
-      ense_main_delay_[(ense_main_w_--) & dl_mask] = sl_in;
-      ense_sub_delay_[(ense_sub_w_--) & dl_mask] = sl_in;
+      const uint32_t dl_mask = modfx_consts::kChorusLineLenSmp - 1U;
+      chorus_main_delay_[(chorus_main_w_--) & dl_mask] = sl_in;
+      chorus_sub_delay_[(chorus_sub_w_--) & dl_mask] = sl_in;
 
       // Read at the two LFO taps (fractional, linear interpolation).
       auto readFrac = [](float *buf, uint32_t w, uint32_t mask, float pos) -> float {
@@ -816,33 +816,33 @@ private:
 
       // LFO spread from DEPTH: delay = center +/- spread * DEPTH * (lfo - 0.5).
       // DEPTH=0 -> delay=center (no modulation). DEPTH=1 -> delay=min..max.
-      const float main_center = (ense_main_dmin + ense_main_dmax) * 0.5f;
-      const float main_spread = (ense_main_dmax - ense_main_dmin) * 0.5f * ense_depth;
-      const float sub_center  = (ense_sub_dmin  + ense_sub_dmax)  * 0.5f;
-      const float sub_spread  = (ense_sub_dmax  - ense_sub_dmin)  * 0.5f * ense_depth;
+      const float main_center = (chorus_main_dmin + chorus_main_dmax) * 0.5f;
+      const float main_spread = (chorus_main_dmax - chorus_main_dmin) * 0.5f * chorus_depth;
+      const float sub_center  = (chorus_sub_dmin  + chorus_sub_dmax)  * 0.5f;
+      const float sub_spread  = (chorus_sub_dmax  - chorus_sub_dmin)  * 0.5f * chorus_depth;
       const float main_t  = main_center + main_spread * (lfo1 - 0.5f);
       const float main_t2 = main_center + main_spread * (0.5f - lfo2);
       const float sub_t   = sub_center  + sub_spread  * (lfo1 - 0.5f);
       const float sub_t2  = sub_center  + sub_spread  * (0.5f - lfo2);
 
-      const float main_wet = readFrac(ense_main_delay_, ense_main_w_, dl_mask, main_t) * ense_gain_main +
-                             readFrac(ense_main_delay_, ense_main_w_, dl_mask, main_t2) * ense_gain_sub;
-      const float sub_wet  = readFrac(ense_sub_delay_, ense_sub_w_, dl_mask, sub_t) * ense_gain_main +
-                             readFrac(ense_sub_delay_, ense_sub_w_, dl_mask, sub_t2) * ense_gain_sub;
+      const float main_wet = readFrac(chorus_main_delay_, chorus_main_w_, dl_mask, main_t) * chorus_gain_main +
+                             readFrac(chorus_main_delay_, chorus_main_w_, dl_mask, main_t2) * chorus_gain_sub;
+      const float sub_wet  = readFrac(chorus_sub_delay_, chorus_sub_w_, dl_mask, sub_t) * chorus_gain_main +
+                             readFrac(chorus_sub_delay_, chorus_sub_w_, dl_mask, sub_t2) * chorus_gain_sub;
 
       // Post-LPF (1st-order one-pole, per channel for stereo phase image).
       const float wet_total_l = main_wet + sub_wet;
       const float wet_total_r = main_wet + sub_wet; // mono sum (Juno BBD is mono)
-      ense_main_post_lpf_l_ += ense_lpf_alpha_ * (wet_total_l - ense_main_post_lpf_l_);
-      ense_main_post_lpf_r_ += ense_lpf_alpha_ * (wet_total_r - ense_main_post_lpf_r_);
-      const float wet_l = ense_main_post_lpf_l_ + ense_sub_post_lpf_l_;
-      const float wet_r = ense_main_post_lpf_r_ + ense_sub_post_lpf_r_;
+      chorus_main_post_lpf_l_ += chorus_lpf_alpha_ * (wet_total_l - chorus_main_post_lpf_l_);
+      chorus_main_post_lpf_r_ += chorus_lpf_alpha_ * (wet_total_r - chorus_main_post_lpf_r_);
+      const float wet_l = chorus_main_post_lpf_l_ + chorus_sub_post_lpf_l_;
+      const float wet_r = chorus_main_post_lpf_r_ + chorus_sub_post_lpf_r_;
 
-      // Dry/wet blend: ENSE = crossfade (0=dry only, 1=full chorus).
-      // At ENSE=0: out = dry (wire). At ENSE=1: out = dry + wet.
+      // Dry/wet blend: CHORUS = crossfade (0=dry only, 1=full chorus).
+      // At CHORUS=0: out = dry (wire). At CHORUS=1: out = dry + wet.
       // DEPTH already applied to the LFO delay (spread), not the gain.
-      L = L + ense_master * wet_l;
-      R = R + ense_master * wet_r;
+      L = L + chorus_master * wet_l;
+      R = R + chorus_master * wet_r;
     }
 
     // ---- FLANGER: thru-zero flanger (multi-line / bucket-brigade) ----------------

@@ -13,13 +13,13 @@ maps to a 0..1 DSP value. Defaults match `header.c` and
 
 | Slot | Name  | Range | Default      | Display | What it does |
 |------|-------|-------|--------------|---------|--------------|
-| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **ENSE chorus LFO rate** and the FLANGER LFO frequency via a shared exp curve (ENSE 0.0167..0.6 Hz = 60 s..1.7 s; FLANGER 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). Also sweeps the NOISE-branch band-pass cutoff (300 Hz..8 kHz, same exp curve), so the “metallic” center of the rustle tracks the modulation tempo. |
+| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **chorus LFO rate** and the FLANGER LFO frequency via a shared exp curve (CHORUS 0.0167..0.6 Hz = 60 s..1.7 s; FLANGER 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). Also sweeps the NOISE-branch band-pass cutoff (300 Hz..8 kHz, same exp curve), so the “metallic” center of the rustle tracks the modulation tempo. |
 | 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), flanger center delay (DEPTH²: 1..7.5 ms), tape wow + flutter (DEPTH × 0.60 / × 0.25). |
-| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all level stages stay at their manual values. > 0, a per-sample random-walk (LCG-driven, exponential target gaps 2..12 s, one-pole tracking tau 5..20 s) runs on the channel states: channel 3 drives the NOISE-branch AM (0.5 + 0.5·walk → the rustle “breathes” in level), channels 0/1 are the reserved ENSE/FLANGER level walks (allocated and advancing, wiring into the wet amounts is a follow-up). |
+| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all level stages stay at their manual values. > 0, a per-sample random-walk (LCG-driven, exponential target gaps 2..12 s, one-pole tracking tau 5..20 s) runs on the channel states: channel 3 drives the NOISE-branch AM (0.5 + 0.5·walk → the rustle “breathes” in level), channels 0/1 are the reserved CHORUS/FLANGER level walks (allocated and advancing, wiring into the wet amounts is a follow-up). |
 | 3    | CMODE | 0..1  | 512 (~50%)   | I/I+II/II | Chorus mode — **3 equal bands** (Formant-Vowel style): band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (≥2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
-| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the old "ENSE"/"DWET" knob, renamed to match the CHORUS/FLANGER per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
+| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the CHORUS/FLANGER per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
 | 5    | FLANGER  | 0..1  | 0 (off)      | %       | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, 48..360 smp, center set by DEPTH²), each with its OWN LFO phase; the LFO sweeps each read tap ±20% × DEPTH² (0.02..2.0 Hz; R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH (no resonant peaks, no “locking” at the LFO turnaround). Small feedback (FLANGER × 0.15, re-injected into the line, Q ~1.18, no self-oscillation). |
-| 6    | NOISE    | 0..1  | 0 (off)      | %       | Granular noise-sweep level. 0 = off (dry wire, the branch is never computed). > 0 adds an LCG white-noise “metallic rustle / dust-flash” generator on the path input (before the ENSE chorus): white noise (fx_white) gated by a two-phase burst machine (ON flash / GAP lull), AM-modulated by the DRIFT walk, band-passed by a 2-pole SVF (cutoff swept by TIME + per-burst tone wander), summed additively so the rustle passes through the chorus/flanger “in the wash”. Each flash is randomized on three axes for maximum diversity: **duration** (1..25 ms, log), **level** (0.25..1.0 gain) and **tone** (BP center ±½ octave) — so consecutive knocks never sound alike. |
+| 6    | NOISE    | 0..1  | 0 (off)      | %       | Granular noise-sweep level. 0 = off (dry wire, the branch is never computed). > 0 adds an LCG white-noise “metallic rustle / dust-flash” generator on the path input (before the chorus): white noise (fx_white) gated by a two-phase burst machine (ON flash / GAP lull), AM-modulated by the DRIFT walk, band-passed by a 2-pole SVF (cutoff swept by TIME + per-burst tone wander), summed additively so the rustle passes through the chorus/flanger “in the wash”. Each flash is randomized on three axes for maximum diversity: **duration** (1..25 ms, log), **level** (0.25..1.0 gain) and **tone** (BP center ±½ octave) — so consecutive knocks never sound alike. |
 | 7    | NRATE    | 0..1  | 511 (~50%)   | %       | Noise burst cadence: average flashes/second 0.15..8 (exp curve). 0 = rare flashes with long lulls, 1 = dense shimmer. Each lull (GAP) is exponentially drawn (Poisson) from fx_rand, so the cadence “breathes”. Only audible when NOISE > 0. (This knob sets the flash RATE; per-burst duration/level/tone are independent random draws, not driven by NRATE.) |
 
 > **Display (device):** all 8 slots are `frac = 0`, `type_none` — the NTS-1
@@ -41,7 +41,7 @@ OSC to L/R *before* the first FX stage. The OLD code read `in[n]` (a mono
 layout) from the interleaved buffer -- i.e. it consumed the L half only and
 walked the R half as if it were the next L frames (a half-rate garbled
 signal; clean in the web chain only because L==R there). The per-sample path
-now reads both channels and every stateful stage (ENSE pre/post LPF, the
+now reads both channels and every stateful stage (CHORUS pre/post LPF, the
 chorus delay voices, FLANGER) is per-channel.
 
     in (stereo L/R)
@@ -56,7 +56,7 @@ chorus delay voices, FLANGER) is per-channel.
                 duration (1..25 ms), level (0.25..1.0) and tone, summed into
                 the input so the rustle passes through the chorus/flanger
                 "in the wash")
-      -> ENSE  (Juno-60 BBD stereo chorus: 2 MONO REAL delay lines @
+      -> CHORUS  (Juno-60 BBD stereo chorus: 2 MONO REAL delay lines @
                main 15..20 ms / sub 28..34 ms, each driven by a TRIANGLE LFO
                set K-rate from TIME (main = shared exp curve, sub detuned
                x1.0618 -> shared heartbeat, voices drift in/out of phase); each
@@ -79,7 +79,7 @@ one-pole HPF there (tau ~2 s) would have eaten the low-frequency DRONE signal
 for no benefit. The 0.9 makeup (kModMakeup) simply leaves 1 dB of headroom
 against the chorus/flanger level peaks.
 
-Every level stage (ENSE / FLANGER / TAPE) is a dry/wet 0..1 blend: at 0
+Every level stage (CHORUS / FLANGER / TAPE) is a dry/wet 0..1 blend: at 0
 the stage is a pure wire (regression-safe). The DEL/REV stages downstream see
 the MOD output as their input. (The formant + comb resonators are part of the
 upstream DRONE-OSC unit — see `drone-osc/README.md`.)
@@ -98,7 +98,7 @@ one-pole tracking, LCG-driven):
 - Channel 3 drives the NOISE-branch AM: AM = 0.5 + 0.5 · walk, so the
   rustle "breathes" in level (0.5 = flat at DRIFT = 0; wanders 0..1 at
   DRIFT > 0).
-- Channels 0/1 are the reserved ENSE/FLANGER level walks: allocated,
+- Channels 0/1 are the reserved CHORUS/FLANGER level walks: allocated,
   advancing, and zeroed at DRIFT = 0, but their output is not yet mixed
   into the chorus/flanger wet amounts (see the status note below).
 - The walk is driven by the platform Park-Miller-Carta LCG (`fx_rand()`,
@@ -108,7 +108,7 @@ one-pole tracking, LCG-driven):
   channel stays at its manual value (the regression-safe default).
 
 > **Status:** the walk is LIVE on channel 3 (the NOISE-branch AM). Channels
-> 0/1 (the ENSE/FLANGER level walks) are allocated and advancing but not yet
+> 0/1 (the CHORUS/FLANGER level walks) are allocated and advancing but not yet
 > mixed into the wet amounts — wiring them in is a follow-up.
 
 ## libm discipline (check-und)
@@ -153,14 +153,14 @@ K-rate computation in this unit uses only:
 
 ## SDRAM (delay lines)
 
-The ENSE / FLANGER / TAPE stages use REAL delay lines (true circular line
+The CHORUS / FLANGER / TAPE stages use REAL delay lines (true circular line
 buffers), not one-pole lowpasses — a one-pole is a lowpass and reads as a
 mute, which is exactly the bug the old "modulated one-pole delays" had.
-`Modfx::getBufferSize()` reports `kModSramBytes` (two MONO ENSE delay lines at
+`Modfx::getBufferSize()` reports `kModSramBytes` (two MONO CHORUS delay lines at
 2048 smp each for the Juno main/sub voices, plus the FLANGER L/R pair at 192 smp
 and the TAPE L/R pair at 384 smp per channel ≈ 20.5 KB), well inside the NTS-1
 modfx slot's 256 KB of allocatable external memory. `unit.cc` allocates it from
-`sdram_alloc` and `init()` slices it into the ENSE (2 mono) + FLANGER + TAPE lines;
+`sdram_alloc` and `init()` slices it into the CHORUS (2 mono) + FLANGER + TAPE lines;
 the web chain (`Chain::init`) slices the same size automatically. The
 line heads are plain `uint32_t` (exact wrap, no float drift) and the
 fractional (LFO-modulated) read offset is interpolated between the two
@@ -176,7 +176,7 @@ through `Module.setFxParam(stage=0, which=0..7, raw)`; every slider shows
 The web chain also provides the `fx_rand()` / `fx_white()` stubs
 (Park-Miller-Carta, sharing the OSC stubs' LCG state) in `drone-chain/wasm.cc`
 so the NOISE branch and the DRIFT walk run identically to the device.
-The MOD stage's `getBufferSize()` is `kModSramBytes` (the ENSE + FLANGER + TAPE
+The MOD stage's `getBufferSize()` is `kModSramBytes` (the CHORUS + FLANGER + TAPE
 delay lines, see *SDRAM* above); `Chain::init` slices the chain's single SDRAM
 allocation across MOD / DEL / REV in that order.
 

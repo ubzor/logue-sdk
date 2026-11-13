@@ -64,7 +64,7 @@ public:
     FX_REV,
     FX_STAGE_COUNT
   };
-  // MOD is a full 8-parameter stage (TIME / DEPTH / DRIFT / CMODE / ENSE /
+  // MOD is a full 8-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
   // FLANGER / NOISE / NRATE). DEL and REV still have their own parameter sets.
   // We use the MOD stage's count (8) as the per-stage stride so
   // setFxParam/applyFxParams work for all three; DEL/REV simply ignore the
@@ -76,7 +76,7 @@ public:
     FX_DEPTH,
     FX_DRIFT,
     FX_CMODE,
-    FX_ENSE,
+    FX_CHORUS,
     FX_FLANGER,
     FX_NOISE,
     FX_NRATE,

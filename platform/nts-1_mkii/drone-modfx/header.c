@@ -57,7 +57,7 @@ const __unit_header unit_header_t unit_header = {
 
         // See common/runtime.h for type enum and unit_param_t structure
 
-        // [0] TIME: LFO tempo (0..1) — sweeps ENSE chorus LFO rate (0.05..~4.5 Hz)
+        // [0] TIME: LFO tempo (0..1) — sweeps chorus LFO rate (0.05..~4.5 Hz)
         // exponentially; also drives FLANGER LFO rate.
         {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"TIME"}},
 
@@ -84,7 +84,7 @@ const __unit_header unit_header_t unit_header = {
         // "metallic rustle / dust-flash" generator on the path input: burst-
         // gated (NRATE cadence), AM-modulated by the DRIFT walk, band-passed
         // by a 2-pole SVF (cutoff swept by TIME), summed additively before the
-        // ENSE chorus.
+        // chorus stage.
         {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"NOISE"}},
 
         // [7] NRATE: noise burst cadence (0..1) -> average flashes/second

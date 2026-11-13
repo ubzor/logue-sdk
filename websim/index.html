@@ -168,8 +168,8 @@
           </label>
           <label class="flex items-center gap-3">
             <span class="w-11 text-xs font-medium shrink-0">Chorus</span>
-            <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_ense" class="range range-primary range-sm flex-1">
-            <span id="fxmod_ense_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">100%</span>
+            <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_chorus" class="range range-primary range-sm flex-1">
+            <span id="fxmod_chorus_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">100%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-12 text-xs font-medium shrink-0">Flanger</span>
@@ -1439,7 +1439,7 @@
       // The worklet thread applies the value to the live DSP each block
       // (Chain::applyFxParams), so the sound updates in real time.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "ense", "flanger", "noise", "nrate"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "chorus", "flanger", "noise", "nrate"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];
