@@ -263,6 +263,70 @@ static constexpr float kNoiseWetNorm = 0.5f;
 // what makes the rustle "breathe" -- the DRIFT knob finally does something
 // audible (it previously only had un-wired walk state).
 
+// ---- ENSEMBLE (slot 8): string-synth ensemble (RS-202 style) -----------------
+// Architecture: quarterturn/teensy3-ensemble-chorus (MIT), adapted with
+// hand-rolled float delay lines / LFOs (no CMSIS / Teensy-Audio dependency).
+// One SHARED MONO delay line (kEnsembleLineLenSmp = 1024 smp = 21 ms), three
+// read taps whose LFO phases are 120 deg apart (1/3-cycle spacing), summed and
+// averaged (x 1/3). The LFO waveform is a BINARY-sine: 1.0*sin(w) +
+// (1/8)*sin(10*w) -- a FULL-amplitude base rate with a gentle 10x harmonic
+// that makes the tempo "breathe" (the RS-202's slow amplitude modulation
+// inside the delay sweep). The base sine is NOT halved: the original Teensy
+// LFO_RANGE=100 is an 8-bit unit (~0.098 full scale), so the original sweep is
+// much narrower; here the base keeps full amplitude for a clear ensemble
+// motion while the 1/8 harmonic stays smooth.
+// Stereo: the R channel reads the SAME three taps shifted by kEnsemblePhase90
+// (367 smp ~ 90 deg of the 1024-smp line) relative to L -- the two ears are
+// always 90 deg apart on the line, a classic chorus stereo spread. A 1st-order
+// LPF (kEnsembleLpfAlpha) per channel keeps the comb edges from reading
+// metallic. The branch is ADDITIVE (like NOISE) and sits BEFORE the Juno
+// chorus, so the ensemble "strings" pass through CHORUS / FLANGER "in the
+// wash". ENSMBL = 0 -> dry wire (regression-safe, branch never computed).
+//
+// LFO rate: the BASE rate is TIME-swept 0.0167..0.6 Hz (the SAME exp curve as
+// CHORUS / FLANGER: 60 s period at TIME=0 -> 1.7 s at TIME=1), so the ensemble
+// moves in lockstep with the other stages. The 10x "breathing" harmonic then
+// wobbles at 0.167..6 Hz (kept very gentle by the 1/16 weight, so it reads as
+// a slow swell / subtle vibrato shimmer, not a flutter).
+//
+// SDRAM: one extra 1024-float mono line (kEnsembleLineLenSmp) is appended to
+// the CHORUS / FLANGER lines below (kModSramBytes grows by 4096 bytes, total
+// 36 KB -- well inside the NTS-1 modfx slot's 256 KB).
+static constexpr uint32_t kEnsembleLineLenSmp = 1024U; // 21 ms @ 48 kHz (original Teensy: 1024)
+static constexpr uint32_t kEnsemblePhase90    = 367U;  // 90-deg shift on the line (original: 367)
+static constexpr float kEnsembleHarmonic = 10.0f;      // LFO harmonic multiplier (original: 20*pi / 2*pi)
+// Weight of the 10x "breathing" harmonic, RELATIVE TO THE FULL base sine.
+// The base sine has full amplitude 1.0 (see ensLfoStep). The original Teensy
+// LFO_RANGE=100 was an 8-bit unit (100/1024 ~ 0.098), NOT 100% amplitude --
+// the original delay sweep is much narrower and the breathing is gentle.
+// The base rate is now the SAME slow curve as CHORUS / FLANGER (0.0167..0.6
+// Hz), so the 10x harmonic (0.167..6 Hz) must stay clearly secondary: 1/16
+// wobbles the instantaneous LFO rate by only ~ +/-12.5% around the base, so
+// the tempo "breathes" as a slow swell / subtle vibrato shimmer instead of a
+// flutter (1/6 or 1/8 read as a busy, fast flutter on the slow base).
+static constexpr float kEnsembleHarmonicWeight = 0.0625f; // 1/16 (gentle breathing)
+// Base LFO rate: SAME exp curve as CHORUS / FLANGER (0.0167 Hz = 60 s at
+// TIME=0 -> 0.6 Hz = 1.7 s at TIME=1), so the ensemble sweep moves in
+// lockstep with the chorus/flanger at every TIME. (Previously the ensemble ran
+// 9x faster at the low end -- 0.15 Hz = 6.7 s -- which read as a short, busy
+// flutter instead of the slow string-machine swell.)
+static constexpr float kEnsembleLFOMin = 0.01667f;     // 60 s period (TIME = 0) -- matches CHORUS / FLANGER
+static constexpr float kEnsembleLFOMax = 0.6f;         // 1.7 s period (TIME = 1) -- matches CHORUS / FLANGER
+static constexpr float kEnsembleLFOlnR = 3.58332f;     // ln(kEnsembleLFOMax / kEnsembleLFOMin) = ln(36) -- matches CHORUS
+static constexpr float kEnsembleWetNorm = 0.5f;        // final wet ceiling (same as CHORUS)
+static constexpr float kEnsembleLpfAlpha = 0.3f;       // 1st-order LPF per channel (anti-metallic)
+// Delay geometry: the LFO waveform w in [-1, 1] maps to delay =
+// (center + spread * w) samples. The CENTER is fixed at 15 ms (720 smp, a
+// string-machine / chorus-main delay zone, NOT the old 1.9 ms which read as a
+// thin, "surface" shimmer). The SPREAD is DEPTH-driven (DEPTH^2, like the
+// FLANGER): at DEPTH=1 the sweep spans 720 +/- 260 = 460..980 smp
+// (9.6..20.4 ms, a full ensemble swell); at DEPTH=0 it is a near-static
+// layer (only the LFO's 1/16 "breathing" remains). Previously the spread was
+// a fixed 50 smp and DEPTH did nothing to the ensemble -- that is why the
+// branch read as shallow and DEPTH-independent.
+static constexpr float kEnsembleDelayCenterSmp = 720.f; // 15 ms center delay (fixed)
+static constexpr float kEnsembleMaxSpreadSmp   = 260.f; // full DEPTH^2=1 spread (9.6..20.4 ms)
+
 // ---- Input gain (unity, no attenuation) -------------------------------------
 // The OSC output (mono) is upmixed to L/R by Chain::process with NO
 // attenuation (a plain duplicate, so the per-channel level equals the mono
@@ -295,8 +359,9 @@ static constexpr uint32_t kModLineBytesPerPair =
 // Total: 32768 bytes (~32 KB, well under 256 KB).
 static constexpr uint32_t kModSramBytes =
     2U * kChorusLineLenSmp * sizeof(float) +        // 2 CHORUS delay lines (main + sub, mono each)
-    kFlangerLineCount * kFlangerLineLenSmp * sizeof(float);  // 4 FLANGER mono lines
-// = 2*2048*4 + 4*1024*4 = 16384 + 16384 = 32768 bytes (~32 KB)
+    kFlangerLineCount * kFlangerLineLenSmp * sizeof(float) + // 4 FLANGER mono lines
+    kEnsembleLineLenSmp * sizeof(float);            // 1 ENSEMBLE mono line
+// = 2*2048*4 + 4*1024*4 + 1024*4 = 16384 + 16384 + 4096 = 36864 bytes (~36 KB)
 
 } // namespace modfx_consts
 

@@ -64,12 +64,12 @@ public:
     FX_REV,
     FX_STAGE_COUNT
   };
-  // MOD is a full 8-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
-  // FLANGER / NOISE / NRATE). DEL and REV still have their own parameter sets.
-  // We use the MOD stage's count (8) as the per-stage stride so
+  // MOD is a full 9-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
+  // FLANGER / NOISE / NRATE / ENSMBL). DEL and REV still have their own
+  // parameter sets. We use the MOD stage's count (9) as the per-stage stride so
   // setFxParam/applyFxParams work for all three; DEL/REV simply ignore the
   // higher indices (their setParameter default-cases them).
-  // FX_PARAM_COUNT is the MOD count = 8.
+  // FX_PARAM_COUNT is the MOD count = 9.
   enum
   {
     FX_TIME = 0,
@@ -80,7 +80,8 @@ public:
     FX_FLANGER,
     FX_NOISE,
     FX_NRATE,
-    FX_PARAM_COUNT // = 8 (the MOD stage's parameter count)
+    FX_ENSEMBLE,
+    FX_PARAM_COUNT // = 9 (the MOD stage's parameter count)
   };
 
   // Total dynamic RAM the chain needs = the sum of every stage's buffer.

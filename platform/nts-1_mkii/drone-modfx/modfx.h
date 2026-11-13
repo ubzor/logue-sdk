@@ -93,7 +93,8 @@ public:
     FLANGER,    // thru-zero flanger level (0..1)
     NOISE,      // noise branch level (0..1). 0 = off (dry wire, default)
     NRATE,      // noise burst cadence (0..1) -> 0.15..8 flashes/s (exp)
-    NUM_PARAMS  // = 8
+    ENSEMBLE,   // string-synth ensemble level (0..1). 0 = off (dry wire, default)
+    NUM_PARAMS  // = 9
   };
 
   // Note: Make sure that default param values correspond to declarations in header.c
@@ -109,6 +110,7 @@ public:
     float flanger;   // 0..1 (flanger wet)
     float noise;    // 0..1 (noise branch level: 0 = off)
     float nrate;    // 0..1 (noise burst cadence: 0.15..8 fl/s, exp)
+    float ensemble; // 0..1 (ensemble level: 0 = off)
 
     void reset()
     {
@@ -120,6 +122,7 @@ public:
       flanger = 0.f;  // 0 (off)
       noise = 0.f;    // 0 (off: the branch is never computed, regression-safe)
       nrate = 0.5f;   // 511/1023 (mid cadence ~1 fl/s; only audible when NOISE > 0)
+      ensemble = 0.f; // 0 (off: the branch is never computed, regression-safe)
     }
 
     Params() { reset(); }
@@ -153,6 +156,9 @@ public:
     case NRATE:
       params_.nrate = param_10bit_to_f32(value);
       break;
+    case ENSEMBLE:
+      params_.ensemble = param_10bit_to_f32(value);
+      break;
     default:
       break;
     }
@@ -182,6 +188,13 @@ public:
     // FLANGER: kFlangerLineCount MONO delay lines (bucket-brigade), each kFlangerLineLenSmp.
     flanger_buf_  = p;  p += modfx_consts::kFlangerLineCount * modfx_consts::kFlangerLineLenSmp;
     for (uint32_t i = 0; i < modfx_consts::kFlangerLineCount; ++i) flanger_w_[i] = 0U;
+    // ENSEMBLE: one SHARED MONO delay line, kEnsembleLineLenSmp floats.
+    ensemble_delay_ = p; p += modfx_consts::kEnsembleLineLenSmp;
+    ensemble_w_ = 0U;
+    ens_phase_[0] = 0.f; ens_phase_[1] = 1.f/3.f; ens_phase_[2] = 2.f/3.f;
+    ens_lfo_freq_ = modfx_consts::kEnsembleLFOMin; // seed at the slowest rate
+    ens_spread_ = 0.5f * modfx_consts::kEnsembleMaxSpreadSmp; // seed ~DEPTH=0.5 (DEPTH^2=0.25 -> but use half for a sane mid default)
+    ens_lpf_l_ = 0.f; ens_lpf_r_ = 0.f;
 
 
     // Zero-clear the rest (FLANGER + TAPE lines).
@@ -305,6 +318,20 @@ private:
   int32_t chorus_lfo2_phase_ = 0;  // Juno LFO 2 phase (q31)
   int32_t chorus_lfo2_w_ = 0;      // Juno LFO 2 increment (q31, set K-rate from TIME)
   float flanger_lfo_phase_;
+
+  // ---- ENSEMBLE state (string-synth ensemble, RS-202 style) ------------------
+  // One SHARED MONO delay line; three read taps at LFO phases 0 / 1/3 / 2/3 of
+  // a cycle (120 deg apart). The LFO is a binary-sine (base + 10x harmonic),
+  // hand-rolled per tap (no libm, no table). The line head advances once per
+  // sample (mono write: the mono input is written to the shared line). R reads
+  // the same taps shifted by kEnsemblePhase90 (367 smp) for the stereo spread.
+  float *ensemble_delay_ = nullptr; // mono line, kEnsembleLineLenSmp floats
+  uint32_t ensemble_w_ = 0U;        // line write head
+  float ens_phase_[3] = {0.f, 1.f/3.f, 2.f/3.f}; // tap phases (cycles), 120 deg apart
+  float ens_lfo_freq_ = 0.f;        // K-rate: base LFO rate from TIME (Hz)
+  float ens_spread_ = 0.f;          // K-rate: LFO delay spread (samples), DEPTH^2-driven
+  float ens_lpf_l_ = 0.f;           // 1st-order LPF state, L channel
+  float ens_lpf_r_ = 0.f;           // 1st-order LPF state, R channel
 
   // ---- Filter / feedback states ----------------------------------------------
   // CHORUS Juno-chorus LPFs: hand-rolled 1st-order LPF (one-pole) states,
@@ -557,6 +584,67 @@ private:
     return p;
   }
 
+  // Advance ONE ensemble tap: advance its phase accumulator by (freq/sr)
+  // cycles, return the binary-sine waveform value:
+  //   w(phase) = 1.0*sin(2*pi*phase) + kEnsembleHarmonicWeight*sin(20*pi*phase)
+  // The BASE sine has FULL amplitude 1.0 (NOT halved -- the original Teensy
+  // LFO_RANGE=100 is an 8-bit unit ~0.098 full scale, so the original sweep is
+  // much narrower; here we keep a clear ensemble motion). The 10x harmonic
+  // (weight 1/16, kEnsembleHarmonicWeight) is the RS-202's "breathing" -- a
+  // gentle amplitude modulation of the delay sweep. Both sines are hand-rolled
+  // (no libm): each argument is first reduced to [-pi, pi] so the Taylor
+  // series stays accurate, and the 6th-order Taylor is used (the 10x harmonic
+  // argument is up to ~pi after reduction; 6th order is exact to <1e-9 there,
+  // which removes the "graininess" a 4th-order series left on the fast term).
+  static float ensLfoStep(float &phase, float freq)
+  {
+    const float step = freq / modfx_consts::kSr;
+    phase += step;
+    if (phase >= 1.f) phase -= 1.f;
+
+    // Reduce an angle to [-pi, pi] (no libm): wrap into [0, 2*pi) then map the
+    // upper half down by 2*pi. pi ~ 3.14159265, 2*pi ~ 6.28318531.
+    auto reduce = [](float a) -> float
+    {
+      const float two_pi = 6.283185307179586f;
+      while (a >= two_pi) a -= two_pi;
+      while (a < 0.f) a += two_pi;
+      if (a > 3.141592653589793f) a -= two_pi;
+      return a;
+    };
+
+    // 6th-order Taylor of sin on a reduced argument (|x| <= pi):
+    //   x - x^3/6 + x^5/120 - x^7/5040
+    // Exact to < 1e-9 for |x| <= pi. No libm.
+    auto sinT6 = [](float x) -> float
+    {
+      const float x2 = x * x;
+      return x * (1.f + x2 * (-1.f / 6.f + x2 * (1.f / 120.f - x2 / 5040.f)));
+    };
+
+    const float base_arg = reduce(6.283185307179586f * phase);            // 2*pi*phase in [-pi,pi]
+    const float harm_arg = reduce(62.83185307179586f * phase);            // 10*2*pi*phase in [-pi,pi]
+    const float s0 = sinT6(base_arg);                                    // sin(2*pi*phase)
+    const float s1 = sinT6(harm_arg);                                    // sin(10*2*pi*phase)
+    return 1.0f * s0 + modfx_consts::kEnsembleHarmonicWeight * s1;
+  }
+
+  // Read the shared mono ensemble line at a fractional offset `pos` (samples
+  // back from the newest written sample, pos in [0, lineLen)). Linear
+  // interpolation, exact wrap via a power-of-2 mask (kEnsembleLineLenSmp = 1024).
+  // `head` is the newest-written slot; one sample back is (head + len - 1).
+  static float ensRead(float *buf, uint32_t len, uint32_t head, float pos)
+  {
+    if (pos < 0.f) pos = 0.f;
+    if (pos > static_cast<float>(len - 1U)) pos = static_cast<float>(len - 1U);
+    const uint32_t mask = len - 1U;
+    const uint32_t base = (uint32_t)pos;
+    const float frac = pos - base;
+    const uint32_t i0 = (head + len - 1U - base) & mask;
+    const uint32_t i1 = (i0 + 1U) & mask;
+    return buf[i0] + frac * (buf[i1] - buf[i0]);
+  }
+
   // The per-sample audio path (upmix -> CHORUS -> FLANGER -> TAPE ->
   // makeup -> out). Defined INLINE inside the class so that
   // multiple translation units can each #include modfx.h through different
@@ -662,6 +750,23 @@ private:
   }
 
 
+
+  // ---- ENSEMBLE K-rate setup (LFO rate from TIME, spread from DEPTH) ---------
+  // The base LFO rate sweeps 0.0167..0.6 Hz with the SAME exp curve as CHORUS /
+  // FLANGER (kEnsembleLFOMin * exp(kEnsembleLFOlnR * TIME)), so the ensemble
+  // moves in lockstep with the other stages. The 10x harmonic (the RS-202
+  // "breathing") is computed inside ensLfoStep. The LFO DELAY SPREAD is driven
+  // by DEPTH^2 (like the FLANGER): 0 at DEPTH=0 (near-static layer) up to
+  // kEnsembleMaxSpreadSmp at DEPTH=1 (a full 9.6..20.4 ms swell). The CENTER
+  // delay is fixed at kEnsembleDelayCenterSmp (15 ms). Recomputed every block
+  // so TIME / DEPTH move the branch live with no phase jump.
+  const float ens_wet = p.ensemble * modfx_consts::kEnsembleWetNorm; // 0..0.5 final wet
+  if (p.ensemble > 0.f)
+  {
+    ens_lfo_freq_ = modfx_consts::kEnsembleLFOMin * modfx_expf(modfx_consts::kEnsembleLFOlnR * t);
+    const float d2 = p.depth * p.depth; // DEPTH^2 (like the FLANGER's depth curve)
+    ens_spread_ = d2 * modfx_consts::kEnsembleMaxSpreadSmp;
+  }
 
   // ---- Per-sample path ------------------------------------------------------
   for (uint32_t n = 0; n < frames; ++n)
@@ -773,6 +878,60 @@ private:
       L += noise_mix * n_l;
       const float n_r = noiseSvfBp(noise_svf_vel_, noise_svf_pos_, fx_white(), noise_svf_cc_w_, noise_svf_ae_) * env;
       R += noise_mix * n_r;
+    }
+
+    // ---- ENSEMBLE: string-synth ensemble (RS-202 style, additive, before CHORUS)
+    // One SHARED MONO delay line; three read taps at LFO phases 120 deg apart,
+    // summed and averaged (x 1/3). The LFO is a binary-sine (base + 10x
+    // harmonic) -- see ensLfoStep. R reads the same taps shifted by
+    // kEnsemblePhase90 (367 smp ~ 90 deg of the line) for the stereo spread.
+    // A 1st-order LPF per channel keeps the comb edges smooth. Skipped entirely
+    // at ENSMBL = 0 (dry wire -- regression-safe, state untouched).
+    if (ens_wet > 0.f)
+    {
+      // Mono input: the web chain upmixes OSC mono to L/R as a plain duplicate,
+      // and on the NTS-1 the OSC->MOD feed is mono-duplicated by the platform
+      // too. Write the L sample to the shared mono line (L==R in practice).
+      ensemble_delay_[(ensemble_w_++) & (modfx_consts::kEnsembleLineLenSmp - 1U)] = L;
+      // Advance the three tap LFOs and read the shared line at each.
+      const float w0 = ensLfoStep(ens_phase_[0], ens_lfo_freq_);
+      const float w1 = ensLfoStep(ens_phase_[1], ens_lfo_freq_);
+      const float w2 = ensLfoStep(ens_phase_[2], ens_lfo_freq_);
+      // Delay center + spread: the LFO waveform w in [-1, 1] maps to a delay
+      // of (center + spread * w) samples. Center is FIXED at
+      // kEnsembleDelayCenterSmp (15 ms -- a string-machine / chorus-main delay
+      // zone). The SPREAD is DEPTH^2-driven (computed in the K-rate setup as
+      // ens_spread_ = DEPTH^2 * kEnsembleMaxSpreadSmp): 0 at DEPTH=0 (a
+      // near-static layer) up to a full 9.6..20.4 ms swell at DEPTH=1. Both
+      // stay well inside the 1024-smp line (max 720 + 260 + 367 = 1347 < 2048
+      // after the R-channel +367 shift, clamped in ensRead).
+      const float center = modfx_consts::kEnsembleDelayCenterSmp;
+      const float spread = ens_spread_;
+      // L: taps at their native offsets. R: the SAME taps shifted +367 smp.
+      const uint32_t LEN = modfx_consts::kEnsembleLineLenSmp;
+      const uint32_t P90 = modfx_consts::kEnsemblePhase90;
+      const float dl0 = center + spread * w0;
+      const float dl1 = center + spread * w1;
+      const float dl2 = center + spread * w2;
+      // L channel reads (no shift); R channel reads (+P90, clamped inside ensRead).
+      const float l_sum = ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl0) +
+                          ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl1) +
+                          ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl2);
+      const float r_sum = ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl0 + P90) +
+                          ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl1 + P90) +
+                          ensRead(ensemble_delay_, LEN, ensemble_w_ - 1U, dl2 + P90);
+      // Average the three taps (x 1/3) and apply the 1st-order LPF per channel.
+      const float a3 = l_sum * (1.f / 3.f);
+      const float b3 = r_sum * (1.f / 3.f);
+      const float alpf = modfx_consts::kEnsembleLpfAlpha;
+      const float o_l = ens_lpf_l_ + alpf * (a3 - ens_lpf_l_);
+      const float o_r = ens_lpf_r_ + alpf * (b3 - ens_lpf_r_);
+      ens_lpf_l_ = o_l;
+      ens_lpf_r_ = o_r;
+      // Additive mix (like NOISE): the ensemble "strings" pass through the
+      // CHORUS / FLANGER "in the wash".
+      L += ens_wet * o_l;
+      R += ens_wet * o_r;
     }
 
     // ---- CHORUS: Juno-60 stereo chorus (2 BBD voices, raw primitives) ----------

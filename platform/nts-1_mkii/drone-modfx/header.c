@@ -48,9 +48,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010009U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: NOISE/NRATE slots (granular noise-sweep branch: LCG white noise, exponential burst cadence, DRIFT-AM, 2-pole SVF band-pass swept by TIME).
+    .version = 0x0001000AU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: ENSEMBLE slot (slot 8, string-synth ensemble branch: 1 shared mono delay line, 3 LFO taps 120 deg apart, binary-sine LFO with 10x "breathing" harmonic, RS-202 architecture, additive before CHORUS).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 8,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 9,                                       // Number of valid parameter descriptors. (max. 10)
 
     .params = {
         // Format: min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
@@ -91,5 +91,17 @@ const __unit_header unit_header_t unit_header = {
         // 0.15..8 (exp curve). 0 = rare long-lull flashes, 1 = dense shimmer.
         // Only audible when NOISE > 0.
         {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"NRATE"}},
+
+        // [8] ENSEMBLE: string-synth ensemble level (0..1). 0 = off (dry wire,
+        // default -- regression-safe). > 0 adds an RS-202-style "strings"
+        // generator on the path input (before the Juno CHORUS): one shared
+        // mono delay line (21 ms), three read taps at LFO phases 120 deg
+        // apart, summed and averaged; the LFO is a binary-sine (base rate
+        // TIME-swept 0.15..1.5 Hz + 10x "breathing" harmonic); R reads the
+        // same taps shifted 367 smp (~90 deg) for the stereo spread; a
+        // 1st-order LPF per channel keeps the comb edges smooth. Summed
+        // additively so the strings pass through CHORUS / FLANGER "in the
+        // wash".
+        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"ENSMBL"}},
     },
 };
