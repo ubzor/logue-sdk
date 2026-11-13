@@ -5,32 +5,61 @@ Sits between the DRONE-OSC (generator) and the DRONE-DELAY / DRONE-REVERB
 stages on the NTS-1 mkII; in the web simulator it runs inside the unified
 `drone-chain` wasm worklet (see `drone-chain/chain.h`).
 
-## The 9 parameters
+## The parameter model (6 header slots + 10 edit parameters)
 
-The MOD unit is a 9-slot unit. Every slot is a 10-bit knob (0..1023) that
-maps to a 0..1 DSP value. Defaults match `header.c` and
-`Modfx::Params::reset()`.
+The MOD unit uses **the same split as drone-osc, but with TWO independent
+PARAM/VALUE multiplexers**. Two **fixed** knobs (TIME / DEPTH, always on the
+A/B encoders) plus 10 edit parameters split into two groups:
 
-| Slot | Name  | Range | Default      | Display | What it does |
-|------|-------|-------|--------------|---------|--------------|
-| 0    | TIME  | 0..1  | 512 (~50%)   | %       | LFO tempo. Sweeps the **chorus LFO rate** and the FLANGER LFO frequency via a shared exp curve (CHORUS 0.0167..0.6 Hz = 60 s..1.7 s; FLANGER 0.05..2.0 Hz; the sub voice is detuned ×1.0618 → the two voices drift in/out of phase = chorus pulsing). Also sweeps the NOISE-branch band-pass cutoff (300 Hz..8 kHz, same exp curve), so the “metallic” center of the rustle tracks the modulation tempo. |
-| 1    | DEPTH | 0..1  | 511 (~50%)   | %       | Per-stage modulation depth. Chorus LFO **delay-spread** (DEPTH scales the LFO excursion around each voice's center delay; DEPTH=0 → no modulation, DEPTH=1 → full 15–20 / 28–34 ms sweep), flanger center delay (DEPTH²: 1..7.5 ms), tape wow + flutter (DEPTH × 0.60 / × 0.25), and the **ensemble** LFO delay-spread (DEPTH²: a near-static layer at DEPTH=0 up to a full 9.6..20.4 ms swell at DEPTH=1, around a fixed 15 ms center — see slot 8). |
-| 2    | DRIFT | 0..1  | 0 (off)      | %       | Shared self-motion ceiling (like RATE in the OSC). At 0 all level stages stay at their manual values. > 0, a per-sample random-walk (LCG-driven, exponential target gaps 2..12 s, one-pole tracking tau 5..20 s) runs on the channel states: channel 3 drives the NOISE-branch AM (0.5 + 0.5·walk → the rustle “breathes” in level), channels 0/1 are the reserved CHORUS/FLANGER level walks (allocated and advancing, wiring into the wet amounts is a follow-up). |
-| 3    | CMODE | 0..1  | 512 (~50%)   | I/I+II/II | Chorus mode — **3 equal bands** (Formant-Vowel style): band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (≥2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
-| 4    | CHORUS  | 0..1  | 1023 (100%)  | %       | Chorus **dry/wet level** (the CHORUS/FLANGER per-effect level naming). 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
-| 5    | FLANGER  | 0..1  | 0 (off)      | %       | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, 48..360 smp, center set by DEPTH²), each with its OWN LFO phase; the LFO sweeps each read tap ±20% × DEPTH² (0.02..2.0 Hz; R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH (no resonant peaks, no “locking” at the LFO turnaround). Small feedback (FLANGER × 0.15, re-injected into the line, Q ~1.18, no self-oscillation). |
-| 6    | NOISE    | 0..1  | 0 (off)      | %       | Granular noise-sweep level. 0 = off (dry wire, the branch is never computed). > 0 adds an LCG white-noise “metallic rustle / dust-flash” generator on the path input (before the chorus): white noise (fx_white) gated by a two-phase burst machine (ON flash / GAP lull), AM-modulated by the DRIFT walk, band-passed by a 2-pole SVF (cutoff swept by TIME + per-burst tone wander), summed additively so the rustle passes through the chorus/flanger “in the wash”. Each flash is randomized on three axes for maximum diversity: **duration** (1..25 ms, log), **level** (0.25..1.0 gain) and **tone** (BP center ±½ octave) — so consecutive knocks never sound alike. |
-| 7    | NRATE    | 0..1  | 511 (~50%)   | %       | Noise burst cadence: average flashes/second 0.15..8 (exp curve). 0 = rare flashes with long lulls, 1 = dense shimmer. Each lull (GAP) is exponentially drawn (Poisson) from fx_rand, so the cadence “breathes”. Only audible when NOISE > 0. (This knob sets the flash RATE; per-burst duration/level/tone are independent random draws, not driven by NRATE.) |
-| 8    | ENSMBL   | 0..1  | 0 (off)      | %       | **String-synth ensemble** level (RS-202 style; architecture: quarterturn/teensy3-ensemble-chorus, MIT, adapted to float / no-libm). 0 = off (dry wire, the branch is never computed, regression-safe). > 0 adds a “strings” generator on the path input (before the Juno CHORUS): one **shared mono** REAL delay line (1024 smp = 21 ms), **three read taps at LFO phases 120° apart** (0 / ⅓ / ⅔ of a cycle), summed and averaged (×1/3). The LFO waveform is a **binary-sine**: 1.0·sin(2πft) + (1/16)·sin(20πft) — a **full-amplitude base rate** with a gentle 10× harmonic that makes the tempo “breathe” (the RS-202’s slow amplitude modulation inside the delay sweep). The base rate f uses the **SAME exp curve as CHORUS / FLANGER**: 0.0167 Hz (60 s period) at TIME=0 → 0.6 Hz (1.7 s) at TIME=1, so the ensemble sweep moves in **lockstep** with the other stages (previously the ensemble ran 9× faster at the low end -- 0.15 Hz = 6.7 s -- which read as a short busy flutter). The 10× harmonic wobbles at 0.167..6 Hz, kept very gentle by the 1/16 weight (the instantaneous LFO rate moves by only ~±12.5% around the base, so it reads as a slow swell / subtle vibrato shimmer rather than a flutter — the original Teensy `LFO_RANGE=100` is an 8-bit unit ~0.098 full scale, so its sweep is much narrower). Both sines are hand-rolled: each argument is reduced to [−π, π] and evaluated with a 6th-order Taylor (no libm, exact to <1e-9), which removes the graininess a coarser series left on the fast term. The delay geometry is a **fixed 15 ms center (720 smp)** with a **DEPTH²-driven spread**: at DEPTH=0 the taps sit near-static (only the LFO’s 1/16 “breathing” moves them); at DEPTH=1 the sweep spans **460..980 smp (9.6..20.4 ms)** around that center (DEPTH², the same depth curve as the FLANGER). This is what makes DEPTH control the ensemble — before this the spread was a fixed 50 smp and the branch read as shallow and DEPTH-independent. All taps (plus the R-channel +367 smp shift) stay inside the 1024-smp line. **Stereo**: the R channel reads the SAME three taps shifted by **367 smp (~90° of the line)** relative to L — the two ears are always 90° apart on the line (the original Teensy constant), a classic chorus stereo spread. A 1st-order LPF (α = 0.3) per channel keeps the comb edges from reading metallic. Summed **additively** (like NOISE) so the strings pass through CHORUS / FLANGER “in the wash”. |
+- **MOD group** — `PARAM`/`VALUE` (header slots 2/3), selectors 0..4:
+  DRIFT / CMODE / CHORUS / FLANGER / ENSMBL (the modulation stages).
+- **TAPE group** — `TPARAM`/`TVALUE` (header slots 4/5), selectors 0..4:
+  NOISE / NRATE / TAPWOB / HISS / WARP (the KoS-derived film/tape stage).
 
-> **Display (device):** all 9 slots are `frac = 0`, `type_none` — the NTS-1
-> display shows the raw 10-bit value 0..1023 (e.g. `TIME 1023`), NOT a
-> percentage. The web simulator renders most as a 0..100% label; CMODE shows
-> its Juno voice band (`I` / `I+II` / `II`) — see `formatFxParam` in
-> `websim/index.html`. The previous build shipped `frac = 1` (fixed-point,
-> `frac_mode = 0`), which made the device divide by `1 << frac = 2` and show
-> 0..511.5 — fixed in v1.0.3. The Juno-60 BBD-chorus rewrite (2 mono voices
-> @ 18/31 ms, CMODE + TIME-rate + DEPTH-spread + CHORUS dry/wet) landed in **v1.0.7**.
+The unit has 6 header slots (`header.c`). `unit.cc` maps header slot 2 →
+`PARAM_SEL`, slot 3 → `PARAM_VAL`, slot 4 → `PARAM_TSEL`, slot 5 → `PARAM_TVAL`
+before forwarding, so `Modfx::setParameter` only ever sees
+`PARAM_TIME / PARAM_DEPTH / PARAM_SEL / PARAM_VAL / PARAM_TSEL / PARAM_TVAL`.
+
+### The 6 header slots
+
+| Slot | Name  | Range    | Default | Type     | What it does |
+|------|-------|----------|---------|----------|--------------|
+| 0    | TIME  | 0..1023  | 512     | none (%) | **Fixed A knob.** LFO tempo (0..1). Sweeps the **chorus / flanger / ensemble / tape-wob LFO rate** via a shared exp curve (0.0167..0.6 Hz = 60 s..1.7 s). |
+| 1    | DEPTH | 0..1023  | 511     | none (%) | **Fixed B knob.** Per-stage modulation depth (0..1). Chorus LFO **delay-spread**, flanger center delay (DEPTH²), ensemble LFO spread (DEPTH²), TAPWOB wow depth (DEPTH³) and flutter depth (DEPTH²). |
+| 2    | PARAM | 0..4     | 0       | strings  | **MOD-group multiplexer selector.** Which of the 5 MOD edit parameters is being edited. Display shows the selected parameter's NAME (DRIFT / CMODE / CHOR / FLNGR / ENSMBL) via `getParameterStrValue`. |
+| 3    | VALUE | 0..1023  | 0       | strings  | **Raw value of the selected MOD edit parameter.** Display shows the FORMATTED value (CMODE → I / I+II / II, everything else → 0..100%). |
+| 4    | TPARAM| 0..4     | 0       | strings  | **TAPE-group multiplexer selector.** Which of the 5 TAPE edit parameters is being edited. Display shows the selected parameter's NAME (NOISE / NRATE / TAPWOB / HISS / WARP). |
+| 5    | TVALUE| 0..1023  | 0       | strings  | **Raw value of the selected TAPE edit parameter.** Display shows the FORMATTED value (0..100%). |
+
+### The 10 edit parameters (two multiplexers, 5 each)
+
+**MOD group** — `select_` (0..4) indexes `edit_value_[5]`:
+
+| Edit | Name   | Default      | Display   | What it does |
+|------|--------|--------------|-----------|--------------|
+| 0    | DRIFT  | 0 (off)      | %         | Shared self-motion ceiling (like RATE in the OSC). At 0 all level stages stay at their manual values. > 0, a per-sample random-walk (LCG-driven, exponential target gaps 2..12 s, one-pole tracking tau 5..20 s) runs on the channel states: channel 3 drives the NOISE-branch AM (0.5 + 0.5*walk -> the rustle "breathes" in level), channels 0/1 are the reserved CHORUS/FLANGER level walks. |
+| 1    | CMODE  | 0 (band 0)   | I/I+II/II | Chorus mode -- **3 equal bands**: band 0 (CMODE<1/3) = **I** (main voice only), band 1 (1/3..2/3) = **I+II** (both voices, classic Juno), band 2 (>=2/3) = **II** (sub voice only). Selects the Juno voice blend (gains {1,0} / {.707,.707} / {0,1}). |
+| 2    | CHORUS | 0 (dry)      | %         | Chorus **dry/wet level**. 0 = dry only (pure wire through the chorus), 100% = full chorus (dry + wet summed). |
+| 3    | FLNGR  | 0 (off)      | %         | Thru-zero flanger level (**multi-line / bucket-brigade**). 0 = off. FOUR mono REAL delay lines (1..7.5 ms, center set by DEPTH^2), each with its OWN LFO phase; the LFO sweeps each read tap +/-20% x DEPTH^2 (R half-cycle out per line -> stereo comb). The four de-tuned comb gratings average into a smooth WASH. Small feedback (FLANGER x 0.15, re-injected, Q ~1.18, no self-oscillation). |
+| 4    | ENSMBL | 0 (off)      | %         | **String-synth ensemble** level (RS-202 style). 0 = off (dry wire, regression-safe). > 0 adds a "strings" generator on the path input (before the Juno CHORUS): one **shared mono** REAL delay line (1024 smp = 21 ms), **three read taps at LFO phases 120 deg apart**, summed and averaged (x 1/3). The LFO is a **binary-sine** (full-amplitude base + 1/16 x 10x harmonic) whose base rate uses the **SAME exp curve as CHORUS / FLANGER** (0.0167..0.6 Hz), so the ensemble moves in **lockstep** with the other stages. The delay geometry is a **fixed 15 ms center (720 smp)** with a **DEPTH^2-driven spread** (460..980 smp at DEPTH=1). The wet norm is **x 1.0** (matched to CHORUS). |
+
+**TAPE group** — `tsel_` (0..4) indexes `tedit_value_[5]` (the KoS-derived
+film/tape stages):
+
+| Edit | Name   | Default      | Display   | What it does |
+|------|--------|--------------|-----------|--------------|
+| 0    | NOISE  | 0 (off)      | %         | **Granular rustle** level (KoS HurricaneSandy "age"). 0 = off (dry wire, never computed). > 0 adds a **procedural PINK-noise source** (3 one-pole LPF, Voss) feeding a shared mono RING (8192 smp); a small **granulator** (8 linear-env grains with random pointer/offset) reads the ring, band-shaped by an HPF (50 Hz) + per-channel LPF (2 kHz); an **AM "dips" curve** (16 random points over 1 s, re-seeded by fx_rand, **dips 1.0 → 0.15** at kDipsExtremity = 0.85) makes the rustle **breathe** (deep enough to be audible as a level swing); periodic white-noise **bursts** (cadence from NRATE, **128-smp scrape window**, **dBurstPeak = 0.55**, **dBurstDuckDepth = 0.5**) **DUCK the dry signal** (the KoS sigEnv scrape); a low-freq **room tone** (pink -> LPF 80 Hz) fills the low end. The whole source is scaled by `kNoiseWetNorm = 0.08` before adding to the dry. The grain gain is **kGrainGain = 0.45** (raised from 0.15) so the rustle is clearly audible at ~20% of the knob and grows smoothly to 100%. Summed additively so the rustle passes through the chorus/flanger "in the wash". The DRIFT walk channel 3 AM-modulates the rustle. |
+| 1    | NRATE  | 0 (rarest)   | %         | Noise **burst cadence**: average flashes/second 0.15..8 (exp curve). 0 = rare flashes with long lulls, 1 = dense shimmer. Each lull is exponentially drawn (Poisson) from fx_rand. Only audible when NOISE > 0. The scrape window is **128 smp (~2.7 ms)** (raised from 16 smp) so the NRATE cadence is clearly audible across the 0..100% range — at 16 smp the bursts were sub-millisecond ticks that did not change perceived loudness. |
+| 2    | TAPWOB | 0 (off)      | %         | **Tape wow/flutter pitch-mod** -- the ONLY stage that modulates PITCH. 0 = off (dry wire). > 0 adds a tape deck on the master bus (AFTER CHORUS/FLANGER, before the makeup): one **shared mono** REAL delay line (512 smp), L/R read taps offset by a **fixed 5.3 ms center (256 smp)** plus TWO independent LFOs -- **WOW** (slow, 0.0167..0.6 Hz at TIME 0..1, up to 40 cents x DEPTH^3) and **FLUTTER** (fast, 0.5..15 Hz at TIME 0..1, up to 12 cents x DEPTH^2; R's flutter is 90 deg out of L). A 1st-order LPF per channel (cutoff 2..8 kHz, TAPWOB-swept) dulls the highs as the deck "wears". **Dry/wet replace** (NOT additive). |
+| 3    | HISS   | 0 (off)      | %         | **Tape hiss** level (KoS Hiss, procedural -- no WAV, the SDK has no pink/hiss sample). 0 = off. > 0 adds `fx_white()` -> 1st-order HPF (1500 Hz) -> a quiet level (max **~ −12 dB, kHissMaxGain = 0.25**, raised from 0.08), summed to L/R (the HPF turns white into "hiss" color). **Also attenuates the dry signal** by `dry_scale = 1 − hiss·0.4` (kHissDryDuck = 0.4) so the effect reads as "tape on the master bus" (the KoS Hiss class does the same: signalLevel = 1 − hissLevel). At HISS = 1 the dry is ducked to 0.6 (−4.4 dB) so the drone stays present. Additive, on the master bus after TAPWOB. |
+| 4    | WARP   | 0 (off)      | %         | **Magnetic instability** level (KoS "Shame"). 0 = off (dry wire). > 0 re-tapes the signal: one **shared mono** REAL delay line (4096 smp = 85 ms), the mono input written once per sample, the read tap = (center 2048 smp + cosine-LFO x depth **0..30 smp** (kWarpMaxDepthSmp = 30, **halved from 60** so full WARP reads as a gentle "magnetic sag", not a pitch wobble)). The cosine LFO rate is set from WARP (7..77 Hz, exp) and gets a **random rate kick each cycle** (fx_rand x periodicity 0.5..0.25) so the wobble never repeats -- the "tape is alive" feel. L/R read the same tap (mono instability); stereo image is kept by the other stages. **Dry/wet replace** (T = WARP). |
+
+> **Display (device):** the 4 string slots (PARAM / VALUE / TPARAM / TVALUE)
+> show the selected parameter's NAME (PARAM/TPARAM) or FORMATTED value
+> (VALUE/TVALUE: CMODE → `I`/`I+II`/`II`, everything else → 0..100%) via
+> `getParameterStrValue`. The web simulator renders each edit parameter as a
+> 0..100% slider (CMODE shows its Juno voice band).
 
 ## Signal path
 
@@ -46,17 +75,21 @@ now reads both channels and every stateful stage (CHORUS pre/post LPF, the
 chorus delay voices, FLANGER) is per-channel.
 
     in (stereo L/R)
-      -> [NOISE branch]  (additive granular noise-sweep, active when NOISE > 0:
-                fx_white() white noise, gated by a two-phase burst machine
-                (ON flash / GAP lull; lulls Poisson-drawn from NRATE at
-                0.15..8 flashes/s), AM-modulated by the DRIFT walk channel 3
-                (0.5 + 0.5*walk), band-passed by a 2-pole state-variable
-                filter (cutoff swept by TIME 300 Hz..8 kHz + per-burst tone
-                wander +/- half-octave, Q 1.5 fixed; same SVF topology as the
-                drone-osc FCUT/RESO filter), each flash randomized in
-                duration (1..25 ms), level (0.25..1.0) and tone, summed into
-                the input so the rustle passes through the chorus/flanger
-                "in the wash")
+      -> [NOISE branch]  (additive granular rustle, active when NOISE > 0:
+                a PINK-noise source (3 one-pole LPF, Voss) feeds a shared
+                mono RING (8192 smp); a small granulator (8 linear-env grains
+                with random pointer/offset) reads the ring, band-shaped by an
+                HPF (50 Hz) + per-channel LPF (2 kHz); an AM "dips" curve
+                (16 random points over 1 s, re-seeded by fx_rand) makes the
+                rustle breathe; periodic white-noise bursts (cadence from
+                NRATE at 0.15..8 flashes/s) DUCK the dry signal (the KoS
+                sigEnv scrape); a low-freq room tone (pink -> LPF 80 Hz)
+                fills the low end; AM-modulated by the DRIFT walk channel 3
+                (0.5 + 0.5*walk); the whole source is scaled by kNoiseWetNorm
+                (0.08) before being summed into the input so the rustle
+                passes through the chorus/flanger "in the wash".
+                Source: KoS HurricaneSandy "age" stage, rewritten
+                procedurally -- no WAV (the SDK has no pink/hiss sample).)
       -> [ENSEMBLE branch] (additive string-synth ensemble, active when ENSMBL > 0:
                 1 shared MONO REAL delay line @ 1024 smp (21 ms), 3 read taps
                 at LFO phases 120 deg apart (0 / 1/3 / 2/3 of a cycle),
@@ -85,6 +118,48 @@ chorus delay voices, FLANGER) is per-channel.
       -> FLANGER  (thru-zero flanger, multi-line: 4 mono REAL delay lines 1..7.5 ms,
                each own LFO phase, small feedback re-injected; the 4 de-tuned
                comb gratings average into a smooth wash; R half-cycle out per line)
+      -> [TAPWOB branch] (tape wow/flutter pitch-mod, active when TAPWOB > 0:
+                the ONLY stage that modulates PITCH. 1 shared MONO REAL delay
+                line @ 512 smp (10.7 ms, deliberately long so the read-tap
+                velocity stays < 1 sample/sample and never clicks); the mono
+                input is written once per sample, L/R read taps offset by a fixed
+                5.3 ms center (256 smp) plus TWO independent LFOs -- WOW (slow,
+                0.0167..0.6 Hz from TIME, up to 40 cents x DEPTH^3) and FLUTTER
+                (fast, 0.5..15 Hz from TIME, up to 12 cents x DEPTH^2; R's
+                flutter 90 deg out of L for a stereo "tape" image); the LFO rates
+                follow the SAME shared TIME exp curve as CHORUS / FLANGER /
+                ENSMBL (lockstep); WOW cents depth is scaled by DEPTH^3 (cubic,
+                much shallower than the FLANGER's DEPTH^2) so low DEPTH stays a
+                subtle pitch shimmer, while flutter stays on DEPTH^2 (12 cents is
+                already tame); cents -> sample offset (center/1200) is a constant
+                so the pitch shift is exactly (wow+flutter) cents; 1st-order LPF
+                per channel (cutoff 2..8 kHz, TAPWOB-swept) dulls the highs as
+                the deck "wears"; DRY/WET REPLACE (not additive): out =
+                dry*(1-T) + wet*T, T = TAPWOB (full wet at TAPWOB=1). Sits AFTER
+                CHORUS/FLANGER (a tape deck worn over the whole FX chain), before
+                the makeup. TAPWOB is DRY/WET LEVEL only; TIME and DEPTH drive
+                the tempo and depth, like every other stage.)
+      -> [HISS branch]  (tape hiss, active when HISS > 0: fx_white() -> 1st-order
+                HPF (1500 Hz) -> a quiet level (max ~ -22 dB, kHissMaxGain
+                0.08), summed to L/R.
+                The HPF turns white noise into "hiss" color. Additive, on the
+                master bus after TAPWOB. Source: KoS "Hiss" stage, rewritten
+                procedurally -- no WAV (the SDK has no pink/hiss sample).)
+      -> [WARP branch]  (magnetic instability, active when WARP > 0: 1 shared
+                MONO REAL delay line @ 4096 smp (85 ms); the L channel of the
+                interleaved stereo input is written once per sample (L==R in
+                the web chain; the NTS-1 platform upmixes the OSC mono too),
+                the read tap = center (2048 smp) + cosine-LFO x depth
+                (0..60 smp). The line is zeroed in init() so the first
+                reads (before the line is filled) return silence, not SDRAM
+                garbage. The cosine LFO rate is set from WARP (7..77 Hz,
+                exp) and gets a RANDOM rate kick each cycle (fx_rand x
+                periodicity 0.5..0.25) so the wobble never repeats -- the
+                "tape is alive" feel. L/R read the same tap (mono
+                instability); the stereo image is kept by the other stages.
+                DRY/WET REPLACE (not additive): out = dry*(1-T) + wet*T,
+                T = WARP (full wet at WARP=1). Source: KoS "Shame" stage,
+                rewritten with a cosine LFO (no STK/KoS code, MIT-clean).)
       -> makeup gain (0.9)
       -> out (stereo)
 
@@ -150,7 +225,7 @@ K-rate computation in this unit uses only:
 ## Files
 
 - `modfx.h` — the `Modfx : Processor` class (Params, LFO phase accumulators,
-  DRIFT walk state, NOISE-branch state (burst envelope / SVF states), real
+  DRIFT walk state, NOISE-branch state (pink ring / granulator / dips / bursts),
   delay-line heads, one-pole filter states, `setParameter`,
   `getParameterStrValue`) AND the full per-sample audio path
   (`Modfx::modfx_process_impl`, defined INLINE in the class so it can be
@@ -159,43 +234,60 @@ K-rate computation in this unit uses only:
   `fx_white`, extern "C") that the NOISE branch and the DRIFT walk consume.
 - `modfx_constants.h` — all tuning constants (LFO curves, DRIFT budget, LCG
   constants, delay-line lengths) + the libm-free helpers.
-- `header.c` — the 9 parameter slots (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER/
-  NOISE/NRATE/ENSMBL) with their defaults.
-- `unit.cc` — the runtime callback trampoline (forwards each header slot 1:1
-  to `Modfx::setParameter`; no multiplexer, unlike the OSC's 4-slot
-  PARAM/VALUE pair).
+- `header.c` — the 6 header slots: TIME / DEPTH (fixed, type_none) + PARAM /
+  VALUE (the MOD-group multiplexer) + TPARAM / TVALUE (the TAPE-group
+  multiplexer, type_strings). The 10 edit parameters (5 MOD-group: DRIFT /
+  CMODE / CHORUS / FLANGER / ENSMBL; 5 TAPE-group: NOISE / NRATE / TAPWOB /
+  HISS / WARP) live behind the two multiplexers (see *The parameter model*
+  above).
+- `unit.cc` — the runtime callback trampoline. Maps header slot 2 → PARAM_SEL,
+  slot 3 → PARAM_VAL, slot 4 → PARAM_TSEL, slot 5 → PARAM_TVAL (the
+  6-slot / two-multiplexer model, like drone-osc's PARAM/VALUE but doubled);
+  the VALUE slot (3) reports `Modfx::getValue()` (the selected MOD edit
+  param's raw value) and the TVALUE slot (5) reports `Modfx::getTapeValue()`
+  (the selected TAPE edit param's raw value); the rest report their cached
+  values.
 - `wasm.cc` — the web-simulator embind interface (now only used by the unified
   chain simulator in `drone-chain/` — see below).
 
 ## SDRAM (delay lines)
 
-The CHORUS / FLANGER / TAPE / ENSEMBLE stages use REAL delay lines (true
-circular line buffers), not one-pole lowpasses — a one-pole is a lowpass and
-reads as a mute, which is exactly the bug the old "modulated one-pole delays"
-had. `Modfx::getBufferSize()` reports `kModSramBytes` (two MONO CHORUS delay
-lines at 2048 smp each for the Juno main/sub voices, the four FLANGER MONO
-bucket-brigade lines at 1024 smp each, plus the ENSEMBLE shared MONO line at
-1024 smp: 2·2048·4 + 4·1024·4 + 1024·4 = 36 KB), well inside the NTS-1 modfx
-slot's 256 KB of allocatable external memory. `unit.cc` allocates it from
-`sdram_alloc` and `init()` slices it into the CHORUS (2 mono) + FLANGER (4 mono)
-+ ENSEMBLE (1 mono) lines in that order; the web chain (`Chain::init`) slices
-the same size automatically. The line heads are plain `uint32_t` (exact wrap,
-no float drift) and the fractional (LFO-modulated) read offset is interpolated
-between the two nearest samples.
+The CHORUS / FLANGER / ENSEMBLE / TAPWOB / WARP / NOISE stages use REAL delay
+lines / ring buffers (true circular line buffers), not one-pole lowpasses — a
+one-pole is a lowpass and reads as a mute, which is exactly the bug the old
+"modulated one-pole delays" had. `Modfx::getBufferSize()` reports
+`kModSramBytes`: two MONO CHORUS delay lines at 2048 smp each (the Juno
+main/sub voices), the four FLANGER MONO bucket-brigade lines at 1024 smp each,
+the ENSEMBLE shared MONO line at 1024 smp, the TAPWOB shared MONO line at 512
+smp, the WARP shared MONO line at 4096 smp, and the NOISE pink ring at 8192
+smp: 2·2048·4 + 4·1024·4 + 1024·4 + 512·4 + 4096·4 + 8192·4 ≈ 90 KB, well inside
+the NTS-1 modfx slot's 256 KB of allocatable external memory. `unit.cc`
+allocates it from `sdram_alloc` and `init()` slices it into the CHORUS (2
+mono) + FLANGER (4 mono) + ENSEMBLE (1 mono) + TAPWOB (1 mono) + WARP (1 mono)
++ NOISE (1 mono ring) lines in that order; the web chain (`Chain::init`)
+slices the same size automatically. The line heads are plain `uint32_t` (exact
+wrap, no float drift) and the fractional (LFO-modulated) read offset is
+interpolated between the two nearest samples.
 
 ## Web simulator
 
 The unified DRONE web simulator is `drone-chain/` (one wasm worklet running
-OSC -> MOD -> DEL -> REV). The MOD stage's 9 parameters are exposed in
-`websim/index.html` as a 9-slider column below the Parameters card, driven
-through `Module.setFxParam(stage=0, which=0..8, raw)`; every slider shows
-0..100% except CMODE, which shows its Juno voice band (`I` / `I+II` / `II`).
-The web chain also provides the `fx_rand()` / `fx_white()` stubs
-(Park-Miller-Carta, sharing the OSC stubs' LCG state) in `drone-chain/wasm.cc`
-so the NOISE branch and the DRIFT walk run identically to the device.
-The MOD stage's `getBufferSize()` is `kModSramBytes` (the CHORUS + FLANGER + TAPE
-delay lines, see *SDRAM* above); `Chain::init` slices the chain's single SDRAM
-allocation across MOD / DEL / REV in that order.
+OSC -> MOD -> DEL -> REV). The MOD stage uses the same TWO-multiplexer model as
+the device: TIME / DEPTH are fixed sliders (driven through
+`Module.setFxParam(stage=0, which=0/1, raw)`), the 5 **MOD-group** edit
+parameters (DRIFT / CMODE / CHORUS / FLANGER / ENSMBL) are 5 sliders driven
+through `Module.modSetEditParam(idx=0..4, raw)`, and the 5 **TAPE-group** edit
+parameters (NOISE / NRATE / TAPWOB / HISS / WARP) are 5 more sliders driven
+through `Module.modSetTapeParam(idx=0..4, raw)` — each writes its
+(select, value) pair atomically so the DSP never sees a stale selector.
+Every slider shows 0..100% except CMODE, which shows its Juno voice band
+(`I` / `I+II` / `II`). The web chain also provides the `fx_rand()` /
+`fx_white()` stubs (Park-Miller-Carta, sharing the OSC stubs' LCG state) in
+`drone-chain/wasm.cc` so the NOISE granulator, the DRIFT walk, and the TAPWOB /
+WARP LFOs run identically to the device. The MOD stage's `getBufferSize()` is
+`kModSramBytes` (the CHORUS + FLANGER + ENSEMBLE + TAPWOB + WARP + NOISE delay
+lines / ring, see *SDRAM* above); `Chain::init` slices the chain's single
+SDRAM allocation across MOD / DEL / REV in that order.
 
 ## Build
 

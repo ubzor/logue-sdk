@@ -48,60 +48,59 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x0001000AU,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped patch: ENSEMBLE slot (slot 8, string-synth ensemble branch: 1 shared mono delay line, 3 LFO taps 120 deg apart, binary-sine LFO with 10x "breathing" harmonic, RS-202 architecture, additive before CHORUS).
+    .version = 0x00010010U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped minor: TWO PARAM/VALUE multiplexers (MOD group slots 2/3 + TAPE group slots 4/5) + TAPE stages (NOISE v2 granular rustle / TAPWOB / HISS / WARP, KoS-derived).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
-    .num_params = 9,                                       // Number of valid parameter descriptors. (max. 10)
+    .num_params = 6,                                       // Number of valid parameter descriptors. (max. 10)
 
     .params = {
         // Format: min, max, center (unused), default, type, frac. bits, frac. mode, <reserved>, name
 
-        // See common/runtime.h for type enum and unit_param_t structure
+        // See common/runtime.h for type enum and unit_param_t structure.
+        //
+        // Parameter model (the same split as drone-osc, with TWO multiplexers):
+        //   TIME / DEPTH are the two FIXED knobs (slots 0/1) -- always on the
+        //   A/B encoders, type_none (formatted as % by the platform / sim).
+        //   The 10 other parameters split into two groups, each behind its own
+        //   PARAM/VALUE multiplexer:
+        //     MOD group (slots 2/3): DRIFT / CMODE / CHOR / FLNGR / ENSMBL
+        //     TAPE group (slots 4/5): NOISE / NRATE / TAPWOB / HISS / WARP
+        //   (the KoS-derived film/tape stage). unit.cc maps header slot
+        //   2->PARAM_SEL, 3->PARAM_VAL, 4->PARAM_TSEL, 5->PARAM_TVAL
+        //   (Modfx::setParameter only ever sees TIME/DEPTH/SEL/VAL/TSEL/TVAL).
+        //   The 4 string slots show the selected parameter's NAME (PARAM) and
+        //   FORMATTED value (VALUE, CMODE as I / I+II / II, everything else %)
+        //   via unit_get_param_str_value -> Modfx::getParameterStrValue.
 
-        // [0] TIME: LFO tempo (0..1) — sweeps chorus LFO rate (0.05..~4.5 Hz)
-        // exponentially; also drives FLANGER LFO rate.
+        // [0] TIME: LFO tempo (0..1, FIXED A knob). Sweeps the chorus / flanger /
+        // ensemble LFO rate (0.0167..0.6 Hz, shared exp curve) and the noise
+        // band-pass cutoff (300 Hz..8 kHz).
         {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"TIME"}},
 
-        // [1] DEPTH: per-stage modulation depth (0..1) — chorus LFO spread,
-        // flanger delay, tape flutter.
+        // [1] DEPTH: per-stage modulation depth (0..1, FIXED B knob). Scales the
+        // chorus LFO delay-spread, the flanger center delay (DEPTH^2), the
+        // ensemble LFO spread (DEPTH^2), and the tape wow/flutter depth.
         {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"DEPTH"}},
 
-        // [2] DRIFT: shared self-motion ceiling (0..1, 0 = static). The 4 level
-        // stages wander on their own, constrained by an L1 budget.
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DRIFT"}},
+        // [2] PARAM: MOD-group multiplexer SELECTOR (0..4), the optional duplicate
+        // of the A-knob role for the edit menu. The display shows the selected
+        // MOD edit parameter's NAME (DRIFT / CMODE / CHOR / FLNGR / ENSMBL) via
+        // getParameterStrValue. Default 0 = DRIFT.
+        {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
-        // [3] CMODE: chorus mode — 3 equal bands -> Juno voice blend.
-        //   band 0 = I (main), band 1 = I+II (classic Juno), band 2 = II (sub).
-        {0, 1023, 0, 512, k_unit_param_type_none, 0, 0, 0, {"CMODE"}},
+        // [3] VALUE: raw 10-bit value (0..1023) of the selected MOD edit
+        // parameter. The display shows the FORMATTED value (CMODE -> I / I+II /
+        // II, everything else -> 0..100%) via getParameterStrValue. Default 0.
+        {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"VALUE"}},
 
-        // [4] CHORUS: dry/wet level of the chorus (0..1). 0 = dry only, 1 = full chorus.
-        {0, 1023, 0, 1023, k_unit_param_type_none, 0, 0, 0, {"CHORUS"}},
+        // [4] TPARAM: TAPE-group multiplexer SELECTOR (0..4), the second
+        // multiplexer for the KoS-derived tape parameters. The display shows the
+        // selected TAPE edit parameter's NAME (NOISE / NRATE / TAPWOB / HISS /
+        // WARP) via getParameterStrValue. Default 0 = NOISE.
+        {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"TPARAM"}},
 
-        // [5] FLANGER: thru-zero flanger level (0..1). 0 = off.
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLANGER"}},
-
-        // [6] NOISE: granular noise-sweep branch level (0..1). 0 = off (dry
-        // wire, default -- regression-safe). >0 adds an LCG white-noise
-        // "metallic rustle / dust-flash" generator on the path input: burst-
-        // gated (NRATE cadence), AM-modulated by the DRIFT walk, band-passed
-        // by a 2-pole SVF (cutoff swept by TIME), summed additively before the
-        // chorus stage.
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"NOISE"}},
-
-        // [7] NRATE: noise burst cadence (0..1) -> average flashes/second
-        // 0.15..8 (exp curve). 0 = rare long-lull flashes, 1 = dense shimmer.
-        // Only audible when NOISE > 0.
-        {0, 1023, 0, 511, k_unit_param_type_none, 0, 0, 0, {"NRATE"}},
-
-        // [8] ENSEMBLE: string-synth ensemble level (0..1). 0 = off (dry wire,
-        // default -- regression-safe). > 0 adds an RS-202-style "strings"
-        // generator on the path input (before the Juno CHORUS): one shared
-        // mono delay line (21 ms), three read taps at LFO phases 120 deg
-        // apart, summed and averaged; the LFO is a binary-sine (base rate
-        // TIME-swept 0.15..1.5 Hz + 10x "breathing" harmonic); R reads the
-        // same taps shifted 367 smp (~90 deg) for the stereo spread; a
-        // 1st-order LPF per channel keeps the comb edges smooth. Summed
-        // additively so the strings pass through CHORUS / FLANGER "in the
-        // wash".
-        {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"ENSMBL"}},
+        // [5] TVALUE: raw 10-bit value (0..1023) of the selected TAPE edit
+        // parameter. The display shows the FORMATTED value (0..100%) via
+        // getParameterStrValue. Default 0.
+        {0, 1023, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"TVALUE"}},
     },
 };

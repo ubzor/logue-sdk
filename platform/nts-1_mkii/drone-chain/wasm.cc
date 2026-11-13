@@ -306,6 +306,62 @@ extern "C" int getFxParam(int stage, int which)
   return static_cast<int>(processor.getFxParam(stage, which));
 }
 
+// ---- MOD multiplexer direct access (the 8 edit-parameter UI) -----------------
+// The MOD stage now uses a PARAM/VALUE multiplexer (like the OSC), so the UI's
+// 8 edit-parameter sliders (DRIFT / CMODE / CHORUS / FLANGER / NOISE / NRATE /
+// ENSMBL / TAPWOB) can't use setFxParam(stage, which) directly -- they need to
+// write (PARAM_SEL, PARAM_VAL) atomically, exactly like setEditParam does for
+// the OSC. These two functions give the MOD multiplexer the same direct
+// channel. The main-thread `processor` and the worklet-thread `processor` are
+// the SAME object (shared linear memory), so the (sel, val) pair is applied
+// atomically on the worklet's next block (Chain::applyFxParams reads the
+// cached PARAM / VALUE and forwards them to mod_.setParameter).
+//
+// modSetEditParam(idx, raw): select edit param idx (0..7) and write its raw
+// value (0..1023). Both writes go through Chain::setFxParam so they land in
+// sim_fx_cache_ and are applied together on the next block.
+extern "C" void modSetEditParam(int idx, int raw)
+{
+  processor.setFxParam(Chain::FX_MOD, Chain::FX_PARAM, idx); // PARAM_SEL
+  processor.setFxParam(Chain::FX_MOD, Chain::FX_VALUE, raw); // PARAM_VAL
+}
+
+// Read back one MOD edit parameter's raw value (for UI init / slider sync).
+extern "C" int modGetEditParamValue(int idx)
+{
+  return static_cast<int>(processor.mod().getEditParamValue(static_cast<uint8_t>(idx)));
+}
+
+// Read the MOD multiplexer's current selector (for the UI's PARAM readout).
+extern "C" int modGetSelect()
+{
+  return static_cast<int>(processor.mod().getSelect());
+}
+
+// ---- MOD TAPE-group multiplexer direct access (the 5 TAPE edit params) -------
+// The TAPE group (NOISE / NRATE / TAPWOB / HISS / WARP) is the SECOND
+// PARAM/VALUE multiplexer (header slots 4/5). modSetTapeParam(idx, raw) writes
+// (TPARAM=idx, TVALUE=raw) atomically, exactly like modSetEditParam. The
+// (tsel, tval) pair is applied on the worklet's next block (Chain::applyFxParams
+// forwards w=4->PARAM_TSEL, w=5->PARAM_TVAL).
+extern "C" void modSetTapeParam(int idx, int raw)
+{
+  processor.setFxParam(Chain::FX_MOD, Chain::FX_TPARAM, idx); // TPARAM_SEL
+  processor.setFxParam(Chain::FX_MOD, Chain::FX_TVALUE, raw); // TPARAM_VAL
+}
+
+// Read back one TAPE edit parameter's raw value (for UI init / slider sync).
+extern "C" int modGetTapeEditParamValue(int idx)
+{
+  return static_cast<int>(processor.mod().getTapeEditParamValue(static_cast<uint8_t>(idx)));
+}
+
+// Read the TAPE multiplexer's current selector (for the UI's TPARAM readout).
+extern "C" int modGetTapeSelect()
+{
+  return static_cast<int>(processor.mod().getTapeSelect());
+}
+
 // ---- Per-stage BYPASS (diagnostic A/B: OSC -> [MOD] -> [DEL] -> [REV]) -------
 // stage: 0=MOD, 1=DEL, 2=REV (Chain::FX_MOD / FX_DEL / FX_REV).
 // on:    0 = stage IN the path (default), 1 = stage skipped (dry wire).
@@ -459,6 +515,11 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   // FX parameters (MOD / DEL / REV x TIME / DEPTH).
   emscripten::function("setFxParam", &setFxParam);
   emscripten::function("getFxParam", &getFxParam);
+  emscripten::function("modSetEditParam", &modSetEditParam);
+  emscripten::function("modGetEditParamValue", &modGetEditParamValue);
+  emscripten::function("modSetTapeParam", &modSetTapeParam);
+  emscripten::function("modGetTapeEditParamValue", &modGetTapeEditParamValue);
+  emscripten::function("modGetSelect", &modGetSelect);
 
   // Per-stage bypass (diagnostic A/B). stage: 0=MOD, 1=DEL, 2=REV.
   emscripten::function("setStageBypass", &setStageBypass);

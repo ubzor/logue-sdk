@@ -253,9 +253,14 @@ static constexpr float kNoiseBpCcMax = 0.92f;  // per-sample cc clamp (stability
 static constexpr float kNoiseBpCcMin = 0.001f; // per-sample cc clamp
 static constexpr float kNoiseBpAeMin = 0.18f;  // per-sample ae clamp
 
-// Additive mix level (NOISE, slot 6): 0..1. The x 0.5 keeps dry + noise wet
-// from summing past unity (a white-noise burst has ~0.577 RMS at full scale).
-static constexpr float kNoiseWetNorm = 0.5f;
+// Additive mix level (NOISE): the knob's 0..1 is multiplied by this before
+// adding to the dry signal. The NOISE v2 source (room tone 0.15 + grain 0.15/8
+// + burst 0.367 + dips AM 0.5..1.0) has a peak envelope of ~0.75, so a 0.5 wet
+// norm saturated at ~25% of the knob (noise_mix * source ~ 0.375). 0.08 gives
+// a smooth 0..100% ramp where NRATE (the burst cadence) is actually audible
+// across the whole knob range -- at 0.5 the "threshold" (raw >= ~5) is already
+// at the old 0.375 peak and any higher value is inaudibly small.
+static constexpr float kNoiseWetNorm = 0.08f;
 
 // DRIFT walk channel 3 (index kDriftCount-1): the slow AM modulator of the
 // noise branch. At DRIFT = 0 the channel is static at 0 -> AM = 0.5 (flat);
@@ -313,7 +318,7 @@ static constexpr float kEnsembleHarmonicWeight = 0.0625f; // 1/16 (gentle breath
 static constexpr float kEnsembleLFOMin = 0.01667f;     // 60 s period (TIME = 0) -- matches CHORUS / FLANGER
 static constexpr float kEnsembleLFOMax = 0.6f;         // 1.7 s period (TIME = 1) -- matches CHORUS / FLANGER
 static constexpr float kEnsembleLFOlnR = 3.58332f;     // ln(kEnsembleLFOMax / kEnsembleLFOMin) = ln(36) -- matches CHORUS
-static constexpr float kEnsembleWetNorm = 0.5f;        // final wet ceiling (same as CHORUS)
+static constexpr float kEnsembleWetNorm = 1.0f;        // final wet ceiling (matched to CHORUS; was 0.5 -> ensemble read ~2x quieter than CHORUS/FLANGER at the same knob value)
 static constexpr float kEnsembleLpfAlpha = 0.3f;       // 1st-order LPF per channel (anti-metallic)
 // Delay geometry: the LFO waveform w in [-1, 1] maps to delay =
 // (center + spread * w) samples. The CENTER is fixed at 15 ms (720 smp, a
@@ -326,6 +331,200 @@ static constexpr float kEnsembleLpfAlpha = 0.3f;       // 1st-order LPF per chan
 // branch read as shallow and DEPTH-independent.
 static constexpr float kEnsembleDelayCenterSmp = 720.f; // 15 ms center delay (fixed)
 static constexpr float kEnsembleMaxSpreadSmp   = 260.f; // full DEPTH^2=1 spread (9.6..20.4 ms)
+
+// ============================================================================
+//  TAPWOB (edit param 7) -> tape wow/flutter pitch-mod (the 5th stage)
+// ============================================================================
+// TAPWOB is the ONLY stage that modulates PITCH (everything before it -- CHORUS /
+// FLANGER / NOISE / ENSMBL -- modulates delay/level/spectrum, not frequency).
+// Architecture: ONE shared MONO delay line (kTapeWobLineLenSmp, ~10.7 ms), two
+// read taps (L/R) whose offsets are swept by TWO independent LFOs:
+//   * WOW     -- slow (0.0167..0.6 Hz from TIME), amplitude up to 40 cents x
+//                DEPTH^3, the "slow pitch sag" of a worn tape platter.
+//   * FLUTTER -- fast (0.5..15 Hz from TIME), amplitude up to 12 cents x
+//                DEPTH^2, the high-speed "wow" of a flapping capstan.
+// The sum (wow + flutter) is converted cents -> fractional sample offset on the
+// line and added to a fixed center delay (kTapeWobCenterSmp, ~5.3 ms). A
+// 1st-order LPF per channel (cutoff 2..8 kHz, TAPWOB-swept) dulls the highs as
+// the deck "wears". The branch is a DRY/WET replace (NOT additive like
+// NOISE/ENSMBL): out = dry*(1-T) + wet*T, T = TAPWOB (full wet at TAPWOB=1).
+// TAPWOB = 0 -> dry wire (regression-safe, never computed).
+//
+// Why AFTER CHORUS/FLANGER (and not before): wow/flutter on the FINAL, already
+// modulated timbre reads as a tape worn OVER the whole FX chain (the classic
+// "tape deck on the master bus" sound). Before the comb stages the wobble would
+// be smeared by the chorus/flanger and read weaker. Sits last in the path, right
+// before the makeup gain (see the audio path in modfx.h).
+//
+// TAPWOB uses the FIXED TIME / DEPTH knobs (like every other stage):
+//   * TIME  -> LFO tempo: the wow/flutter rates follow the SAME shared exp
+//     curve as CHORUS / FLANGER / ENSMBL, so at TIME=0 the tape "breathes" over
+//     a very long period and at TIME=1 it churns fast -- "wow" stays slow
+//     (max 0.6 Hz), "flutter" stays fast (max 15 Hz), both in lockstep with the
+//     rest of the stack.
+//   * DEPTH -> modulation depth: WOW is scaled as DEPTH^3 (cubic, much
+//     shallower than the FLANGER's DEPTH^2) so low DEPTH stays a subtle pitch
+//     shimmer; FLUTTER stays on DEPTH^2 (12 cents is already tame).
+//   * TAPWOB -> DRY/WET LEVEL only (0 = off, 1 = full tape deck) + the LPF
+//     "dullness" (2..8 kHz).
+//
+// The line is deliberately LONG (512 smp, doubled from the original 256) so the
+// fractional read-tap velocity stays well under 1 sample/sample at peak LFO
+// speed -- a short line made the mid-cycle read "skip" slots and click.
+//
+// cents -> samples: 1 cent = 1/1200 octave; a delay of D samples at 48 kHz holds
+// phase D/f0. Shifting the read by delta samples shifts pitch by delta/D octaves
+// = 1200*delta/D cents. We solve delta = cents/1200 * D (D = kTapeWobCenterSmp,
+// the FIXED center delay, so the conversion is constant and cheap).
+static constexpr uint32_t  kTapeWobLineLenSmp   = 512U;  // 10.7 ms @ 48 kHz (doubled from 256: halves the read-tap velocity so the fractional read never "skips" samples -> no clicks at high DEPTH)
+static constexpr float     kTapeWobCenterSmp    = 256.f; // 5.3 ms center delay (fixed; half the line, the "tape" resting position)
+static constexpr float     kTapeWobWowMinHz     = 0.01667f; // slow wow at TIME=0 (60 s period, == CHORUS min)
+static constexpr float     kTapeWobWowMaxHz     = 0.6f;     // (TIME=1, == CHORUS max)
+static constexpr float     kTapeWobWowLnR       = 3.58332f; // ln(0.6/0.01667) = ln(36) -- matches CHORUS
+static constexpr float     kTapeWobFlutMinHz    = 0.5f;     // fast flutter at TIME=0 (2 s period)
+static constexpr float     kTapeWobFlutMaxHz    = 15.f;     // (TIME=1, ~4x the wow rate -> "flutter" feel)
+static constexpr float     kTapeWobFlutLnR      = 3.40120f; // ln(15/0.5) = ln(30)
+// Wow uses a CUBIC depth curve (DEPTH^3, much shallower than the FLANGER's
+// DEPTH^2) so low DEPTH stays a subtle pitch shimmer rather than an audible
+// "wobble". Flutter stays on DEPTH^2 (12 cents is already tame).
+//
+// PEAK AMPLITUDES (tuned against the doubled 512-smp line): the read-tap
+// excursions are kept small enough that, even at the peak LFO velocity
+// (mid-cycle), the tap moves well under 1 sample/sample -- so the fractional
+// linear read never "skips" a slot and produces no clicks, at any DEPTH.
+// With center/1200 as the cents->sample scale (center=256 -> 1 cent = 0.213
+// smp):
+//   wow     40 cents x DEPTH^3 -> 8.5 smp peak at DEPTH=1, 3.4 smp at 75%
+//   flutter 12 cents x DEPTH^2 -> 2.6 smp peak at DEPTH=1, 1.8 smp at 75%
+//   combined peak-to-peak ~ 11 smp at DEPTH=1 -- ~2% of the 512-smp wave,
+//   a clean musical wobble/flutter (not a gritty skip).
+static constexpr float     kTapeWobWowCentsMax  = 40.f;  // full DEPTH^3=1 wow depth (cents peak)
+static constexpr float     kTapeWobFlutCentsMax = 12.f;  // full DEPTH^2=1 flutter depth (cents peak)
+static constexpr float     kTapeWobCents2Smp    = kTapeWobCenterSmp / 1200.f; // delta = cents * this
+static constexpr float     kTapeWobWetMax       = 1.0f;  // full wet at TAPWOB = 1 (dry/wet replace)
+static constexpr float     kTapeWobLPFMinHz     = 2000.f; // LPF cutoff (TAPWOB = 0, very dull)
+static constexpr float     kTapeWobLPFMaxHz     = 8000.f; // (TAPWOB = 1, mostly transparent)
+
+// ============================================================================
+//  WARP (tape edit 4) -> "magnetic instability" (The Kiss of Shame "Shame" port)
+// ============================================================================
+// WARP is the KoS "Shame" effect: a long delay line whose READ TAP is modulated
+// by a cosine LFO, so the signal is "re-read" at a slowly wandering position ->
+// the pitch/timbre wobbles with a random, non-repeating character (magnetic
+// particle instability / tape stretch). Unlike TAPWOB (which modulates PITCH via
+// a short 5.3 ms line) WARP is the SLOW "instability" layer: a 4096-smp (85 ms)
+// shared MONO line, read at (center + cosine-LFO * depth).
+//
+// The LFO is a plain cosine (Taylor, no libm) whose RATE is set K-rate from the
+// WARP knob (KoS stages: low WARP = slow 7 Hz small wobble, high WARP = fast 77 Hz
+// deep wobble). After every full LFO cycle the rate gets a RANDOM kick
+// (rateFluctuation = rand * rate * periodicity, fx_rand-driven) so the wobble
+// never repeats -- the signature "tape is alive" feel. WARP = 0 -> off (dry wire).
+static constexpr uint32_t  kWarpLineLenSmp    = 4096U;  // 85 ms @ 48 kHz (power-of-2, 16 KB)
+static constexpr float     kWarpCenterSmp     = 2048.f; // read-center (half the line)
+static constexpr float     kWarpLFOMinHz      = 7.0f;   // LFO rate at WARP=0 (KoS stage 1 rate)
+static constexpr float     kWarpLFOMaxHz      = 77.0f;  // LFO rate at WARP=1 (KoS stage 2/3 rate)
+static constexpr float     kWarpLFOlnR        = 2.39789f; // ln(77/7)
+static constexpr float     kWarpMaxDepthSmp   = 30.0f;  // max LFO depth (halved from 60: full WARP reads as a gentle "magnetic sag", not a pitch wobble; KoS stage-2 max was 30)
+static constexpr float     kWarpFluctMin      = 0.5f;   // periodicity at low WARP (KoS stage 1)
+static constexpr float     kWarpFluctMax      = 0.25f;  // periodicity at high WARP (KoS stage 2)
+
+// ============================================================================
+//  HISS (tape edit 3) -> tape hiss (KoS Hiss, procedural: no WAV)
+// ============================================================================
+// The SDK has no precomputed pink/hiss sample (checked: only fx_white/fx_rand),
+// so the hiss is SYNTHESIZED: fx_white() -> 1st-order HPF (kHissHpfFc) -> a
+// quiet level. KoS reads a looped Hiss.wav with a two-position crossfade to
+// avoid loop clicks; a white-noise HPF needs no loop (it IS the noise) and is
+// inaudibly different on a drone bed. HISS = 0 -> off.
+static constexpr float     kHissHpfFc         = 1500.f; // HPF cutoff: white -> "hiss" coloration
+// Max hiss level (linear gain). KoS uses 0.005 (~ -46 dB) but that is INAUDIBLE
+// in a drone bed; 0.08 (~ -22 dB) is the "audible hiss" level -- the HPF (1500 Hz)
+// already shapes it to "hiss" color, so a 0.08 linear gain is the right "loud"
+// target. 0.05..0.10 is the sensible window; 0.08 sits mid.
+// Raised from 0.08 (−22 dB) to 0.25 (−12 dB): at the old ceiling the hiss was a
+// few dB of RMS over a full-scale drone and read as "there but not audible".
+// 0.25 is an auditable hiss bed; the per-sample HISS branch ALSO attenuates the
+// dry signal by (1 − hiss·0.4) so it reads as "tape on the master bus" rather
+// than a parallel noise layer (the KoS Hiss class does the same:
+// signalLevel = 1 − hissLevel).
+static constexpr float     kHissMaxGain       = 0.25f;  // ~ -12 dB max (auditable over the drone)
+// Dry-attenuation factor applied at HISS>0: dry_scale = 1 − hiss·0.4. At HISS=1
+// the dry is ducked to 0.6 (−4.4 dB) so the hiss reads as "tape", not as a
+// parallel additive noise layer. 0.4 keeps the duck subtle enough that the
+// drone does not "pump" at low HISS.
+static constexpr float     kHissDryDuck       = 0.4f;
+
+// ============================================================================
+//  NOISE v2 (noise edit 0) -> granular rustle (KoS HurricaneSandy "age" port)
+// ============================================================================
+// The NOISE branch is upgraded from the old single-band-passed white-flash to a
+// KoS-HurricaneSandy-style granular rustle: a PINK-noise source (procedural, 3
+// one-pole LPF) feeds a small GRANULATOR (multi-voice linear-environment grains
+// with random pointer/offset, the classic MacPod scheme -- written from scratch,
+// not copied from STK) -> HPF + LPF band-shape. An AM "dips" curve (random
+// envelope points, 1 s domain) makes the rustle BREATHE, and periodic noise
+// bursts DUCK the dry signal (the KoS sigEnv) for the "tape scrape" moment.
+//
+// PINK source: the Voss / F.Vedel 3-filter white->pink. Each one-pole LPF is
+//   y[n] = a*x[n] + (1-a)*y[n-1]; the three outputs subtracted give ~ -3 dB/oct.
+// Coefficients (a) are fixed at the standard 0.997 / 0.985 / 0.950 (sample-
+// rate independent for our 48 kHz). 0 KB, 9 ops/sample.
+static constexpr float     kPinkA1            = 0.997f;
+static constexpr float     kPinkA2            = 0.985f;
+static constexpr float     kPinkA3            = 0.950f;
+static constexpr uint32_t  kPinkRingLenSmp    = 8192U;  // grain source ring (power-of-2, 32 KB)
+static constexpr uint32_t  kGrainVoices       = 8U;     // concurrent grains (KoS uses 10; 8 = cheaper, same bed)
+static constexpr float     kGrainDurationMs   = 8.0f;   // grain length (KoS base 5 ms; 8 ms reads fuller)
+static constexpr float     kGrainRampPct      = 50.0f;  // linear ramp % of the grain (KoS 50)
+static constexpr float     kGrainOffsetMs     = 8.0f;   // random pointer offset window (KoS 50 ms -> scaled down)
+static constexpr float     kGrainDelayMs      = 20.0f;  // gap between grains at NRATE=0 (KoS 20 ms)
+static constexpr float     kGrainRandomFactor = 0.97f;  // random spread (KoS 0.97)
+static constexpr float     kGrainHpFc         = 50.f;   // grain HPF (KoS 50 Hz)
+static constexpr float     kGrainLpFc         = 2000.f; // grain LPF (KoS 2000 Hz)
+// Raised from 0.15 to 0.45: at the old gain p.noise=0.2 was inaudible against the
+// drone bed and p.noise>0.5 all read as "the same loud rustle" -- the knob felt
+// like a switch. 0.45 makes p.noise=0.2 clearly audible and keeps a smooth
+// growth curve up to 1.0 (the branch is still fully gated at NOISE=0, so the
+// regression-safe "off" behavior is unchanged).
+static constexpr float     kGrainGain         = 0.45f;  // rustle bed level under NOISE (raised for smooth ramp)
+// AM "dips": N random points over a 1 s domain, 1.0 down to (1-extremity),
+// linearly interpolated and re-seeded every second (fx_rand). The KoS
+// EnvelopeDips (15 pts, extremity 0.5, 1 s). We use 16 pts (pow-2-free, cheap).
+static constexpr uint32_t  kDipsCount         = 16U;
+static constexpr float     kDipsDomainSmp     = 48000.f; // 1 s @ 48 kHz
+// Raised from 0.5 (dips 1.0 -> 0.5) to 0.85 (dips 1.0 -> 0.15): the old shallow
+// envelope meant the rustle "breathing" was inaudible, so turning the NOISE
+// knob felt like a switch. Deeper dips give a visible/audible level swing as
+// you sweep NOISE, reinforcing the "smooth ramp" feel. The re-seed cadence
+// (1 s) is unchanged, so the breathing stays musical, not noisy.
+static constexpr float     kDipsExtremity     = 0.85f;   // dips from 1.0 to 0.15 (deeper breathing, smooth ramp)
+static constexpr float     kDipsPointRand     = 0.5f;    // point-count randomness (KoS 0.5)
+// Noise-burst "scrape": a fast attack/release envelope on a white-noise burst
+// (KoSSand noiseEnv: attack ~14%, peak ~38%, release ~43% of a 350-smp window).
+// The DRY signal is ducked by (1 - duckDepth*burstEnv) during the burst (KoS
+// sigEnv). Cadence (how often bursts fire) is NRATE-driven (see kNoiseBurstMean*).
+static constexpr float     kBurstAtkFrac      = 0.143f;  // attack end (fraction of burst window)
+// Burst peak: raised from 0.367 to 0.55 so each scrape is clearly audible and
+// the NRATE cadence (how often they fire) is the dominant cue, not buried in
+// the rustle bed. At 0.367 the burst energy was comparable to the grain, so
+// NRATE was hard to A/B.
+static constexpr float     kBurstPeak         = 0.55f;   // burst level at peak (louder scrape -> NRATE audible)
+static constexpr float     kBurstRelFrac      = 0.428f;  // release end
+// Burst window: raised from 16 smp (~0.3 ms -- an inaudible "tick") to 128 smp
+// (~2.7 ms -- a perceptible "scrape", in the same order of magnitude as the KoS
+// ~7 ms window). At 16 smp the burst energy was so short that the NRATE cadence
+// (0.15..8 fl/s) did not change the perceived loudness at all, so NRATE read as
+// "does nothing". At 128 smp the scrape is felt as a real tape-scrape and the
+// 0.15 -> 8 fl/s cadence is clearly audible across the NRATE range.
+static constexpr float     kBurstWindowSmp    = 128.f;   // burst window (samples, ~2.7 ms scrape, audible)
+// Dry-duck depth: reduced from 0.8 to 0.5. At 16 smp a 0.8 dry-duck was
+// inaudible (the burst was over before the ear could notice the dip). At 128
+// smp a 0.8 duck over a 2.7 ms window at up to 8 fl/s would read as a "pump";
+// 0.5 keeps the dip perceptible (the NRATE cue) without pumping.
+static constexpr float     kBurstDuckDepth    = 0.5f;    // dry-signal duck depth at burst peak (0.5 = perceptible, no pump)
+static constexpr float     kRoomToneLpfFc     = 80.f;    // low-freq room-tone LPF (KoS lowFreqGrainNoise)
+static constexpr float     kRoomToneLevel     = 0.15f;   // room-tone level under NOISE (KoS 0.15)
 
 // ---- Input gain (unity, no attenuation) -------------------------------------
 // The OSC output (mono) is upmixed to L/R by Chain::process with NO
@@ -360,8 +559,12 @@ static constexpr uint32_t kModLineBytesPerPair =
 static constexpr uint32_t kModSramBytes =
     2U * kChorusLineLenSmp * sizeof(float) +        // 2 CHORUS delay lines (main + sub, mono each)
     kFlangerLineCount * kFlangerLineLenSmp * sizeof(float) + // 4 FLANGER mono lines
-    kEnsembleLineLenSmp * sizeof(float);            // 1 ENSEMBLE mono line
-// = 2*2048*4 + 4*1024*4 + 1024*4 = 16384 + 16384 + 4096 = 36864 bytes (~36 KB)
+    kEnsembleLineLenSmp * sizeof(float) +            // 1 ENSEMBLE mono line
+    kTapeWobLineLenSmp * sizeof(float) +             // 1 TAPWOB mono line
+    kWarpLineLenSmp * sizeof(float) +                // 1 WARP mono line (magnetic instability)
+    kPinkRingLenSmp * sizeof(float);                 // 1 PINK-noise grain source ring
+// = 2*2048*4 + 4*1024*4 + 1024*4 + 512*4 + 4096*4 + 8192*4
+// = 16384 + 16384 + 4096 + 2048 + 16384 + 32768 = 92064 bytes (~90 KB, well under 256 KB)
 
 } // namespace modfx_consts
 

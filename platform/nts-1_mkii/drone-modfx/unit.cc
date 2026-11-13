@@ -131,12 +131,31 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value)
   // cache value for unit_get_param_value(id)
   cached_values[id] = value;
 
+  // The 6 header slots map onto the Modfx's 6 parameter ids:
+  //   slot 0 (TIME,  fixed)    -> PARAM_TIME  (0)
+  //   slot 1 (DEPTH, fixed)    -> PARAM_DEPTH (1)
+  //   slot 2 (PARAM, optional) -> PARAM_SEL   (2)  MOD multiplexer selector
+  //   slot 3 (VALUE, optional) -> PARAM_VAL   (3)  raw value of select_
+  //   slot 4 (TPARAM,optional) -> PARAM_TSEL  (4)  TAPE multiplexer selector
+  //   slot 5 (TVALUE,optional) -> PARAM_TVAL  (5)  raw value of tsel_
+  // Modfx::setParameter only ever sees PARAM_TIME / PARAM_DEPTH / PARAM_SEL /
+  // PARAM_VAL / PARAM_TSEL / PARAM_TVAL (the 2 fixed + the two multiplexer
+  // pairs; the 10 edit parameters live behind them). The slot index already
+  // equals the parameter id (0..5), so forward 1:1.
   s_processor_instance.setParameter(id, value);
 }
 
 __unit_callback int32_t unit_get_param_value(uint8_t id)
 {
-  // just return the cached value
+  // VALUE slot (3) reports the cached raw value of the currently selected MOD
+  // edit parameter (the multiplexer's live state, like drone-osc's getValue()).
+  // TVALUE slot (5) reports the currently selected TAPE edit parameter. PARAM /
+  // TPARAM slots (2/4) report the cached selector values. TIME / DEPTH (0/1)
+  // report their own cached values.
+  if (id == 3U)
+    return s_processor_instance.getValue();
+  if (id == 5U)
+    return s_processor_instance.getTapeValue();
   return cached_values[id];
 }
 

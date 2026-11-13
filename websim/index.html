@@ -130,13 +130,18 @@
     </div>
 
     <!-- ==================== FX: MOD / DEL / REV stack (1/3) ================== -->
-    <!-- The audio path OSC -> MOD -> DEL -> REV runs inside the wasm worklet;
-         each stage card is driven through Module.setFxParam(stage, which, raw).
-         MOD is a full 9-parameter stage; DEL / REV keep their own TIME / DEPTH.
-         The three cards stack vertically in the right third of the page. -->
+    <!-- The audio path OSC -> MOD -> DEL -> REV runs inside the wasm worklet.
+         MOD uses TWO PARAM/VALUE multiplexers (like the OSC, but doubled):
+         TIME / DEPTH are fixed knobs (setFxParam), the 5 MOD-group edit params
+         (DRIFT / CMODE / CHOR / FLNGR / ENSMBL) are driven through
+         Module.modSetEditParam(idx, raw), and the 5 TAPE-group edit params
+         (NOISE / NRATE / TAPWOB / HISS / WARP, KoS-derived) through
+         Module.modSetTapeParam(idx, raw). DEL / REV keep their own TIME /
+         DEPTH via setFxParam. The three cards stack vertically in the right
+         third of the page. -->
     <div class="flex flex-col gap-4 min-w-0 flex-[1]">
 
-    <!-- ---- MOD card (9 params) ---------------------------------------- -->
+    <!-- ---- MOD card (TIME / DEPTH + two multiplexer groups) --------------- -->
       <div class="card card-border shadow-none w-full">
         <div class="card-body flex-col items-stretch !gap-3 pt-4">
           <div class="flex items-center justify-between">
@@ -148,7 +153,7 @@
           <div id="fxmod_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
             <span class="w-10 text-xs font-medium shrink-0">Time</span>
-            <input type="range" min="0" max="1023" value="256" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxmod_time" class="range range-primary range-sm flex-1">
             <span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">25%</span>
           </label>
           <label class="flex items-center gap-3">
@@ -156,40 +161,64 @@
             <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1">
             <span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
           </label>
+          <!-- ===== MODULATION group (first PARAM/VALUE multiplexer, slots 2/3) -->
+          <!-- idx 0..4 = DRIFT / CMODE / CHOR / FLNGR / ENSMBL, driven through
+               Module.modSetEditParam(idx, raw) (atomic PARAM_SEL+PARAM_VAL). -->
+          <div class="text-xs uppercase tracking-wide opacity-40 mt-1">Modulation</div>
           <label class="flex items-center gap-3">
             <span class="w-10 text-xs font-medium shrink-0">Drift</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" class="range range-primary range-sm flex-1">
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" data-modedit="0" class="range range-primary range-sm flex-1">
             <span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-16 text-xs font-medium shrink-0">Chorus Mode</span>
-            <input type="range" min="0" max="1023" value="512" step="1" id="fxmod_cmode" class="range range-primary range-sm flex-1">
-            <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">I+II</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_cmode" data-modedit="1" class="range range-primary range-sm flex-1">
+            <span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">I</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-11 text-xs font-medium shrink-0">Chorus</span>
-            <input type="range" min="0" max="1023" value="1023" step="1" id="fxmod_chorus" class="range range-primary range-sm flex-1">
-            <span id="fxmod_chorus_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">100%</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_chorus" data-modedit="2" class="range range-primary range-sm flex-1">
+            <span id="fxmod_chorus_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-12 text-xs font-medium shrink-0">Flanger</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" class="range range-primary range-sm flex-1">
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" data-modedit="3" class="range range-primary range-sm flex-1">
             <span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
+            <span class="w-11 text-xs font-medium shrink-0">Ensemble</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_ensemble" data-modedit="4" class="range range-primary range-sm flex-1">
+            <span id="fxmod_ensemble_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+          </label>
+
+          <!-- ===== TAPE group (second PARAM/VALUE multiplexer, slots 4/5) -->
+          <!-- idx 0..4 = NOISE / NRATE / TAPWOB / HISS / WARP (KoS-derived), driven
+               through Module.modSetTapeParam(idx, raw) (atomic TPARAM+TVALUE). -->
+          <div class="text-xs uppercase tracking-wide opacity-40 mt-1">Tape</div>
+          <label class="flex items-center gap-3">
             <span class="w-11 text-xs font-medium shrink-0">Noise</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_noise" class="range range-primary range-sm flex-1">
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_noise" data-modtape="0" class="range range-primary range-sm flex-1">
             <span id="fxmod_noise_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-10 text-xs font-medium shrink-0">N Rate</span>
-            <input type="range" min="0" max="1023" value="511" step="1" id="fxmod_nrate" class="range range-primary range-sm flex-1">
-            <span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_nrate" data-modtape="1" class="range range-primary range-sm flex-1">
+            <span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           <label class="flex items-center gap-3">
-            <span class="w-11 text-xs font-medium shrink-0">Ensemble</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_ensemble" class="range range-primary range-sm flex-1">
-            <span id="fxmod_ensemble_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+            <span class="w-12 text-xs font-medium shrink-0">Tape Wob</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_tapwob" data-modtape="2" class="range range-primary range-sm flex-1">
+            <span id="fxmod_tapwob_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-10 text-xs font-medium shrink-0">Hiss</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_hiss" data-modtape="3" class="range range-primary range-sm flex-1">
+            <span id="fxmod_hiss_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-10 text-xs font-medium shrink-0">Warp</span>
+            <input type="range" min="0" max="1023" value="0" step="1" id="fxmod_warp" data-modtape="4" class="range range-primary range-sm flex-1">
+            <span id="fxmod_warp_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           </div><!-- /fxmod_body -->
         </div>
@@ -450,15 +479,30 @@
 
       // Format the raw 10-bit value (0..1023) of a DRONE-MOD FX parameter.
       // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
-      // index within that stage (0=TIME, 1=DEPTH, 2=DRIFT, ... for MOD; 0..1
-      // for DEL/REV). Every param shows 0..100%.
+      // index within that stage (0=TIME, 1=DEPTH for MOD/DEL/REV; the MOD edit
+      // params are formatted by formatModEditParam instead). Every param shows
+      // 0..100%.
       function formatFxParam(stage, which, raw) {
-        // MOD CMODE (stage 0, which 3): show the Juno voice band (equal thirds).
-        if (stage === 0 && which === 3) {
+        return Math.round((raw * 100) / 1023) + "%";
+      }
+
+      // Format a DRONE-MOD EDIT parameter. Two independent multiplexers now:
+      //   MOD group (idx 0..4) = DRIFT / CMODE / CHOR / FLNGR / ENSMBL
+      //   TAPE group (idx 0..4) = NOISE / NRATE / TAPWOB / HISS / WARP
+      // CMODE (MOD idx 1) shows the Juno voice band (I / I+II / II, equal
+      // thirds); everything else shows 0..100%.
+      const MOD_EDIT_NAMES = ["DRIFT", "CMODE", "CHOR", "FLNGR", "ENSMBL"];
+      const TAPE_EDIT_NAMES = ["NOISE", "NRATE", "TAPWOB", "HISS", "WARP"];
+      function formatModEditParam(idx, raw) {
+        if (idx === 1) { // CMODE
           if (raw < 342) return "I";
           if (raw < 684) return "I+II";
           return "II";
         }
+        return Math.round((raw * 100) / 1023) + "%";
+      }
+      // The TAPE group has no special case: every value shows 0..100%.
+      function formatTapeEditParam(idx, raw) {
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -1435,16 +1479,20 @@
 
       // ---- FX chain knobs (MOD 9-params / DEL 2 / REV 2) -------------------
       // The full audio path OSC -> MOD -> DEL -> REV -> out runs inside the
-      // single wasm worklet (drone-chain/chain.h). Each FX stage's parameters
-      // are driven through Module.setFxParam(stage, which, raw):
-      //   stage: 0=MOD, 1=DEL, 2=REV   (Chain::FX_MOD / FX_DEL / FX_REV)
-      //   which: MOD -> 0..8 (TIME/DEPTH/DRIFT/CMODE/CHORUS/FLANGER/NOISE/NRATE/ENSMBL)
-      //          DEL/REV -> 0..1 (TIME/DEPTH)
-      //   raw:   0..1023 (10-bit knob value)
-      // The worklet thread applies the value to the live DSP each block
-      // (Chain::applyFxParams), so the sound updates in real time.
+      // single wasm worklet (drone-chain/chain.h).
+      //
+      // MOD now uses a PARAM/VALUE multiplexer (like the OSC): only TIME /
+      // DEPTH are fixed header slots (driven through setFxParam(0, 0/1, raw)).
+      // The 8 edit params (DRIFT / CMODE / CHORUS / FLANGER / NOISE / NRATE /
+      // ENSMBL / TAPWOB) are driven through Module.modSetEditParam(idx, raw),
+      // which writes the (PARAM_SEL, PARAM_VAL) pair atomically (the worklet
+      // applies both on its next block, so the DSP never sees a stale select_).
+      //
+      // DEL / REV keep their own TIME / DEPTH via setFxParam(stage, 0/1, raw).
+      //
+      // Fixed knobs (setFxParam): MOD 0..1 (TIME/DEPTH), DEL 0..1, REV 0..1.
       const FX_STAGES = [
-        { stage: 0, prefix: "fxmod", params: ["time", "depth", "drift", "cmode", "chorus", "flanger", "noise", "nrate", "ensemble"] },
+        { stage: 0, prefix: "fxmod", params: ["time", "depth"] },
         { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
         { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
       ];
@@ -1459,10 +1507,67 @@
             if (Module.setFxParam) Module.setFxParam(stage, which, raw);
           };
           input.addEventListener("input", () => apply(parseInt(input.value, 10)));
-          // Initialize from the wasm side (defaults in Modfx::Params::reset).
+          // Initialize from the wasm side (defaults in Modfx::Params::reset /
+          // the header.c TIME/DEPTH defaults).
           const initRaw = (Module.getFxParam) ? Module.getFxParam(stage, which) : 0;
           apply(initRaw);
         });
+      }
+
+      // ---- MOD edit params (the MOD-group multiplexer, slots 2/3) --------------
+      // Each slider carries data-modedit=<idx> (0..4 = DRIFT / CMODE / CHOR /
+      // FLNGR / ENSMBL). Moving it calls Module.modSetEditParam(idx, raw)
+      // (atomic PARAM_SEL + PARAM_VAL). The readout is formatted by
+      // formatModEditParam (CMODE -> I / I+II / II, everything else -> %).
+      // Initialized from Module.modGetEditParamValue(idx).
+      const MOD_EDIT_SLIDERS = [
+        { idx: 0, id: "fxmod_drift" },
+        { idx: 1, id: "fxmod_cmode" },
+        { idx: 2, id: "fxmod_chorus" },
+        { idx: 3, id: "fxmod_flanger" },
+        { idx: 4, id: "fxmod_ensemble" },
+      ];
+      for (const { idx, id } of MOD_EDIT_SLIDERS) {
+        const input = document.getElementById(id);
+        const label = document.getElementById(id + "_val");
+        if (!input || !label) continue;
+        const apply = (raw) => {
+          input.value = raw;
+          label.textContent = formatModEditParam(idx, raw);
+          if (Module.modSetEditParam) Module.modSetEditParam(idx, raw);
+        };
+        input.addEventListener("input", () => apply(parseInt(input.value, 10)));
+        // Initialize from the wasm side (Modfx::edit_value_ defaults).
+        const initRaw = (Module.modGetEditParamValue) ? Module.modGetEditParamValue(idx) : 0;
+        apply(initRaw);
+      }
+
+      // ---- TAPE edit params (the TAPE-group multiplexer, slots 4/5) -----------
+      // Each slider carries data-modtape=<idx> (0..4 = NOISE / NRATE / TAPWOB /
+      // HISS / WARP, the KoS-derived tape stages). Moving it calls
+      // Module.modSetTapeParam(idx, raw) (atomic TPARAM + TVALUE). The readout
+      // is formatted by formatTapeEditParam (0..100%). Initialized from
+      // Module.modGetTapeEditParamValue(idx).
+      const TAPE_EDIT_SLIDERS = [
+        { idx: 0, id: "fxmod_noise" },
+        { idx: 1, id: "fxmod_nrate" },
+        { idx: 2, id: "fxmod_tapwob" },
+        { idx: 3, id: "fxmod_hiss" },
+        { idx: 4, id: "fxmod_warp" },
+      ];
+      for (const { idx, id } of TAPE_EDIT_SLIDERS) {
+        const input = document.getElementById(id);
+        const label = document.getElementById(id + "_val");
+        if (!input || !label) continue;
+        const apply = (raw) => {
+          input.value = raw;
+          label.textContent = formatTapeEditParam(idx, raw);
+          if (Module.modSetTapeParam) Module.modSetTapeParam(idx, raw);
+        };
+        input.addEventListener("input", () => apply(parseInt(input.value, 10)));
+        // Initialize from the wasm side (Modfx::tedit_value_ defaults).
+        const initRaw = (Module.modGetTapeEditParamValue) ? Module.modGetTapeEditParamValue(idx) : 0;
+        apply(initRaw);
       }
 
       // ---- Per-stage ON/OFF toggles (diagnostic A/B) --------------------------

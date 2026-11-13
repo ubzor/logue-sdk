@@ -64,24 +64,27 @@ public:
     FX_REV,
     FX_STAGE_COUNT
   };
-  // MOD is a full 9-parameter stage (TIME / DEPTH / DRIFT / CMODE / CHORUS /
-  // FLANGER / NOISE / NRATE / ENSMBL). DEL and REV still have their own
-  // parameter sets. We use the MOD stage's count (9) as the per-stage stride so
-  // setFxParam/applyFxParams work for all three; DEL/REV simply ignore the
-  // higher indices (their setParameter default-cases them).
-  // FX_PARAM_COUNT is the MOD count = 9.
+  // MOD is now a 6-HEADER-SLOT stage (two PARAM/VALUE multiplexers, like
+  // drone-osc but doubled): TIME / DEPTH (fixed) + PARAM / VALUE (the MOD-group
+  // multiplexer) + TPARAM / TVALUE (the TAPE-group multiplexer). The 10 edit
+  // parameters (DRIFT / CMODE / CHORUS / FLANGER / ENSMBL | NOISE / NRATE /
+  // TAPWOB / HISS / WARP) live behind the two multiplexers. DEL and REV keep
+  // their own 2-parameter sets (TIME / DEPTH). We use the MOD stage's count (6)
+  // as the per-stage stride so setFxParam / applyFxParams work for all three;
+  // DEL/REV simply ignore the higher indices (their setParameter default-cases
+  // them).
+  // FX_PARAM_COUNT is the MOD header-slot count = 6 (TIME / DEPTH / PARAM /
+  // VALUE / TPARAM / TVALUE). DEL / REV have 2 each (TIME / DEPTH) and ignore
+  // the rest.
   enum
   {
-    FX_TIME = 0,
-    FX_DEPTH,
-    FX_DRIFT,
-    FX_CMODE,
-    FX_CHORUS,
-    FX_FLANGER,
-    FX_NOISE,
-    FX_NRATE,
-    FX_ENSEMBLE,
-    FX_PARAM_COUNT // = 9 (the MOD stage's parameter count)
+    FX_TIME = 0,  // header slot 0 (MOD: TIME, fixed)
+    FX_DEPTH,     // header slot 1 (MOD: DEPTH, fixed)
+    FX_PARAM,     // header slot 2 (MOD: PARAM multiplexer selector 0..4)
+    FX_VALUE,     // header slot 3 (MOD: VALUE raw 0..1023 of PARAM)
+    FX_TPARAM,    // header slot 4 (MOD: TPARAM TAPE-group selector 0..4)
+    FX_TVALUE,    // header slot 5 (MOD: TVALUE raw 0..1023 of TPARAM)
+    FX_PARAM_COUNT // = 6 (the MOD stage's header-slot count)
   };
 
   // Total dynamic RAM the chain needs = the sum of every stage's buffer.
@@ -293,6 +296,12 @@ public:
   // Diagnostic: read the OSC output peak (to verify the oscillator is running).
   volatile float osc_output_peak_ = 0.f;
   float getOscOutputPeak() const { return osc_output_peak_; }
+
+  // Public stage accessors (the web-sim's wasm.cc reaches mod_ for the
+  // MOD-multiplexer direct channel: modSetEditParam / modGetEditParamValue /
+  // modGetSelect). The stages are otherwise private.
+  Modfx &mod() { return mod_; }
+  const Modfx &mod() const { return mod_; }
 
   // Called from the worklet thread once per block (top of process()): apply the
   // cached FX values to the live DSP. `w` (FX_TIME=0 / FX_DEPTH=1) maps 1:1 onto
