@@ -21,23 +21,23 @@
 @plugin "@iconify/tailwind4";
 
 /* ---- flyonui: base layers ------------------------------------------------ */
-@import "./node_modules/flyonui/theme/light.css";
-@import "./node_modules/flyonui/theme/dark.css";
-@import "./node_modules/flyonui/base/scrollbar.css";
-@import "./node_modules/flyonui/base/rootcolor.css";
-@import "./node_modules/flyonui/base/reset.css";
-@import "./node_modules/flyonui/base/custombase.css";
-@import "./node_modules/flyonui/base/svg.css";
-@import "./node_modules/flyonui/base/properties.css";
+@import "../node_modules/flyonui/theme/light.css";
+@import "../node_modules/flyonui/theme/dark.css";
+@import "../node_modules/flyonui/base/scrollbar.css";
+@import "../node_modules/flyonui/base/rootcolor.css";
+@import "../node_modules/flyonui/base/reset.css";
+@import "../node_modules/flyonui/base/custombase.css";
+@import "../node_modules/flyonui/base/svg.css";
+@import "../node_modules/flyonui/base/properties.css";
 
 /* ---- extra themes (flyonui ships light+dark only in flyonui.css) -------- */
-@import "./node_modules/flyonui/theme/spotify.css";
-@import "./node_modules/flyonui/theme/valorant.css";
-@import "./node_modules/flyonui/theme/slack.css";
-@import "./node_modules/flyonui/theme/vscode.css";
-@import "./node_modules/flyonui/theme/gourmet.css";
-@import "./node_modules/flyonui/theme/luxury.css";
-@import "./themes/luxury-light.css";
+@import "../node_modules/flyonui/theme/spotify.css";
+@import "../node_modules/flyonui/theme/valorant.css";
+@import "../node_modules/flyonui/theme/slack.css";
+@import "../node_modules/flyonui/theme/vscode.css";
+@import "../node_modules/flyonui/theme/gourmet.css";
+@import "../node_modules/flyonui/theme/luxury.css";
+@import "../styles/luxury-light.css";
 
 /* ---- flyonui: components the shells actually use ------------------------
  * These are REPAIRED COPIES staged into ./flyonui-patched/ by the flyonuiRepair
@@ -49,18 +49,29 @@
  * the repair applied, and we import those copies here. They are compiled into
  * flyon.css by @tailwindcss/vite. The COMPONENTS list in vite.flyonui.js must
  * stay in sync with this @import block. */
-@import "./flyonui-patched/button.css";
-@import "./flyonui-patched/card.css";
-@import "./flyonui-patched/range.css";
-@import "./flyonui-patched/switches.css";
-@import "./flyonui-patched/badge.css";
-@import "./flyonui-patched/kbd.css";
-@import "./flyonui-patched/label.css";
-@import "./flyonui-patched/divider.css";
+@import "../flyonui-patched/button.css";
+@import "../flyonui-patched/card.css";
+@import "../flyonui-patched/range.css";
+@import "../flyonui-patched/switches.css";
+@import "../flyonui-patched/badge.css";
+@import "../flyonui-patched/kbd.css";
+@import "../flyonui-patched/label.css";
+@import "../flyonui-patched/divider.css";
 
 /* ------------------------------------------------------------------ */
 /* Custom bits not covered by FlyonUI                                 */
 /* ------------------------------------------------------------------ */
+
+/* FX parameter blocks (MOD / DEL / REV) mirror the MAIN (OSC) parameter
+ * block, which is NOT inside a flyonui .card. The .card component sets
+ * `color: color-mix(... base-content 80% ...)` (a dimmed 80%-alpha text), so
+ * the FX slider labels read fainter than the MAIN labels. `.fx-params`
+ * restores the full --color-base-content so the FX labels match MAIN exactly.
+ * Plain (unlayered) rule: unlayered author CSS beats flyonui's layered
+ * `.card` rule, so this wins without !important. */
+.fx-params {
+  color: var(--color-base-content);
+}
 
 /* flyonui range-slider repair ----------------------------------------
  *

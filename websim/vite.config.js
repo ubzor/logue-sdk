@@ -8,8 +8,9 @@
 //   sim/flyon.css  - Tailwind CSS v4 + the flyonui plugin (semantic classes)
 //   sim/flyon.js   - the entry module (theme init, flyonui JS plugins if any)
 //
-// The shells reference them with relative paths (./flyon.css, ./flyon.js),
-// and serve.sh serves sim/ as the document root.
+// The sources live in scripts/ (entry.js + app.css); the shells reference the
+// built artifacts with relative paths (./flyon.css, ./flyon.js), and serve.sh
+// serves sim/ as the document root.
 //
 // CSS-only build: the only Vite *input* is app.css. We must not set
 // appType: 'custom' here - with no JS entry Vite's build hook skips the whole
@@ -34,9 +35,9 @@ export default defineConfig({
     emptyOutDir: false,
     rollupOptions: {
       // Both the entry module (theme init + flyonui JS plugins, if any) and
-      // the stylesheet. Rollup bundles entry.js into flyon.js; the CSS it
-      // imports (@import "./app.css") is extracted into the asset flyon.css.
-      input: ['entry.js', 'app.css'],
+      // the stylesheet. Rollup bundles scripts/entry.js into flyon.js; the CSS
+      // it imports (@import "./app.css") is extracted into the asset flyon.css.
+      input: ['scripts/entry.js', 'scripts/app.css'],
       output: {
         entryFileNames: 'flyon.js',
         assetFileNames: 'flyon.css',

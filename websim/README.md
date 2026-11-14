@@ -27,5 +27,8 @@ COOP/COEP headers the SharedArrayBuffer build needs.
 This directory is the shared shell/project for that simulator:
 - `index.html` — the page shell (linked into drone-chain/sim/index.html);
 - `dsp/*.c` — the LUT/stub sources the chain wasm links in;
-- `entry.js` / `app.css` + `vite*.js` — the FlyonUI asset build (flyon.css/js).
+- `scripts/` — the page JS (`setup-web-audio.js`, `qwerty-hancock.js`), the
+  FlyonUI asset sources (`entry.js`, `app.css`) + `vite*.js` builds them into
+  `sim/flyon.js` / `sim/flyon.css`;
+- `styles/` — the custom `luxury-light` theme (imported from `scripts/app.css`).
 The per-unit standalone pages (osc.html / fx.html) are gone.
