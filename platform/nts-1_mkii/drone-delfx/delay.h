@@ -144,7 +144,10 @@ public:
     {
       time = 0.5f; // header.c TIME init 512 -> ~0.5 -> ~316 ms (log midpoint)
       depth = 0.5f; // header.c DEPTH init 512 -> 50% feedback
-      mix = 0.f;    // header.c MIX init 0 -> 0% (50/50 dry/wet)
+      mix = -1.f;   // default to FULL DRY (bypass-transparent): the unit is a
+                    // pure wire until the user cranks MIX up. This avoids the
+                    // "enable step" when toggling DEL on: with mix = 0 (50/50)
+                    // the user would hear an immediate level/tonal change.
       param4 = 1;
     }
 
@@ -283,6 +286,24 @@ public:
     const float fb = fb_cur_;
     const float dry = dry_gain_cur_;
     const float wet = wet_gain_cur_;
+
+    // Bypass-transparent fast path: when wet is EXACTLY zero (MIX = -100%),
+    // the delay is a pure wire (no echo, no line updates). This avoids the
+    // "enable step" the user hears when toggling DEL on with MIX = -100%:
+    // without this, the DSP would still read/write the line (consuming CPU and
+    // potentially picking up stale state) even though wet = 0.
+    //
+    // No threshold: -99% (wet = 0.5%) must still run the DSP (the user
+    // intentionally set a small wet amount, so the echo is audible).
+    if (wet == 0.f)
+    {
+      for (uint32_t i = 0; i < frames; ++i)
+      {
+        out[2 * i]     = in[2 * i];     // L dry
+        out[2 * i + 1] = in[2 * i + 1]; // R dry
+      }
+      return;
+    }
 
     // Linear-interp tap offset (the fractional part of the delay, shared by
     // both channels since the delay time is identical).

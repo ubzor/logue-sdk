@@ -160,15 +160,18 @@ chorus delay voices, FLANGER) is per-channel.
                 DRY/WET REPLACE (not additive): out = dry*(1-T) + wet*T,
                 T = WARP (full wet at WARP=1). Source: KoS "Shame" stage,
                 rewritten with a cosine LFO (no STK/KoS code, MIT-clean).)
-      -> makeup gain (0.9)
+      -> makeup gain (1.0 = unity, bypass-transparent)
       -> out (stereo)
 
 Note: there is deliberately NO DC-blocker on the output. With REAL delay lines
 (the chorus/flanger/tape stages are now true line buffers, not one-pole
 lowpasses) the stages no longer accumulate a DC-leaning envelope, so a ~20 Hz
 one-pole HPF there (tau ~2 s) would have eaten the low-frequency DRONE signal
-for no benefit. The 0.9 makeup (kModMakeup) simply leaves 1 dB of headroom
-against the chorus/flanger level peaks.
+for no benefit. The makeup is UNITY (kModMakeup = 1.0): with all stage levels
+at 0 the unit is a pure wire, so the output gain must be unity or enabling the
+MOD slot would be an audible ~0.9 dB step that no modulation stage caused
+(stage peaks are bounded by their own wet ceilings: kChorusWetMax = 0.5,
+flanger wet = 0.5 x knob, ...).
 
 Every level stage (CHORUS / FLANGER / TAPE) is a dry/wet 0..1 blend: at 0
 the stage is a pure wire (regression-safe). The DEL/REV stages downstream see

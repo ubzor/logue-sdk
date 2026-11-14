@@ -181,7 +181,10 @@ public:
     {
       time = 0.5f;  // header.c TIME init 512 -> 50% -> mid-size room
       depth = 0.5f; // header.c DEPTH init 512 -> 50% -> mid damping
-      mix = 0.f;    // header.c MIX init 0 -> 0% (50/50 dry/wet)
+      mix = -1.f;   // default to FULL DRY (bypass-transparent): the unit is a
+                    // pure wire until the user cranks MIX up. This avoids the
+                    // "enable step" when toggling REV on: with mix = 0 (50/50)
+                    // the user would hear an immediate level/tonal change.
       param4 = 1;
     }
 
@@ -354,6 +357,24 @@ public:
     const float d = damp_cur_;
     const float dry = dry_gain_cur_;
     const float wet = wet_gain_cur_;
+
+    // Bypass-transparent fast path: when wet is EXACTLY zero (MIX = -100%),
+    // the reverb is a pure wire (no reverb tail, no comb/allpass state updates).
+    // This avoids the "enable step" the user hears when toggling REV on with
+    // MIX = -100%: without this, the DSP would still compute the allpass + comb
+    // network (consuming CPU and updating internal state) even though wet = 0.
+    //
+    // No threshold: -99% (wet = 0.5%) must still run the DSP (the user
+    // intentionally set a small wet amount, so the reverb tail is audible).
+    if (wet == 0.f)
+    {
+      for (uint32_t i = 0U; i < frames; ++i)
+      {
+        out[2 * i]     = in[2 * i];     // L dry
+        out[2 * i + 1] = in[2 * i + 1]; // R dry
+      }
+      return;
+    }
 
     // Per-channel comb tap lengths (the scaled integer tap, recomputed once per
     // block from the (un-smoothed) TIME scale -- a tap jump is inaudible here).

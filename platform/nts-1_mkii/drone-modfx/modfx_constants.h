@@ -534,10 +534,14 @@ static constexpr float     kRoomToneLevel     = 0.15f;   // room-tone level unde
 // does NOT attenuate the input either: kModInputGain = 1.0.
 static constexpr float kModInputGain = 1.0f;
 
-// ---- Output makeup (0.9x headroom) -------------------------------------------
-// A small makeup gain keeps the modulation stages from reading quieter than
-// dry. 0.9x leaves 1 dB of headroom.
-static constexpr float kModMakeup = 0.9f;
+// ---- Output makeup (unity -- bypass-transparent) ----------------------------
+// The makeup MUST be 1.0: with all stage levels at 0 the unit is a pure wire
+// (dry), so a 0.9x makeup would silently attenuate the signal by ~0.9 dB
+// whenever the MOD slot is active -- an audible level step on enable that is
+// NOT caused by any modulation stage. Stage peaks are bounded by their own
+// wet ceilings (kChorusWetMax 0.5, flanger wet = 0.5 x knob, ...), not by a
+// global makeup, so no headroom scaling is needed here.
+static constexpr float kModMakeup = 1.0f;
 
 // ---- SDRAM layout (real delay lines) ----------------------------------------
 // A genuine chorus / flanger / tape stage needs REAL delay lines, not one-pole

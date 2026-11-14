@@ -1731,8 +1731,10 @@ private:
     // ---- Makeup gain + write the stereo output -------------------------------
     // NO DC-block here: with REAL delay lines the stages no longer accumulate a
     // DC-leaning envelope, so a ~20 Hz one-pole HPF (tau ~2 s) would have eaten
-    // the low-frequency DRONE signal for no benefit. kModMakeup (0.9) simply
-    // leaves 1 dB of headroom against the chorus/flanger level peaks.
+    // the low-frequency DRONE signal for no benefit. kModMakeup is UNITY 1.0:
+    // at all levels 0 the unit is a pure wire, so the output gain must be
+    // unity or enabling the MOD slot would be an audible ~0.9 dB step (the
+    // stage peaks are bounded by their own wet ceilings, not by a makeup).
     out[2 * n]     = L * modfx_consts::kModMakeup;
     out[2 * n + 1] = R * modfx_consts::kModMakeup;
     const float out_abs = (out[2 * n] < 0.f) ? -out[2 * n] : out[2 * n];

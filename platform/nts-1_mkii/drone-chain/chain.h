@@ -132,20 +132,19 @@ public:
     // Initialize the FX parameter cache with the DSP defaults so the UI sliders
     // show the correct values on page load (before the user touches anything).
     // The cache is zero-initialized, but getFxParam() is called by the UI to
-    // read back the initial slider positions; without this, all sliders would
-    // show 0 (e.g. DEL MIX would show -100% instead of 0%).
-    // Raw values (0..1023 for 10-bit params, -1000..1000 for drywet):
+    // read back the initial slider positions.
+    // Raw values (0..1023 for 10-bit params, -1000..1000 for drywet MIX):
     //   MOD: TIME=0, DEPTH=0 (Modfx::Params::reset)
-    //   DEL: TIME=512, DEPTH=512, MIX=512 (Delay::Params::reset, MIX 0% = 512)
-    //   REV: TIME=512, DEPTH=512, MIX=512 (Reverb::Params::reset, same as DEL)
+    //   DEL: TIME=512, DEPTH=512, MIX=-1000 (Delay::Params::reset, MIX = -1.0 = full dry)
+    //   REV: TIME=512, DEPTH=512, MIX=-1000 (Reverb::Params::reset, same as DEL)
     sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_TIME]  = 0;
     sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_DEPTH] = 0;
     sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_TIME]  = 512;
     sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_DEPTH] = 512;
-    sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_PARAM] = 512; // MIX (slot 2)
+    sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_PARAM] = -1000; // MIX (slot 2, -100% = full dry)
     sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_TIME]  = 512;
     sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_DEPTH] = 512;
-    sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_PARAM] = 512; // MIX (slot 2, 0%)
+    sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_PARAM] = -1000; // MIX (slot 2, -100% = full dry)
   }
 
   void teardown() override final
