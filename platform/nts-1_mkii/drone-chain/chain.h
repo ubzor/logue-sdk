@@ -134,9 +134,10 @@ public:
     // show the correct values on page load (before the user touches anything).
     // The cache is zero-initialized, but getFxParam() is called by the UI to
     // read back the initial slider positions.
-    // Raw values (0..1023 for 10-bit params, -1000..1000 for drywet MIX):
+    // Raw values (0..1023 for 10-bit params, -1000..1000 for the drywet MIX,
+    // whose raw is 10x the displayed percent: -1000 = -100% = full dry):
     //   MOD: TIME=0, DEPTH=0 (Modfx::Params::reset)
-    //   DEL: TIME=512, DEPTH=512, MIX=-1000 (Delay::Params::reset, MIX = -1.0 = full dry)
+    //   DEL: TIME=512, DEPTH=512, MIX=-1000 (Delay::Params::reset, mix=-1.0 = full dry)
     //   REV: TIME=512, DEPTH=512, MIX=-1000 (Reverb::Params::reset, same as DEL)
     sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_TIME]  = 0;
     sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_DEPTH] = 0;

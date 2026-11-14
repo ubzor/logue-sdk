@@ -208,15 +208,17 @@
       // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
       // index within that stage (0=TIME, 1=DEPTH; DEL adds 2=MIX as a drywet
       // knob; the MOD edit params are formatted by formatModEditParam instead).
-      // DEL MIX (stage 1, which 2) shows a drywet percentage: raw 0 -> -100%
-      // (full dry), raw 1023 -> +100% (full wet); everything else shows 0..100%.
+      // DEL MIX (stage 1, which 2) shows a drywet percentage: raw -1000 ->
+      // -100% (full dry), raw +1000 -> +100% (full wet); raw 0 = BAL (50/50).
       function formatFxParam(stage, which, raw) {
         // DEL MIX (stage 1, which 2) and REV MIX (stage 2, which 2) show a
-        // drywet percentage: raw 0 -> -100% (full dry), raw 1023 -> +100%
-        // (full wet), raw 512 -> ~0% (50/50); everything else shows 0..100%.
+        // drywet percentage: the knob is a drywet param (header.c
+        // -1000..1000, frac=1 base-10), so raw/10 is the percentage:
+        // raw -1000 -> -100% (full dry, pure wire), raw 0 -> 0% (50/50),
+        // raw +1000 -> +100% (full wet); everything else is proportional.
         if ((stage === 1 || stage === 2) && which === 2) {
-          const pct = Math.round((raw / 1023) * 200 - 100);
-          return (pct >= 0 ? "+" : "") + pct + "%";
+          const pct = Math.round(raw / 10.0);
+          return (pct > 0 ? "+" : "") + pct + "%";
         }
         return Math.round((raw * 100) / 1023) + "%";
       }

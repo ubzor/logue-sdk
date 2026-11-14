@@ -55,8 +55,10 @@
  *             Drives the low-pass coefficient inside each comb's feedback loop
  *             (Schroeder low-pass comb): 0 = bright / metallic, 1 = very dark.
  *             This is FreeVerb's `damp`.
- *    MIX   -> dry/wet. drywet raw -1000..1000 -> mix -1..1,
- *             wet = (1 + mix)/2, dry = (1 - mix)/2  (0 = 50/50, +1 = full wet).
+ *    MIX   -> dry/wet. drywet raw -1000..1000 (frac=1, base-10: raw/10 is
+ *             the percent display) -> mix = raw/10000 -1..1,
+ *             wet = (1 + mix)/2, dry = (1 - mix)/2  (-100% = full dry,
+ *             0 = 50/50, +100% = full wet).
  *
  *  STEREO: the input is TRUE stereo (the DRONE signal has been stereo-smear'd
  *  upstream by the MOD stage, so L != R by the time it reaches REV). The
@@ -215,8 +217,10 @@ public:
       break;
 
     case MIX:
-      // Single digit base-10 fractional value, bipolar dry/wet
-      params_.mix = value / 1000.f; // -100.0 .. 100.0 -> -1.0 .. 1.0
+      // Drywet knob: min/max -1000..1000 with frac=1 (base-10), so the raw
+      // value is 10x the displayed percent (-1000 = -100.0% = full dry,
+      // +1000 = +100.0% = full wet, 0 = BAL). Divide by 1000 to get -1..1.
+      params_.mix = value / 1000.f; // -1000 .. 1000 -> -1.0 .. 1.0
       break;
 
     case PARAM4:
@@ -358,15 +362,21 @@ public:
     const float dry = dry_gain_cur_;
     const float wet = wet_gain_cur_;
 
-    // Bypass-transparent fast path: when wet is EXACTLY zero (MIX = -100%),
+    // Bypass-transparent fast path: when wet is (effectively) zero (MIX ≈ -100%),
     // the reverb is a pure wire (no reverb tail, no comb/allpass state updates).
     // This avoids the "enable step" the user hears when toggling REV on with
     // MIX = -100%: without this, the DSP would still compute the allpass + comb
-    // network (consuming CPU and updating internal state) even though wet = 0.
+    // network (consuming CPU and updating internal state) even though wet ≈ 0.
     //
-    // No threshold: -99% (wet = 0.5%) must still run the DSP (the user
-    // intentionally set a small wet amount, so the reverb tail is audible).
-    if (wet == 0.f)
+    // Threshold: 1e-6 (0.000001 = 0.0001% wet, inaudible). The K-rate one-pole
+    // smoothing (tau = 10 ms) makes wet_gain_cur_ approach 0.0 asymptotically;
+    // due to float rounding it can stall at a tiny non-zero value (e.g. 1e-8)
+    // after the user returns MIX from a wet setting to -100%. Without the
+    // threshold, `wet == 0.f` would never fire and the DSP would keep running
+    // with an inaudible wet tail (the user hears "REV is still slightly on").
+    // A real -99% setting (wet = 0.5%) is far above the threshold and runs the
+    // DSP as intended.
+    if (wet < 1e-6f)
     {
       for (uint32_t i = 0U; i < frames; ++i)
       {

@@ -64,9 +64,10 @@ const __unit_header unit_header_t unit_header = {
     // B knob: DEPTH (10-bit, feedback 0 .. 0.95). Default 512 -> 50% feedback.
     {0, 1023, 0, 512, k_unit_param_type_none, 1, 0, 0, {"DPTH"}},
     
-    // DELAY switch + B knob: MIX (drywet, -1000..1000 -> -1..+1; 0 = 50/50, +1000 = full wet).
-    // Default 0 -> 0% (equal dry/wet: the echo is heard at half level alongside the dry signal).
-    {-1000, 1000, 0, 0, k_unit_param_type_drywet, 1, 1, 0, {"MIX"}},
+    // DELAY switch + B knob: MIX (drywet, -1000..1000, frac=1 base-10: raw/10
+    // is the percent display, DSP maps raw/10000 -> -1..+1).
+    // Default -1000 -> -100% (full dry, pure wire: bypass-transparent).
+    {-1000, 1000, 0, -1000, k_unit_param_type_drywet, 1, 1, 0, {"MIX"}},
     
     // 8 Edit menu parameters
     {0, 3, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"PARAM4"}}, // Example of a strings type parameter

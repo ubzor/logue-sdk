@@ -50,9 +50,10 @@
  *             always fits even with the deepest feedback tail).
  *    DEPTH -> feedback (repeats level). 10-bit 0..1023 linear 0 .. 0.95
  *             (0.95 is the stability ceiling for a single-tap loop).
- *    MIX   -> dry/wet. drywet raw -1000..1000 -> mix -1..1,
- *             wet = (1 + mix)/2, dry = (1 - mix)/2  (0 = full dry,
- *             +1 = full wet).
+ *    MIX   -> dry/wet. drywet raw -1000..1000 (frac=1, base-10: raw/10 is
+ *             the percent display) -> mix = raw/10000 -1..1,
+ *             wet = (1 + mix)/2, dry = (1 - mix)/2  (-100% = full dry,
+ *             0 = 50/50, +100% = full wet).
  *
  *  Signal path (stereo input / stereo output, one block of `frames`):
  *
@@ -178,8 +179,10 @@ public:
       break;
 
     case MIX:
-      // Single digit base-10 fractional value, bipolar dry/wet
-      params_.mix = value / 1000.f; // -100.0 .. 100.0 -> -1.0 .. 1.0
+      // Drywet knob: min/max -1000..1000 with frac=1 (base-10), so the raw
+      // value is 10x the displayed percent (-1000 = -100.0% = full dry,
+      // +1000 = +100.0% = full wet, 0 = BAL). Divide by 1000 to get -1..1.
+      params_.mix = value / 1000.f; // -1000 .. 1000 -> -1.0 .. 1.0
       break;
 
     case PARAM4:
@@ -287,15 +290,21 @@ public:
     const float dry = dry_gain_cur_;
     const float wet = wet_gain_cur_;
 
-    // Bypass-transparent fast path: when wet is EXACTLY zero (MIX = -100%),
+    // Bypass-transparent fast path: when wet is (effectively) zero (MIX ≈ -100%),
     // the delay is a pure wire (no echo, no line updates). This avoids the
     // "enable step" the user hears when toggling DEL on with MIX = -100%:
     // without this, the DSP would still read/write the line (consuming CPU and
-    // potentially picking up stale state) even though wet = 0.
+    // potentially picking up stale state) even though wet ≈ 0.
     //
-    // No threshold: -99% (wet = 0.5%) must still run the DSP (the user
-    // intentionally set a small wet amount, so the echo is audible).
-    if (wet == 0.f)
+    // Threshold: 1e-6 (0.000001 = 0.0001% wet, inaudible). The K-rate one-pole
+    // smoothing (tau = 10 ms) makes wet_gain_cur_ approach 0.0 asymptotically;
+    // due to float rounding it can stall at a tiny non-zero value (e.g. 1e-8)
+    // after the user returns MIX from a wet setting to -100%. Without the
+    // threshold, `wet == 0.f` would never fire and the DSP would keep running
+    // with an inaudible wet tail (the user hears "DEL is still slightly on").
+    // A real -99% setting (wet = 0.5%) is far above the threshold and runs the
+    // DSP as intended.
+    if (wet < 1e-6f)
     {
       for (uint32_t i = 0; i < frames; ++i)
       {
