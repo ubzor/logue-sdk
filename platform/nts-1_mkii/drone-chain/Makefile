@@ -171,6 +171,7 @@ $(WASMOBJDIR)/%.o: %.c | $(WASMOBJDIR)
 # and is added as a prerequisite so any DSP edit invalidates chain.o/wasm.o.
 DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/wasm.cc \
+               $(PROJECT_ROOT)/hwfilter.h \
                $(PROJECT_ROOT)/../drone-osc/osc.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx_constants.h \

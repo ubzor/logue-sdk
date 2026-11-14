@@ -1212,6 +1212,130 @@
       updateLfoFreq();
       updateLfoDepth();
 
+      // ---- HW FILTER (web-sim only, between OSC and MOD) -------------------
+      // Emulates the physical NTS-1 filter between the OSC module and the MOD
+      // module (the SDK only exposes unused cutoff / resonance placeholder
+      // fields in the OSC runtime context, so the simulator builds its own
+      // block: see drone-chain/hwfilter.h).
+      //
+      // Controls:
+      //   - TYPE : radio join (Off / HP 4 / HP 2 / BP 4 / BP 2 / LP 4 / LP 2),
+      //            default Off (the block is out of the path).
+      //   - CUTOFF : raw 0..1023, log-mapped 1 Hz .. 20 kHz (hwfilter.h).
+      //   - RES    : raw 0..1023, linearly mapped Q 0.5 .. 2.5.
+      //   - SWEEP F : 0..30 Hz (step 0.01), default 0 = sweep off.
+      //   - SWEEP AMT : -100..+100 (UI), default 0. Raw = (amt+100)*5.115.
+      //
+      // All writes go through Module.setHwFilterType / setHwFilterParam
+      // (wasm.cc -> Chain::hwflt_). The worklet thread applies them on its
+      // next block (hwflt_.apply() at the top of hwflt_.process).
+      {
+        // Format the raw 10-bit cutoff value (0..1023) as Hz / kHz.
+        // Mirrors HwFilter::cutoffHz: fc = 1 * (20000/1)^(raw/1023).
+        function formatHwCutoff(raw) {
+          const fc = 1.0 * Math.pow(20000.0 / 1.0, raw / 1023);
+          if (fc < 1000) return Math.round(fc) + " Hz";
+          return (fc / 1000).toFixed(2) + " kHz";
+        }
+
+        // Format the raw 10-bit resonance value (0..1023) as Q.
+        // Mirrors HwFilter::quality: q = 0.5 + (raw/1023) * 2.0.
+        function formatHwRes(raw) {
+          const q = 0.5 + (raw / 1023) * 2.0;
+          return q.toFixed(2);
+        }
+
+        // Type selector: FlyonUI "Join radio with btn style" (same pattern as
+        // Octave). The radio inputs are static in index.html (name="HwFltType");
+        // the CSS paints :checked via .btn rule, so JS only mirrors the wasm
+        // state on init and writes the type on change.
+        //
+        // Listen on BOTH 'input' and 'change': some browsers (and flyonui's
+        // event handling) fire 'input' on radios, others only 'change'. Both
+        // are idempotent (applyHwType reads the current checked state), so
+        // double-firing is harmless. Use `r.value` at event time (not a
+        // closure capture) so the correct type is written even if flyonui
+        // re-dispatches or mutates the event.
+        const typeRadios = Array.from(document.querySelectorAll('input[name="HwFltType"]'));
+        if (typeRadios.length > 0) {
+          let currentType = (Module.getHwFilterType) ? Module.getHwFilterType() : 0;
+          function applyHwType(typeId) {
+            currentType = typeId;
+            if (Module.setHwFilterType) Module.setHwFilterType(typeId);
+            // Mirror the checked state (the browser already did it on click;
+            // this keeps the radio in sync when the type is set from wasm).
+            for (const r of typeRadios) {
+              r.checked = parseInt(r.value, 10) === typeId;
+            }
+          }
+          for (const r of typeRadios) {
+            const handler = () => applyHwType(parseInt(r.value, 10));
+            r.addEventListener("input", handler);
+            r.addEventListener("change", handler);
+          }
+          applyHwType(currentType);
+        }
+
+        // Cutoff slider (raw 0..1023).
+        const cutoffInput = document.getElementById("hwflt_cutoff");
+        const cutoffLabel = document.getElementById("hwflt_cutoff_val");
+        if (cutoffInput && cutoffLabel) {
+          const apply = (raw) => {
+            cutoffInput.value = raw;
+            cutoffLabel.textContent = formatHwCutoff(raw);
+            if (Module.setHwFilterParam) Module.setHwFilterParam(0, raw); // PARAM_CUTOFF
+          };
+          cutoffInput.addEventListener("input", () => apply(parseInt(cutoffInput.value, 10)));
+          const initRaw = (Module.getHwFilterParam) ? Module.getHwFilterParam(0) : 0;
+          apply(initRaw);
+        }
+
+        // Resonance slider (raw 0..1023).
+        const resInput = document.getElementById("hwflt_res");
+        const resLabel = document.getElementById("hwflt_res_val");
+        if (resInput && resLabel) {
+          const apply = (raw) => {
+            resInput.value = raw;
+            resLabel.textContent = formatHwRes(raw);
+            if (Module.setHwFilterParam) Module.setHwFilterParam(1, raw); // PARAM_RES
+          };
+          resInput.addEventListener("input", () => apply(parseInt(resInput.value, 10)));
+          const initRaw = (Module.getHwFilterParam) ? Module.getHwFilterParam(1) : 0;
+          apply(initRaw);
+        }
+
+        // Sweep F slider (0..30 Hz, step 0.01). Raw = round(freq*1000).
+        const sweepFInput = document.getElementById("hwflt_sweepf");
+        const sweepFLabel = document.getElementById("hwflt_sweepf_val");
+        if (sweepFInput && sweepFLabel) {
+          const apply = (freq) => {
+            sweepFInput.value = freq;
+            sweepFLabel.textContent = freq.toFixed(2) + " Hz";
+            const raw = Math.round(freq * 1000);
+            if (Module.setHwFilterParam) Module.setHwFilterParam(2, raw); // PARAM_SWEEP_F
+          };
+          sweepFInput.addEventListener("input", () => apply(parseFloat(sweepFInput.value)));
+          const initRaw = (Module.getHwFilterParam) ? Module.getHwFilterParam(2) : 0;
+          apply(initRaw / 1000.0);
+        }
+
+        // Sweep Amt slider (-100..+100, step 1). Raw = (amt+100)*5.115.
+        const amtInput = document.getElementById("hwflt_sweepamt");
+        const amtLabel = document.getElementById("hwflt_sweepamt_val");
+        if (amtInput && amtLabel) {
+          const apply = (amt) => {
+            amtInput.value = amt;
+            amtLabel.textContent = (amt > 0 ? "+" : "") + amt;
+            const raw = Math.round((amt + 100) * 5.115);
+            if (Module.setHwFilterParam) Module.setHwFilterParam(3, raw); // PARAM_SWEEP_AMT
+          };
+          amtInput.addEventListener("input", () => apply(parseInt(amtInput.value, 10)));
+          const initRaw = (Module.getHwFilterParam) ? Module.getHwFilterParam(3) : 511;
+          const initAmt = Math.round(initRaw / 5.115 - 100);
+          apply(initAmt);
+        }
+      }
+
       // ---- FX chain knobs (MOD 9-params / DEL 3 / REV 3) -------------------
       // The full audio path OSC -> MOD -> DEL -> REV -> out runs inside the
       // single wasm worklet (drone-chain/chain.h).

@@ -401,6 +401,40 @@ extern "C" int getOscOutputPeak()
   return static_cast<int>(peak * 1000.f);
 }
 
+// ---- HW FILTER (web-sim only, between OSC and MOD) ---------------------------
+// The hardware filter block emulates the physical NTS-1 filter that sits
+// between the OSC module and the MOD module. It is NOT part of any ARM unit
+// (the SDK only exposes unused cutoff / resonance placeholder fields in the
+// OSC runtime context); the simulator drives it through its own parameter
+// set: TYPE (thru/high4/high2/band4/band2/low4/low2) + CUTOFF / RES /
+// SWEEP F / SWEEP AMT. THRU = the block is out of the path (dry wire).
+//
+// The main thread writes (setHwFilterType / setHwFilterParam); the worklet
+// thread reads them in Chain::process (hwflt_.apply() at the top of
+// hwflt_.process). Main and worklet share one linear memory (SHARED_MEMORY=1),
+// so the write is visible on the next block (a benign data race, exactly like
+// setFxParam / setStageBypass).
+extern "C" void setHwFilterType(int type)
+{
+  processor.setHwFilterType(type);
+}
+
+extern "C" int getHwFilterType()
+{
+  return processor.getHwFilterType();
+}
+
+// which: 0=CUTOFF, 1=RES, 2=SWEEP_F (milli-Hz 0..3000), 3=SWEEP_AMT (raw 0..1023)
+extern "C" void setHwFilterParam(int which, int raw)
+{
+  processor.setHwFilterParam(which, raw);
+}
+
+extern "C" int getHwFilterParam(int which)
+{
+  return static_cast<int>(processor.getHwFilterParam(which));
+}
+
 // ---- OSC edit-parameter accessors (the 44-parameter UI) ----------------------
 // Mirror drone-osc/wasm.cc: the main-thread `processor` and the worklet-thread
 // `processor` are the SAME object (shared linear memory), so writing through
@@ -527,6 +561,14 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("getModInputPeak", &getModInputPeak);
   emscripten::function("getModOutputPeak", &getModOutputPeak);
   emscripten::function("getOscOutputPeak", &getOscOutputPeak);
+
+  // HW FILTER (web-sim only, between OSC and MOD). type: 0=thru, 1=high4,
+  // 2=high2, 3=band4, 4=band2, 5=low4, 6=low2. which: 0=cutoff, 1=res,
+  // 2=sweepF (milli-Hz 0..3000), 3=sweepAmt (raw 0..1023).
+  emscripten::function("setHwFilterType", &setHwFilterType);
+  emscripten::function("getHwFilterType", &getHwFilterType);
+  emscripten::function("setHwFilterParam", &setHwFilterParam);
+  emscripten::function("getHwFilterParam", &getHwFilterParam);
 }
 
 // ---- Audio worklet (runs on the dedicated audio thread) ----------------------

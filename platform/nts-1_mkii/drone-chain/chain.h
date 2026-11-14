@@ -48,6 +48,7 @@
 #include "modfx.h"   // ../drone-modfx/modfx.h  (Modfx)
 #include "delay.h"   // ../drone-delfx/delay.h  (Delay)
 #include "reverb.h"  // ../drone-revfx/reverb.h (Reverb)
+#include "hwfilter.h" // hwfilter.h (HwFilter -- web-sim-only hardware filter)
 
 class Chain : public Processor
 {
@@ -188,13 +189,24 @@ public:
       buf_a_[2 * i + 1] = osc_mono_[i];
     }
 
-    // 3. MOD -> DEL -> REV, each in-place between two interleaved stereo
-    //    scratch buffers (in/out ping-pong). Each stage can be BYPASSED
-    //    (sim_stage_bypass_[stage] == 1): when bypassed the buffer is passed
-    //    straight through untouched, so the user can A/B any combination
-    //    OSC -> [MOD] -> [DEL] -> [REV] and localize a clipping stage.
+    // 3. HW FILTER (web-sim only, emulates the NTS-1 physical filter between
+    //    OSC and MOD) -> MOD -> DEL -> REV, each in-place between two
+    //    interleaved stereo scratch buffers (in/out ping-pong). Each FX stage
+    //    can be BYPASSED (sim_stage_bypass_[stage] == 1): when bypassed the
+    //    buffer is passed straight through untouched, so the user can A/B any
+    //    combination OSC -> [MOD] -> [DEL] -> [REV] and localize a clipping
+    //    stage. The HW FILTER block is controlled by its TYPE: THRU = the block
+    //    is out of the path (dry wire), any other type = in the path.
     const float *fx_in = buf_a_;
     float *fx_out = buf_b_;
+    // HW filter (between OSC and MOD): applied when type != THRU. The block
+    // owns its own state (ladders) and parameter cache (hwflt_cache_ / type_);
+    // applyHwFilter() at the top of process() already pushed any K-rate change.
+    if (hwflt_.getType() != HwFilter::THRU)
+    {
+      hwflt_.process(fx_in, fx_out, frames);
+      const float *t = fx_out; fx_out = const_cast<float *>(fx_in); fx_in = t;
+    }
     if (!sim_stage_bypass_[FX_MOD])
     {
       mod_.process(fx_in, fx_out, frames);
@@ -351,10 +363,34 @@ public:
     }
   }
 
+  // ---- HW FILTER (web-sim only) parameter routing -----------------------------
+  // The HW filter block (between OSC and MOD) has its own parameter set
+  // (TYPE / CUTOFF / RES / SWEEP F / SWEEP AMT). The main thread writes them
+  // via setHwFilterType / setHwFilterParam (wasm.cc); the worklet thread
+  // applies them to the live DSP once per block (hwflt_.apply() is called at
+  // the top of hwflt_.process, and we also push the TYPE here so a type
+  // change is visible on the next block even if process is bypassed).
+  // Plain aligned 32-bit ints: benign data race, exactly like sim_fx_cache_.
+  void setHwFilterType(int type)
+  {
+    hwflt_.setType(type);
+  }
+  int getHwFilterType() const { return hwflt_.getType(); }
+
+  void setHwFilterParam(int which, int32_t raw)
+  {
+    hwflt_.setParam(which, raw);
+  }
+  int32_t getHwFilterParam(int which) const
+  {
+    return hwflt_.getParam(which);
+  }
+
 private:
   static constexpr uint32_t kFrames = 128U; // WEB_AUDIO_FRAME_SIZE (the worklet block)
 
   Osc osc_;    // generator (mono out, no buffer)
+  HwFilter hwflt_; // web-sim-only hardware filter (between OSC and MOD)
   Modfx mod_;  // FX stage 1 (stereo, 256 KB)
   Delay del_;  // FX stage 2 (stereo, 1 MB)
   Reverb rev_; // FX stage 3 (stereo, 1 MB)
