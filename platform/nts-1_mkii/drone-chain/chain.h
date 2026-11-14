@@ -68,14 +68,16 @@ public:
   // drone-osc but doubled): TIME / DEPTH (fixed) + PARAM / VALUE (the MOD-group
   // multiplexer) + TPARAM / TVALUE (the TAPE-group multiplexer). The 10 edit
   // parameters (DRIFT / CMODE / CHORUS / FLANGER / ENSMBL | NOISE / NRATE /
-  // TAPWOB / HISS / WARP) live behind the two multiplexers. DEL and REV keep
-  // their own 2-parameter sets (TIME / DEPTH). We use the MOD stage's count (6)
-  // as the per-stage stride so setFxParam / applyFxParams work for all three;
-  // DEL/REV simply ignore the higher indices (their setParameter default-cases
-  // them).
+  // TAPWOB / HISS / WARP) live behind the two multiplexers. DEL keeps its own
+  // 3-parameter set (TIME / DEPTH / MIX -- a real single-tap feed-back delay,
+  // see drone-delfx/delay.h); REV keeps its own 3-parameter set (TIME / DEPTH /
+  // MIX -- a real stereo Schroeder/FreeVerb reverb, see drone-revfx/reverb.h).
+  // We use the MOD stage's count (6) as the per-stage
+  // stride so setFxParam / applyFxParams work for all three; DEL/REV simply
+  // ignore the higher indices (their setParameter default-cases them).
   // FX_PARAM_COUNT is the MOD header-slot count = 6 (TIME / DEPTH / PARAM /
-  // VALUE / TPARAM / TVALUE). DEL / REV have 2 each (TIME / DEPTH) and ignore
-  // the rest.
+  // VALUE / TPARAM / TVALUE). DEL has 3 (TIME / DEPTH / MIX) and REV has 3
+  // (TIME / DEPTH / MIX) and both ignore the rest.
   enum
   {
     FX_TIME = 0,  // header slot 0 (MOD: TIME, fixed)
@@ -127,6 +129,23 @@ public:
       rev_.init(nullptr);
     }
     osc_.init(nullptr);
+    // Initialize the FX parameter cache with the DSP defaults so the UI sliders
+    // show the correct values on page load (before the user touches anything).
+    // The cache is zero-initialized, but getFxParam() is called by the UI to
+    // read back the initial slider positions; without this, all sliders would
+    // show 0 (e.g. DEL MIX would show -100% instead of 0%).
+    // Raw values (0..1023 for 10-bit params, -1000..1000 for drywet):
+    //   MOD: TIME=0, DEPTH=0 (Modfx::Params::reset)
+    //   DEL: TIME=512, DEPTH=512, MIX=512 (Delay::Params::reset, MIX 0% = 512)
+    //   REV: TIME=512, DEPTH=512, MIX=512 (Reverb::Params::reset, same as DEL)
+    sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_TIME]  = 0;
+    sim_fx_cache_[FX_MOD * FX_PARAM_COUNT + FX_DEPTH] = 0;
+    sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_TIME]  = 512;
+    sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_DEPTH] = 512;
+    sim_fx_cache_[FX_DEL * FX_PARAM_COUNT + FX_PARAM] = 512; // MIX (slot 2)
+    sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_TIME]  = 512;
+    sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_DEPTH] = 512;
+    sim_fx_cache_[FX_REV * FX_PARAM_COUNT + FX_PARAM] = 512; // MIX (slot 2, 0%)
   }
 
   void teardown() override final

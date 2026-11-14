@@ -117,8 +117,10 @@
          (MAIN/BREATH/FORMANT -> col 0; WANDER/WANDER TGT -> col 1;
          CHORD/SUBS/FILTER -> col 2) so the heights balance. The preset bank
          (Random/Reset buttons) sits above the grid, in one row. -->
-    <div class="card card-border shadow-none min-w-0 flex-[2]">
-      <div class="card-body flex-col items-stretch gap-3 pt-6">
+    <!-- Border-less, padding-less container (flat panel): saves the card's
+         chrome (border + card-body padding) around the parameter grid. -->
+    <div class="min-w-0 flex-[2]">
+      <div class="flex flex-col items-stretch gap-3">
         <!-- ---- Preset bank (Random/Reset) -------------------------------- -->
         <div class="flex flex-wrap gap-2" id="Presets"></div>
         <div id="Parameters" class="grid grid-cols-3 gap-x-8 gap-y-4 items-stretch">
@@ -241,8 +243,13 @@
           </label>
           <label class="flex items-center gap-3">
             <span class="w-11 text-xs font-medium shrink-0">Depth</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1">
-            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1">
+            <span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-11 text-xs font-medium shrink-0">Mix</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxdel_mix" class="range range-primary range-sm flex-1">
+            <span id="fxdel_mix_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           </div><!-- /fxdel_body -->
         </div>
@@ -260,13 +267,18 @@
           <div id="fxrev_body" class="flex flex-col gap-3">
           <label class="flex items-center gap-3">
             <span class="w-10 text-xs font-medium shrink-0">Time</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_time" class="range range-primary range-sm flex-1">
-            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxrev_time" class="range range-primary range-sm flex-1">
+            <span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
           </label>
           <label class="flex items-center gap-3">
             <span class="w-11 text-xs font-medium shrink-0">Depth</span>
-            <input type="range" min="0" max="1023" value="0" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1">
-            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1">
+            <span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">50%</span>
+          </label>
+          <label class="flex items-center gap-3">
+            <span class="w-11 text-xs font-medium shrink-0">Mix</span>
+            <input type="range" min="0" max="1023" value="512" step="1" id="fxrev_mix" class="range range-primary range-sm flex-1">
+            <span id="fxrev_mix_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-[36px] text-right">0%</span>
           </label>
           </div><!-- /fxrev_body -->
         </div>
@@ -479,10 +491,18 @@
 
       // Format the raw 10-bit value (0..1023) of a DRONE-MOD FX parameter.
       // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
-      // index within that stage (0=TIME, 1=DEPTH for MOD/DEL/REV; the MOD edit
-      // params are formatted by formatModEditParam instead). Every param shows
-      // 0..100%.
+      // index within that stage (0=TIME, 1=DEPTH; DEL adds 2=MIX as a drywet
+      // knob; the MOD edit params are formatted by formatModEditParam instead).
+      // DEL MIX (stage 1, which 2) shows a drywet percentage: raw 0 -> -100%
+      // (full dry), raw 1023 -> +100% (full wet); everything else shows 0..100%.
       function formatFxParam(stage, which, raw) {
+        // DEL MIX (stage 1, which 2) and REV MIX (stage 2, which 2) show a
+        // drywet percentage: raw 0 -> -100% (full dry), raw 1023 -> +100%
+        // (full wet), raw 512 -> ~0% (50/50); everything else shows 0..100%.
+        if ((stage === 1 || stage === 2) && which === 2) {
+          const pct = Math.round((raw / 1023) * 200 - 100);
+          return (pct >= 0 ? "+" : "") + pct + "%";
+        }
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -1477,7 +1497,7 @@
       updateLfoFreq();
       updateLfoDepth();
 
-      // ---- FX chain knobs (MOD 9-params / DEL 2 / REV 2) -------------------
+      // ---- FX chain knobs (MOD 9-params / DEL 3 / REV 3) -------------------
       // The full audio path OSC -> MOD -> DEL -> REV -> out runs inside the
       // single wasm worklet (drone-chain/chain.h).
       //
@@ -1488,13 +1508,16 @@
       // which writes the (PARAM_SEL, PARAM_VAL) pair atomically (the worklet
       // applies both on its next block, so the DSP never sees a stale select_).
       //
-      // DEL / REV keep their own TIME / DEPTH via setFxParam(stage, 0/1, raw).
+      // DEL / REV keep their own TIME / DEPTH / MIX via setFxParam(stage, 0/1/2, raw).
       //
-      // Fixed knobs (setFxParam): MOD 0..1 (TIME/DEPTH), DEL 0..1, REV 0..1.
+      // Fixed knobs (setFxParam): MOD 0..1 (TIME/DEPTH), DEL 0..2 (TIME/DEPTH/MIX),
+      // REV 0..2 (TIME/DEPTH/MIX). DEL MIX and REV MIX are drywet knobs
+      // (setFxParam raw 0..1023, which the DSP maps to -1..+1; see delay.h /
+      // reverb.h MIX case + formatFxParam above).
       const FX_STAGES = [
         { stage: 0, prefix: "fxmod", params: ["time", "depth"] },
-        { stage: 1, prefix: "fxdel", params: ["time", "depth"] },
-        { stage: 2, prefix: "fxrev", params: ["time", "depth"] },
+        { stage: 1, prefix: "fxdel", params: ["time", "depth", "mix"] },
+        { stage: 2, prefix: "fxrev", params: ["time", "depth", "mix"] },
       ];
       for (const { stage, prefix, params } of FX_STAGES) {
         params.forEach((param, which) => {
@@ -1578,20 +1601,19 @@
       // Default = checked = every stage active (the unit runs the full path).
       // stage: 0=MOD, 1=DEL, 2=REV.
       const BYPASS_STAGES = [
-        { stage: 0, id: "fxmod_bypass", body: "fxmod_body" },
-        { stage: 1, id: "fxdel_bypass", body: "fxdel_body" },
-        { stage: 2, id: "fxrev_bypass", body: "fxrev_body" },
+        { stage: 0, id: "fxmod_bypass" },
+        { stage: 1, id: "fxdel_bypass" },
+        { stage: 2, id: "fxrev_bypass" },
       ];
-      for (const { stage, id, body } of BYPASS_STAGES) {
+      for (const { stage, id } of BYPASS_STAGES) {
         const box = document.getElementById(id);
-        const bodyEl = document.getElementById(body);
         if (!box) continue;
         const refresh = () => {
           // checked = active (in path); unchecked = bypass.
+          // Only the audio chain changes (setStageBypass); the block UI is
+          // NOT dimmed/de-emphasized when the unit is switched off.
           const bypass = box.checked ? 0 : 1;
           if (Module.setStageBypass) Module.setStageBypass(stage, bypass);
-          // Dim the sliders of a bypassed (unchecked) stage so state is obvious.
-          if (bodyEl) bodyEl.style.opacity = box.checked ? "" : "0.35";
         };
         // Listen on both: some automation/headless contexts emit `input`
         // rather than `change` for checkboxes. Both are idempotent (refresh

@@ -58,13 +58,15 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // Fixed/direct UI parameters
-        // A knob
-        {0, 1023, 0, 256, k_unit_param_type_none, 1, 0, 0, {"TIME"}},
+        // A knob: TIME (room size / comb-length scale, 0..1023 -> 0..1)
+        {0, 1023, 0, 512, k_unit_param_type_none, 1, 0, 0, {"TIME"}},
 
-        // B knob
-        {0, 1023, 0, 256, k_unit_param_type_none, 1, 0, 0, {"DPTH"}},
+        // B knob: DEPTH (damping of the tail, 0..1023 -> 0..1)
+        {0, 1023, 0, 512, k_unit_param_type_none, 1, 0, 0, {"DPTH"}},
 
-        // DELAY switch + B knob
+        // DELAY switch + B knob: MIX (drywet, -1000..1000 -> -1..+1; 0 = 50/50).
+        // Default 0 -> 0% (equal dry/wet: the reverb tail is heard at half
+        // level alongside the dry signal, exactly like drone-delfx/delay.h).
         {-1000, 1000, 0, 0, k_unit_param_type_drywet, 1, 1, 0, {"MIX"}},
 
         // 8 Edit menu parameters

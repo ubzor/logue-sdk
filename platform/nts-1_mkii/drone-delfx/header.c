@@ -58,13 +58,14 @@ const __unit_header unit_header_t unit_header = {
     // See common/runtime.h for type enum and unit_param_t structure
     
     // Fixed/direct UI parameters
-    // A knob
-    {0, 1023, 0, 256, k_unit_param_type_none, 1, 0, 0, {"TIME"}},
+    // A knob: TIME (10-bit, log-mapped 10 ms .. 1.0 s in delay.h). Default 512 -> ~316 ms.
+    {0, 1023, 0, 512, k_unit_param_type_none, 1, 0, 0, {"TIME"}},
     
-    // B knob
-    {0, 1023, 0, 256, k_unit_param_type_none, 1, 0, 0, {"DPTH"}},
+    // B knob: DEPTH (10-bit, feedback 0 .. 0.95). Default 512 -> 50% feedback.
+    {0, 1023, 0, 512, k_unit_param_type_none, 1, 0, 0, {"DPTH"}},
     
-    // DELAY switch + B knob
+    // DELAY switch + B knob: MIX (drywet, -1000..1000 -> -1..+1; 0 = 50/50, +1000 = full wet).
+    // Default 0 -> 0% (equal dry/wet: the echo is heard at half level alongside the dry signal).
     {-1000, 1000, 0, 0, k_unit_param_type_drywet, 1, 1, 0, {"MIX"}},
     
     // 8 Edit menu parameters
