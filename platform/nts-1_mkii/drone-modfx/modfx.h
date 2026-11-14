@@ -35,23 +35,28 @@
 /*
  *  File: modfx.h
  *
- *  DRONE-MOD (modfx) DSP: a 3-stage modulation stack + noise enrichment + tape
- *  wow/flutter for the DRONE path. Parameter model (header.c): TIME / DEPTH are
- *  the two FIXED knobs (always on the A/B encoders); the other 8 parameters
- *  (DRIFT / CMODE / CHORUS / FLANGER / NOISE / NRATE / ENSMBL / TAPWOB) live
- *  behind a PARAM/VALUE multiplexer exactly like drone-osc (slots 2/3 are the
- *  optional edit-menu duplicates of slots 0/1). The per-sample audio path is
- *  defined inline below:
- *    in (stereo) -> [NOISE branch: fx_white burst-gated (NRATE cadence),
- *                    DRIFT-AM, 2-pole SVF band-pass (TIME-swept)] ->
+ *  DRONE-MOD (modfx) DSP: a modulation stack + granular-rustle noise enrichment
+ *  + tape wow/flutter for the DRONE path. Parameter model (header.c): TIME /
+ *  DEPTH are the two FIXED knobs (always on the A/B encoders); the other 10
+ *  parameters (MOD group: DRIFT / CMODE / CHORUS / FLANGER / ENSMBL; TAPE
+ *  group: NOISE / NRATE / TAPWOB / HISS / WARP) live behind TWO PARAM/VALUE
+ *  multiplexers (the MOD group on slots 2/3, the TAPE group on slots 4/5).
+ *  The per-sample audio path is defined inline below:
+ *    in (stereo) -> [NOISE branch: KoS granular rustle (PINK -> granulator,
+ *                    NRATE grain-density, DRIFT-AM, scrape bursts)] ->
+ *    ENSEMBLE (additive string-synth) ->
  *    CHORUS (Juno-60 BBD stereo chorus) -> FLANGER (thru-zero flanger) ->
  *    [TAPWOB branch: tape wow/flutter pitch-mod, dry/wet replace] ->
- *    makeup (0.9) -> out.
- *  The NOISE branch is an ADDITIVE "metallic rustle / dust-flash" generator:
- *  LCG white noise, flashed on an exponential cadence (NRATE), AM-modulated
- *  by the DRIFT walk (channel 3), band-passed by a hand-rolled 2-pole SVF
- *  whose cutoff sweeps with TIME. NOISE = 0 -> the branch is never computed
- *  (dry wire, regression-safe).
+ *    [WARP: magnetic-instability pitch-mod] -> [HISS: additive tape hiss] ->
+ *    makeup (unity) -> out.
+ *  The NOISE branch is an ADDITIVE KoS-HurricaneSandy-style "granular rustle"
+ *  generator: a procedural PINK source feeds a small granulator (kGrainVoices
+ *  linear-env grains) -> HPF + LPF band-shape; an AM "dips" curve makes it
+ *  breathe; the DRIFT walk (channel 3) AM-modulates it; periodic white-noise
+ *  "scrape" bursts (cadence from NRATE) DUCK the dry signal (the KoS sigEnv).
+ *  NRATE drives the granulator grain GAP (rustle density: 0 = continuous
+ *  stream, 1 = sparse crackle) AND the scrape cadence. NOISE = 0 -> the branch
+ *  is never computed (dry wire, regression-safe).
  *  DRIFT is a K-rate LCG random-walk; channel 3 drives the noise AM (its
  *  other three channels are allocated/zeroed but not yet wired -- see README).
  *  The noise source is the fx-module's platform white-noise API, fx_white()
@@ -158,7 +163,7 @@ public:
     float chorus;   // 0..1 (chorus dry/wet: 0=dry, 1=full)
     float flanger;   // 0..1 (flanger wet)
     float noise;    // 0..1 (noise branch level: 0 = off)
-    float nrate;    // 0..1 (noise burst cadence: 0.15..8 fl/s, exp)
+    float nrate;    // 0..1 (noise burst cadence: 1..40 fl/s, exp; + grain density)
     float ensemble; // 0..1 (ensemble level: 0 = off)
     float tapwob;   // 0..1 (tape wow/flutter level: 0 = off, dry wire)
     float hiss;     // 0..1 (tape hiss level: 0 = off, dry wire)
@@ -461,21 +466,13 @@ public:
     tapwob_lpf_l_ = 0.f;
     tapwob_lpf_r_ = 0.f;
 
-    // NOISE branch state (off by default: NOISE = 0 -> never computed).
-    noise_envelope_ = 0.f;
-    noise_phase_ = 0U;
-    noise_on_timer_ = 0U;
+    // NOISE v2 scrape-burst state (off by default: NOISE = 0 -> never computed).
     noise_gap_timer_ = 0U;
     noise_burst_mean_smp_ = 32000U; // mid NRATE (~1 fl/s) until the first K-rate pass
-    noise_burst_level_ = 1.f;
-    noise_svf_vel_ = 0.f;
-    noise_svf_pos_ = 0.f;
-    noise_svf_cc_ = 0.f;
-    noise_svf_ae_ = 1.f;
-    noise_svf_cc_w_ = 0.f;
-    noise_am_alpha_ = 0.f;
+    noise_burst_mean_prev_ = 32000U; // matches the default so no spurious re-draw
     // NOISE v2 (KoS HurricaneSandy) state: granulator voices, pink source, AM-dips,
     // burst scrape, room tone. Off by default (NOISE = 0 -> never computed).
+    grain_gap_mean_smp_ = 0U; // NRATE = 0 -> continuous stream until first K-rate pass
     for (uint32_t g = 0U; g < modfx_consts::kGrainVoices; ++g)
     {
       grain_state_[g] = 0U;
@@ -484,6 +481,7 @@ public:
       grain_escaler_[g] = 0.f;
       grain_erate_[g] = 0.f;
       grain_start_[g] = 0U;
+      grain_gap_[g] = 0U;
     }
     pink_lpf1_ = 0.f; pink_lpf2_ = 0.f; pink_lpf3_ = 0.f;
     grain_hpf_x_ = 0.f; grain_hpf_y_ = 0.f;
@@ -523,31 +521,17 @@ private:
   float drift_tau_[kDriftCount];
   uint32_t drift_next_gap_[kDriftCount];
 
-  // ---- NOISE branch state (granular noise-sweep, see modfx_process_impl) -----
-  // White noise (fx_white) is gated by a PHASE machine (ON = flash, GAP = lull)
-  // with a one-pole envelope that hard-switches target by phase (so the envelope
-  // reliably decays to zero in the gap -- the old single-timer + 0.999-threshold
-  // bug left the gate almost always open, which is why NRATE was inaudible).
-  // AM-modulated by the DRIFT walk, band-passed by a 2-pole SVF (cutoff K-rate
-  // from TIME + per-burst tone wander, Q fixed) and summed ADDITIVELY into the
-  // input. For "maximum diversity" each burst ALSO randomizes its on-time,
-  // level (per-burst gain) and tone (per-burst BP center), all drawn from
-  // fx_rand() once per burst. L/R run independent noise draws (stereo
-  // decorrelation, 0 SDRAM: everything here is a handful of floats in the
-  // class). NOISE = 0 -> none of this state is touched (branch skipped,
-  // regression-safe).
-  float noise_envelope_ = 0.f;      // burst envelope 0..1 (one-pole, target by phase)
-  uint32_t noise_phase_ = 0U;       // 0 = GAP (lull), 1 = ON (flash)
-  uint32_t noise_on_timer_ = 0U;    // samples left in the current flash (ON)
+  // ---- NOISE v2 scrape-burst state (KoS sigEnv, see modfx_process_impl) ------
+  // The granular rustle itself lives in the NOISE v2 state block below (grain_*,
+  // pink_*, dips_*, burst_*). This small block is the leftover "scrape" burst:
+  // a periodic white-noise flash that DUCKS the dry signal, on a Poisson cadence
+  // (noise_gap_timer_ = lull left, noise_burst_mean_smp_ = K-rate gap mean from
+  // NRATE). (The pre-KoS v1 branch -- a 2-pole SVF band-passed white flash with
+  // per-burst tone wander -- is removed; its state members were dead code.)
+  // NOISE = 0 -> none of this is touched (branch skipped, regression-safe).
   uint32_t noise_gap_timer_ = 0U;   // samples left in the current lull (GAP)
   uint32_t noise_burst_mean_smp_ = 32000U; // K-rate: exp(-) gap mean from NRATE
-  float noise_burst_level_ = 1.f;   // per-burst gain (drawn at burst start)
-  float noise_svf_vel_ = 0.f;       // SVF velocity state (band-pass output)
-  float noise_svf_pos_ = 0.f;       // SVF position state (low-pass)
-  float noise_svf_cc_ = 0.f;        // K-rate: SVF cutoff coeff (2*sin(w0), clamped)
-  float noise_svf_ae_ = 1.f;        // K-rate: SVF damping coeff (1 - cc/2Q, clamped)
-  float noise_svf_cc_w_ = 0.f;      // per-burst: cc * 2^(+/-wander*dev), clamped
-  float noise_am_alpha_ = 0.f;      // per-sample: AM = 0.5 + 0.5*drift_cur_[kDriftNoise]
+  uint32_t noise_burst_mean_prev_ = 32000U; // last applied mean; change -> live re-draw
 
   // ---- LFO phase accumulators (CHORUS / FLANGER) ---------------------------------
   // CHORUS uses two q31 triangle LFOs: main at the base Juno 0.513 Hz, sub
@@ -643,6 +627,8 @@ private:
   // Low-freq room tone (KoS lowFreqGrainNoise): pink -> 1-pole LPF, quiet.
   float roomtone_lpf_ = 0.f;
   uint32_t grain_suslen_[modfx_consts::kGrainVoices] = {0}; // per-voice sustain length
+  uint32_t grain_gap_[modfx_consts::kGrainVoices] = {0};    // per-voice GAP countdown (NRATE density)
+  uint32_t grain_gap_mean_smp_ = 0U;                        // K-rate: grain-gap mean from NRATE (0 = continuous)
   uint32_t dips_cur_i_ = 0U;                                // dips: current bracket index
 
   // ---- Multiplexer state (TWO PARAM/VALUE pairs, like drone-osc x2) -------------
@@ -768,22 +754,6 @@ private:
     if (n < 1U)
       n = 1U;
     return n;
-  }
-
-  // 2-pole (12 dB/oct) state-variable filter, BAND-PASS tap (velocity state).
-  // Same topology as drone-osc's osc_svf.h Svf::State (Ladder):
-  //   vel += cc * (in - pos - ae*vel);  pos += cc * vel;  out = vel.
-  // Coefficients cc = 2*sin(w0) / ae = 1 - cc/(2Q) are set K-rate (the caller
-  // clamps them -- see the kNoiseBpCcMax/kNoiseBpAeMin in modfx_constants.h)
-  // so the poles stay inside the unit circle across the whole 300 Hz .. 8 kHz
-  // sweep. `in` is the gated, AM-modulated noise sample.
-  static float noiseSvfBp(float &vel, float &pos, float in, float cc, float ae)
-  {
-    const float v = vel + cc * (in - pos - ae * vel);
-    const float p = pos + cc * v;
-    vel = v;
-    pos = p;
-    return v; // band-pass output (velocity)
   }
 
   // One step of the DRIFT random-walk channel `i` (per sample). Mirrors the
@@ -1017,11 +987,26 @@ private:
   }
 
   // Advance one granulator voice by one sample; returns its output (0 when GAP).
+  // GAP is driven by the NRATE grain-density (grain_gap_mean_smp_, set K-rate):
+  // at NRATE = 0 the mean is 0, so the voice re-draws immediately (1-sample gap
+  // -> a continuous stream, the default sound); at NRATE > 0 each voice waits a
+  // Poisson-drawn gap (noiseDrawGap, same draw as the scrape cadence) before the
+  // next grain -> the rustle thins into separated "crackle".
   inline float grainStep(uint32_t g)
   {
     if (grain_state_[g] == kGrainGap)
     {
+      if (grain_gap_[g] > 0U)
+      {
+        --grain_gap_[g];
+        return 0.f;
+      }
       grainDraw(g);
+      // Draw the next gap (no fx_rand() consumed at NRATE = 0 -> the default
+      // LCG stream / sound is bit-identical to the pre-density build).
+      grain_gap_[g] = (grain_gap_mean_smp_ > 1U)
+          ? noiseDrawGap(static_cast<float>(grain_gap_mean_smp_))
+          : 0U;
       return 0.f;
     }
     const uint32_t len = modfx_consts::kPinkRingLenSmp;
@@ -1193,13 +1178,33 @@ private:
   // stored in noise_burst_mean_smp_ and drawn by noiseDrawGap() per lull.
   const float noise_mix = p.noise * modfx_consts::kNoiseWetNorm; // 0..0.5 final wet
   {
-    // NRATE 0 -> 0.15 fl/s (rare), NRATE 1 -> 8 fl/s (dense). Gap mean (samples)
-    // = 1 / (rate * sr), where rate = minPerSec * exp(lnR * NRATE).
+    // NRATE 0 -> 1 fl/s (calm, ~1 s lull), NRATE 1 -> 40 fl/s (fast, ~25 ms).
+    // The lull (gap) MEAN in samples = (1 / rate_hz) seconds * kSr samples/second
+    // = kSr / rate_hz, where rate_hz = minPerSec * exp(lnR * NRATE). (Note: the
+    // old code used 1/(rate_hz * kSr), a units error that evaluated to 0 for
+    // every NRATE and clamped to a constant 32-smp lull -- the burst cadence
+    // never moved and NRATE had no audible effect.)
     const float rate_hz = modfx_consts::kNoiseBurstMinPerSec *
                           modfx_expf(modfx_consts::kNoiseBurstLnR * p.nrate);
-    uint32_t mean = static_cast<uint32_t>(1.f / (rate_hz * modfx_consts::kSr));
-    if (mean < 32U) mean = 32U;
+    uint32_t mean = static_cast<uint32_t>(modfx_consts::kSr / rate_hz);
+    if (mean < 48U) mean = 48U; // ~1 ms floor; not reached in the 1..40 fl/s range
     noise_burst_mean_smp_ = mean;
+    // LIVE re-draw: if NRATE moved the lull mean while we're in a lull (no
+    // burst running), cap the pending lull to the new mean so the next scrape
+    // arrives at the new density instead of waiting out an old, longer lull.
+    // Capping (never extending) keeps it deterministic and avoids consuming
+    // extra fx_rand() -- the following lulls are still Poisson-drawn normally.
+    if (noise_burst_mean_smp_ != noise_burst_mean_prev_ && burst_timer_ == 0U &&
+        noise_gap_timer_ > noise_burst_mean_smp_)
+      noise_gap_timer_ = noise_burst_mean_smp_;
+    noise_burst_mean_prev_ = noise_burst_mean_smp_;
+    // Grain GAP mean (NRATE -> rustle density). NRATE^2 * kGrainGapMaxSmp:
+    // NRATE = 0 -> 0 (immediate re-draw, continuous stream, the default sound);
+    // NRATE = 1 -> kGrainGapMaxSmp (sparse crackle). Pure K-rate polynomial, no
+    // libm. (See the kGrainGapMaxSmp comment in modfx_constants.h.)
+    const float n2 = p.nrate * p.nrate;
+    grain_gap_mean_smp_ = static_cast<uint32_t>(
+        n2 * (float)modfx_consts::kGrainGapMaxSmp);
   }
 
 
@@ -1300,7 +1305,9 @@ private:
     // makes the rustle breathe; periodic white-noise bursts DUCK the dry signal
     // (the KoS sigEnv scrape); a low-freq room tone fills the low end. Summed
     // into the input so the rustle passes through the chorus/flanger "in the
-    // wash". Skipped entirely at NOISE = 0 (dry wire -- regression-safe).
+    // wash". The granulator grain GAP is NRATE-driven (grain_gap_mean_smp_):
+    // NRATE = 0 -> continuous stream (the default sound), NRATE = 1 -> sparse
+    // "crackle". Skipped entirely at NOISE = 0 (dry wire -- regression-safe).
     if (noise_mix > 0.f)
     {
       // DRIFT walk, channel kDriftNoise (the AM modulator). Channels 0/1 are the

@@ -48,7 +48,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // API version for which unit was built. See runtime.h
     .dev_id = 0x6f6f627aU,                                 // Developer ID 'oobz' (same author as drone-osc). See https://github.com/korginc/logue-sdk/blob/master/developer_ids.md
     .unit_id = 0x00000002U,                                // ID for this unit (2nd unit of the author; 0x1 = drone-osc). Scoped within dev_id.
-    .version = 0x00010010U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bumped minor: TWO PARAM/VALUE multiplexers (MOD group slots 2/3 + TAPE group slots 4/5) + TAPE stages (NOISE v2 granular rustle / TAPWOB / HISS / WARP, KoS-derived).
+    .version = 0x00010011U,                                // This unit's version: major.minor.patch (major<<16 minor<<8 patch). Bump: NRATE rewired to the granulator grain gap (rustle density: 0 = continuous stream, 1 = sparse crackle) + v1 dead code removed (noiseSvfBp, kNoiseBp*/kNoiseBurst* v1 constants, v1 noise state).
     .name = "DRONE",                                       // Name for this unit, will be displayed on device
     .num_params = 6,                                       // Number of valid parameter descriptors. (max. 10)
 
