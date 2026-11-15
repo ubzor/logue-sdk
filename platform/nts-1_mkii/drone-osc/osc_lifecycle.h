@@ -34,10 +34,6 @@ inline void Osc::init(float *)
     {
       Voice &v = voice_[vi];
       v.w0 = 0.f;
-      v.glide_from = 0.f;
-      v.glide_to = 0.f;
-      v.glide_dist = 0;
-      v.glide_active = false;
       v.ph_a = 0.f;
       v.ph_b = 0.f;
       v.ph_sub = 0.f;
@@ -52,10 +48,12 @@ inline void Osc::init(float *)
       v.active = false;
       v.gen = 0;
       v.eg.reset();
+      // Per-voice SVF (polyphonic cluster DISCORD avoidance): zero the
+      // integrator states (vel/pos) so each per-voice filter starts clean.
+      // The coefficients (cc/ae) are set by apply_edit_param below (FCUT/RES).
+      svf_voice_[vi].reset();
     }
-    // Cluster glide bookkeeping: no pending distance, no last note yet.
-    gl_k_ = 0U;
-    gl_want_ = 0;
+    // (glide removed: no gl_k_ / gl_want_); no last note yet.
     last_note_ = -1;
     // Parameter selector: start with RATE (select_ = 0) selected (RATE leads
     // the multiplexer). Re-apply the cached default values so the DSP and the
@@ -154,16 +152,19 @@ inline void Osc::reset()
       v.ph_sub2 = 0.f;
       v.sub2.lpf_state = 0.f;
       v.sub2.gate = 0.f;
-      v.glide_active = false;
-      v.glide_dist = 0;
       v.active = false;
       v.eg.reset();
+      // Per-voice SVF (polyphonic cluster DISCORD avoidance): zero the
+      // integrator states (vel/pos) so each per-voice filter starts clean on
+      // reset (the coefficients are kept — they are knob-derived, not audio
+      // history).
+      svf_voice_[vi].reset();
     }
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
     last_note_ = -1;
-    gl_want_ = 0;
+    // (glide removed: no gl_want_)
     env_sum_ = 0.f; // cluster is silent -> no pending loudness compensation
   }
   // ---- note handling ---------------------------------------------------------
@@ -196,15 +197,44 @@ inline void Osc::reset()
     v.active = true;
     v.gen = ++gen_counter_; // monotonically increasing (steal ordering)
     v.w0 = w0;
-    v.glide_to = w0;
-    v.glide_from = w0;
-    // Glide from the last note (gl_want_): 0 = jump straight to w0.
-    v.glide_dist = gl_want_;
-    v.glide_active = (gl_want_ != 0) && (gl_k_ > 0U);
-    v.ph_a = 0.f;
-    v.ph_b = 0.f;
-    v.ph_sub = 0.f;
-    v.ph_sub2 = 0.f;
+    // (glide removed: no glide_to / glide_from / glide_dist / glide_active)
+    // ---- Polyphonic-cluster DISCORD-avoidance (random phases + detune jitter) ----
+    // (1) RANDOM PHASES (GRIMM analog: va_begin sets ph[1]=ph[0]+0x40000000, and
+    //     SUPERSAW's saws start at random phases via xorshift32). Starting every
+    //     voice at ph=0 makes all voices' A/B phasors PHASE-LOCKED, so their
+    //     DETUNE beats (A−B, ~0.8-1 Hz per voice) add COHERENTLY when 2+ notes
+    //     are held -> a harsh low-frequency "howl" (~16-19 Hz = A2−B1 / B2−A1).
+    //     Random per-voice phases de-correlate the beats (they still exist per
+    //     voice, but no longer sum coherently across voices).
+    // (2) PER-VOICE DETUNE JITTER (GRIMM analog: SUPERSAW spreads 7 saws by
+    //     DETUNE; the spread smears the beat spectrum). A fixed random ±2-cent
+    //     offset (drawn once, stored in v.det_jitter_cents / _factor) shifts BOTH
+    //     A and B of this voice in OPPOSITE directions (GRIMM-style asymmetry),
+    //     so its A−B SPREAD = DETU + walk + 2*jitter (asymmetric, per-voice).
+    //     This de-correlates the inter-voice beat spectra MUCH more strongly
+    //     than a common offset: with 2-3 notes the A2−B1 / B2−A1 differences
+    //     (the ~16-19 Hz "howl") are now spread by up to 8 cents per voice-pair
+    //     (~2.9 Hz at 440 Hz), so the howl is SMOOTHED across a band. The mono
+    //     timbre (1 note) is unchanged (jitter=0..4c on A/B is inaudible; the
+    //     A−B spread stays within DETU+walk+8c, which reads as a slightly
+    //     thicker drone).
+    v.ph_a = osc_white(); // random [0,1)
+    v.ph_b = v.ph_a + 0.25f; // +1/4 cycle (GRIMM's ph[1]=ph[0]+0x40000000)
+    if (v.ph_b >= 1.f) v.ph_b -= 1.f; // wrap
+    v.ph_sub = osc_white();
+    // PER-VOICE RANDOM PITCH OFFSET (polyphonic cluster DISCORD avoidance):
+    // A fixed random +/-30-cent offset drawn once per note. Applied to the
+    // voice's base w0 (vw0 * pitch_offset_factor) BEFORE the A/B detune and
+    // sub-oscillator phasors, so ALL of this voice's frequencies (A, B, sub,
+    // sub2) are shifted by the same random amount. This de-correlates the
+    // inter-voice DETUNE beat spectra: with 2-3 notes, the A2-B1 / B2-A1
+    // differences (the ~16-19 Hz "howl") are now offset by up to 60 cents
+    // per voice-pair (~22 Hz at 440 Hz), so the howl is spread across a wide
+    // band and inaudible. The mono timbre (1 note) is slightly detuned
+    // (+/-30c) but still reads as the same note.
+    v.pitch_offset_cents = (osc_white() - 0.5f) * 200.f; // +/-100 cents
+    v.pitch_offset_factor = Detune::factor(v.pitch_offset_cents); // 2^(cents/1200)
+    v.ph_sub2 = osc_white();
     v.prev_wav_a = 0.f;
     v.prev_wav_b = 0.f;
     v.fm_smooth_a = 0.f;
@@ -246,10 +276,7 @@ inline void Osc::noteOn(uint8_t note, uint8_t velo)
     //   glide_dist > 0 -> current < target (still gliding UP from below)
     //   glide_dist < 0 -> current > target (still gliding DOWN from above)
     // At glide_dist = 0 -> current = glide_to (arrived).
-    int32_t gl_want = 0;
-    if (last_note_ >= 0)
-      gl_want = ((int32_t)note - last_note_) * 4096 / 12; // 1/12 octave per semitone
-    gl_want_ = gl_want;
+    // (glide removed: no gl_want_ computation)
     last_note_ = (int32_t)note; // this note becomes the cluster's last
     // Find a free voice, or steal the oldest active one.
     uint8_t target = kVoiceCount;
@@ -285,12 +312,10 @@ inline void Osc::allNoteOff()
     for (uint8_t vi = 0; vi < kVoiceCount; vi++)
     {
       voice_[vi].active = false;
-      voice_[vi].glide_active = false;
-      voice_[vi].glide_dist = 0;
       voice_[vi].eg.allOff();
     }
     last_note_ = -1;
-    gl_want_ = 0;
+    // (glide removed: no gl_want_ cleanup)
   }
 
   // audio processing callbacks

@@ -37,7 +37,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "CUT", "RES", "WFC",
       "BRT", "BRR", "SMT",
       "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
-      "FMVT", "FLVL", "COMB", "GLIDE"};
+      "FMVT", "FLVL", "COMB"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -155,39 +155,6 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // time in ms ("NNN ms" < 1 s, "N.Ns" >= 1 s). Shows the ACTUAL slide time
   // the knob maps to (kGlideMinMs .. kGlideMaxMs), so the display never
   // overstates the glide.
-  if (k == GLIDE)
-  {
-    if (raw <= 0)
-    {
-      buf[0] = 'O'; buf[1] = 'F'; buf[2] = 'F'; buf[3] = '\0';
-      return buf;
-    }
-    const float x = param_10bit_to_f32(raw);
-    const float t_ms = kGlideMinMs + (kGlideMaxMs - kGlideMinMs) * x * x;
-    if (t_ms < 1000.f)
-    {
-      int t = (int)(t_ms + 0.5f); // 0..999
-      int n = 0;
-      if (t >= 100) buf[n++] = (char)('0' + t / 100);
-      t %= 100;
-      if (t >= 10 || t_ms >= 100.f) buf[n++] = (char)('0' + t / 10);
-      buf[n++] = (char)('0' + t % 10);
-      buf[n++] = 'm'; buf[n++] = 's';
-    }
-    else
-    {
-      int t10 = (int)(t_ms / 10.f + 0.5f); // 100..250 (N.N * 10)
-      int whole = t10 / 10;
-      int frac = t10 % 10;
-      int n = 0;
-      buf[n++] = (char)('0' + whole);
-      buf[n++] = '.';
-      buf[n++] = (char)('0' + frac);
-      buf[n++] = 's';
-      buf[n] = '\0';
-    }
-    return buf;
-  }
 
   int v;
   if (k == WAV1 || k == WAV2)

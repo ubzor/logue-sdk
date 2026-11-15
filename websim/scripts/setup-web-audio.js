@@ -35,7 +35,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 35; // 35 = RATE..GLIDE (FORM/FVOL/COMB/GLIDE at the tail, indices 31..34)
+      const EDIT_PARAM_COUNT = 34; // 34 = RATE..COMB (GLIDE removed)
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 4-voice cluster: each new note gets its own voice and GLIDES
       // from the cluster's last note (GLIDE, the GRIMM exponential portamento).
@@ -57,7 +57,6 @@
       // 30 RFMB (random-walk depth on FM B, 0..100%, RATE-gated),
       // 31 FORM (formant vowel position), 32 FVOL (formant dry/wet),
       // 33 COMB (comb resonator feedback),
-      // 34 GLIDE (portamento: 0 = off, 1..1023 = 10 ms..2.5 s, exponential).
       const EDIT_PARAM_NAMES = [
         "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
@@ -69,7 +68,6 @@
         "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Formant Vowel", "Formant Level",
         "Comb Res",
-        "Glide",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -99,7 +97,7 @@
         // ---- Column 2 ----
         { title: "SUBS",       col: 2, items: [8, 9] },
         { title: "FILTER",     col: 2, items: [19, 20] },
-        { title: "CLUSTER",    col: 2, items: [33, 34] },
+        { title: "CLUSTER",    col: 2, items: [33] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable

@@ -173,6 +173,19 @@ DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/wasm.cc \
                $(PROJECT_ROOT)/hwfilter.h \
                $(PROJECT_ROOT)/../drone-osc/osc.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_mix.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_lifecycle.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_params.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_param_apply.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_param_display.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_constants.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_waves.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_saturator.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_svf.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_envelope.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_detune.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_sub2.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_random_walk.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx_constants.h \
                $(PROJECT_ROOT)/../drone-delfx/delay.h \

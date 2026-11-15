@@ -150,6 +150,13 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         // unresolved libm dynamic symbol on the device.
         const float freq = 80.f * fasterpowf(12000.f / 80.f, x);
         svf_.updateCutoff(freq, 0.5f, kSampleRate);
+        // Per-voice SVF (polyphonic cluster DISCORD avoidance): copy the
+        // coefficients (cc/ae) from the shared post-stage SVF to each per-voice
+        // SVF so they use the same cutoff/resonance. The integrator states
+        // (vel/pos) are per-voice (zeroed on init/reset), so the per-voice
+        // filters are independent (decorrelating inter-voice DETUNE beats).
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+          svf_voice_[vi].updateCutoff(freq, 0.5f, kSampleRate);
       }
       break;
     case RES:
@@ -159,6 +166,10 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         params_.svf_res = x;
         const float freq = 80.f * fasterpowf(12000.f / 80.f, params_.svf_cut);
         svf_.updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
+        // Per-voice SVF: copy the updated coefficients (cc/ae) to each per-voice
+        // SVF (the resonance Q changed, so the damping coefficient ae changed).
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+          svf_voice_[vi].updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
       }
       break;
     case RW_FC:
@@ -270,31 +281,6 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
       break;
 
-    // ---- GLIDE (portamento, GRIMM-style exponential) ----
-    // raw 0 -> glide OFF (gl_k_ = 0, the note jumps straight to its pitch,
-    // regression-safe). raw 1..1023 -> a GLIDE time from kGlideMinMs (~10 ms)
-    // to kGlideMaxMs (~2.5 s), QUADRATIC in the knob (fast at the low end, so
-    // the low knob is a gentle "scoop" and the top is a slow siren). The time
-    // is converted to the per-sample Q16 step fraction gl_k_ = kGlideNum /
-    // (t_ms / kGlideMsStep), clamped to [kGlideStepMin, 1]. The audio path
-    // (osc_mix.h) advances each gliding voice by (gl_k_ * x) >> 16 per sample.
-    case GLIDE:
-      params_.glide_raw = param_10bit_to_f32(value); // raw 0..1 depth (display + re-apply)
-      if (value <= 0)
-      {
-        gl_k_ = 0U; // glide off
-      }
-      else
-      {
-        const float x = param_10bit_to_f32(value); // 0..1
-        const float t_ms = kGlideMinMs + (kGlideMaxMs - kGlideMinMs) * x * x; // quadratic
-        const float steps = t_ms / kGlideMsStep; // 60 dB of the way in `steps`
-        uint32_t k = (steps > 1.f) ? (kGlideNum / (uint32_t)steps) : 1U;
-        if (k < kGlideStepMin) k = kGlideStepMin;
-        else if (k > 65535U) k = 65535U;
-        gl_k_ = k;
-      }
-      break;
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
     // were removed from the editable parameter set. FOLD2 was judged

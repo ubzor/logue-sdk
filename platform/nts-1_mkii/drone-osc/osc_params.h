@@ -135,14 +135,7 @@ struct OscParamsData
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
 
-  // ---- Polyphonic glide (portamento) -----------------------------------------
-  // GLIDE: the raw knob depth (0..1, quadratic-mapped to kGlideMinMs..kGlideMaxMs
-  // in the audio path / apply_edit_param). 0 = off (the note jumps straight to
-  // its pitch). The per-sample step coefficient gl_k_ (a Q16 fraction of the
-  // distance left) is recomputed at K-rate from this in apply_edit_param(GLIDE)
-  // and lives on the Osc (not here) because it is a derived coefficient, not a
-  // raw parameter.
-  float glide_raw;    // 0.f .. 1.f, edit GLIDE (0 = off, the cluster note jumps)
+  // (GLIDE removed: no glide_raw field)
 
   void reset()
   {
@@ -201,7 +194,6 @@ struct OscParamsData
       formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
-      glide_raw    = 0.f;   // default: GLIDE off (the cluster note jumps, regression-safe)
   }
 
   OscParamsData() { reset(); }

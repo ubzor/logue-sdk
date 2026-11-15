@@ -41,6 +41,23 @@ UI симулятора — в `drone-chain/` (shell — `websim/index.html`).
 - Сборка WASM-симулятора: `make wasm` (двухэтапная компиляция C и C++ отдельно, линковка через `em++`).
 - Для WASM нужны флаги: `-fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 -matomics -mbulk-memory -s AUDIO_WORKLET=1 -s WASM_WORKERS=1 -s SHARED_MEMORY=1 -lembind`.
 - Эмулятор: emsdk, установлен локально; запуск: `emrun --serve 0.0.0.0:8000 sim/drone.html`.
+### **КРИТИЧЕСКИЙ БАГ В СБОРКЕ WASM (2026-11-15)**
+
+**Проблема**: `Makefile` в `drone-chain/` **не отслеживал** зависимости для большинства `osc_*.h` файлов. В переменной `DSP_HEADERS` был указан **только** `osc.h`, но не `osc_mix.h`, `osc_lifecycle.h`, `osc_params.h` и другие. Из-за этого изменения в `osc_mix.h` (и других) **не вызывали** пересборку `wasm.o`, и **WASM файл в `sim/` оставался старым**, даже после запуска `make wasm` или `serve.sh`.
+
+**Симптомы**: Изменения в DSP-коде (например, замена wavetables на supersaw, добавление per-voice saturator) **не применялись** в web-симуляторе. Пользователь слышал старый звук, несмотря на то, что код был изменён и `make wasm` завершался успешно.
+
+**Причина**: Makefile использует явный список зависимостей (`DSP_HEADERS`), а не автоматический анализ `#include`. Когда `osc_mix.h` меняется, но не указан в `DSP_HEADERS`, Makefile решает, что `wasm.o` не нужно пересобирать.
+
+**Исправление** (2026-11-15): В `Makefile` `drone-chain/` в переменную `DSP_HEADERS` добавлены **все** `osc_*.h` файлы из `drone-osc/`.
+
+**Как проверить, что WASM пересобрался после изменения DSP**:
+1. Запустить `make wasm` в `drone-chain/`.
+2. Проверить timestamp: `stat -c '%y' sim/index.wasm` — должен быть **новее** изменённого `osc_mix.h`.
+3. Если timestamp WASM **старее** `osc_mix.h` — **WASM не пересобран**, нужно удалить `sim/obj/*.o` и запустить `make wasm` снова.
+
+**Правило**: После **любого** изменения `osc_*.h` в `drone-osc/` **всегда** проверять, что `sim/index.wasm` пересобрался (timestamp). Если нет — удалить `drone-chain/sim/obj/*.o` и запустить `make wasm` в `drone-chain/`.
+
 
 ## Система параметров (Важно: не перепутать)
 

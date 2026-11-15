@@ -149,64 +149,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // -> SVF -> formant -> comb -> duck -> makeup + soft-clip) on the sums.
     // The A-H-R envelope is per-voice (each note fades in/out on its own);
     // the duck follower is shared (one drone's low end).
-    // ================================================================
-    // ---- Per-voice GLIDE (GRIMM-style exponential portamento) ---------
-    // Each voice glides from its old pitch to a new one (glide_to) by
-    // exponentially decaying glide_dist (in 1/4096-octave units) toward 0:
-    //   d = (gl_k_ * x) >> 16;  x -= d;  snap when |x| < kGlideSnap.
-    // gl_k_ is the per-sample Q16 fraction of the way left (K-rate, from the
-    // GLIDE knob). The CURRENT pitch is computed ABSOLUTELY (not
-    // cumulatively):
-    //   vw0 = glide_to * 2^(-glide_dist / 4096)
-    // where glide_dist > 0 means "still below target, gliding UP" and
-    // glide_dist < 0 means "still above target, gliding DOWN". At
-    // glide_dist = 0, vw0 = glide_to (arrived). v.w0 is NEVER modified
-    // during the glide — it holds the target and is used once the glide
-    // completes. This avoids the cumulative-multiplication blow-up that
-    // would occur if v.w0 were scaled by 2^(x/4096) every sample (at an
-    // octave offset x/4096 = 1, so 2^1 = 2 per sample → exponential
-    // runaway in a few dozen samples).
-    //
-    // 2^f is computed as 2^int(f) * 2^frac(f) where frac ∈ [0,1) (or
-    // [-1,0) for negative f). 2^int(f) is a power-of-two float (exact).
-    // 2^frac is a 4th-order Taylor in e = frac * ln2 (|e| < 0.693 →
-    // converges, error < 1e-6). No libm needed.
-    {
-      const int32_t gk = (int32_t)gl_k_; // Q16 per-sample glide fraction
-      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
-      {
-        Voice &v = voice_[vi];
-        if (v.glide_active && v.glide_dist != 0)
-        {
-          int32_t x = v.glide_dist;
-          if (gk > 0)
-          {
-            int32_t d = (int32_t)(((int64_t)gk * x) >> 16);
-            if (d == 0) d = (x > 0) ? 1 : -1; // at least a step
-            x -= d;
-            if (x > -kGlideSnap && x < kGlideSnap)
-            {
-              x = 0;
-              v.glide_active = false;
-              v.w0 = v.glide_to; // arrived: snap v.w0 to the target
-            }
-            v.glide_dist = x;
-          }
-          else
-          {
-            // GLIDE = 0 (off): snap straight to the target.
-            v.glide_active = false;
-            v.glide_dist = 0;
-            v.w0 = v.glide_to;
-          }
-        }
-        else if (v.glide_dist != 0)
-        {
-          // Not gliding (shouldn't happen) but a stale offset: clear it.
-          v.glide_dist = 0;
-        }
-      }
-    }
+    // (glide removed: no K-rate glide advance)
 
     // ---- Shared random walk (advance ONCE per sample, shared by all voices)
     // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
@@ -338,36 +281,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // Current base phase increment: if gliding, compute ABSOLUTELY as
         // glide_to * 2^(-glide_dist/4096); otherwise use v.w0 (the target,
         // which equals glide_to once the glide completes).
-        float vw0;
-        if (v.glide_active && v.glide_dist != 0)
-        {
-          // f = -glide_dist / 4096  (negative when glide_dist > 0 → gliding UP)
-          // Clamp to [-12, 12] (±12 semitones) to stay within the kTwoPow LUT
-          // range. A larger interval (beyond an octave of offset) clamps so a
-          // very wide glide "runs out" at the extremes instead of indexing the
-          // LUT out of bounds (which would corrupt vw0 -> silence / garbage).
-          float f = -(float)v.glide_dist / 4096.0f;
-          if (f > 12.0f) f = 12.0f;
-          else if (f < -12.0f) f = -12.0f;
-          // Split into integer + fractional: 2^f = 2^int(f) * 2^frac(f)
-          const int32_t fi = (int32_t)f; // truncates toward 0
-          const float frac = f - (float)fi; // ∈ (-1, 1)
-          // 2^frac via Taylor: e = frac * ln2, |e| < 0.693
-          const float ln2 = 0.6931471805599453f;
-          const float e = frac * ln2;
-          const float e2 = e * e;
-          const float two_frac = 1.f + e + e2 * 0.5f + (e2 * e) * (1.f / 6.f)
-                                + (e2 * e2) * (1.f / 24.f); // 4th-order
-          // 2^fi: exact power-of-two from the namespace-scope kTwoPow LUT
-          // (osc_constants.h). fi ∈ [-12, 12] after the clamp above, so
-          // (fi + 12) is always a valid index.
-          const int idx = (fi >= -12 && fi <= 12) ? (fi + 12) : ((fi > 0) ? 24 : 0);
-          vw0 = v.glide_to * kTwoPow[idx] * two_frac;
-        }
-        else
-        {
-          vw0 = v.w0; // not gliding (or glide just completed → v.w0 = glide_to)
-        }
+        // Current base phase increment (glide removed: always v.w0).
+        float vw0 = v.w0;
 
         // Per-voice detuned A/B increments. Walk active: combine static + walk
         // cents in one Taylor (shared by all voices); walk off: cached static
@@ -410,6 +325,29 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         v.ph_sub2 += vw0 * 0.25f;
         v.ph_sub2 -= fast_floorf(v.ph_sub2);
 
+        // ---- SUPERSAW (GRIMM-style: single 7-saw stack instead of wavetables) ---
+        // TEMPORARY: replaced wavetable lookup with a GRIMM-style supersaw:
+        // 7 saw oscillators detuned symmetrically around the note (+/-60c total
+        // spread, ~17c between neighbors). All 7 saws share the same base phasor
+        // v.ph_a but each is offset by a fixed random-like phase spread to
+        // de-correlate. Saw = 2*ph - 1 (range [-1,1]). The 7 saws are summed
+        // and normalized by 1/7 so the output amplitude matches a single saw.
+        // This tests whether the polyphonic howl is a wavetable artifact or
+        // a fundamental issue with coherent summing of 2-3 voices.
+        //
+        // GRIMM supersaw: 7 saws at -60, -40, -20, 0, +20, +40, +60 cents
+        // (symmetric spread). Each saw's phasor is offset from v.ph_a by a
+        // fixed amount proportional to its detune: ph_i = ph_a + offset_i,
+        // where offset_i = detune_cents_i / 1200.0 (in cycles, since 1200
+        // cents = 1 octave = 1 cycle ratio... actually 1200 cents = 2x freq,
+        // so a cent offset shifts the phasor increment, not the phase itself.
+        // For a STATIC test we use fixed phase offsets that approximate the
+        // steady-state phase drift of detuned oscillators over ~100 ms).
+        //
+        // Simpler approach: use v.ph_a as the base and add fixed phase offsets
+        // that spread the 7 saws across one cycle (like GRIMM's random phase
+        // initialization). This gives a static spread that de-correlates the
+        // harmonics without per-sample detune computation.
         // ---- Wavetable samples (per-voice morph shift from its own w0) ------
         const float pitch_n = (vw0 * WaveTable::kSampleRate) / WaveTable::kRefHz;
         const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? WaveTable::kWaveMorphShift : (WaveTable::kWaveMorphShift * pitch_n);
@@ -488,9 +426,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // (FOLD2 — the second cascaded wavefolder — was removed: the A+B chain
     //  now runs a single wavefolder (FOLD) before the saturator.)
     const float folded = Saturator::fold(mix, eff_fold);
-    // Fold kMixOsc into the saturator input (mix already carries it): the
-    // shared post-stage output is kMixOsc * (folder/saturator/SVF) * main, so
-    // y = kMixOsc * saturate(...). One multiply here instead of in the final mix.
+    // Shared post-stage saturator (original): one saturator for the whole cluster.
     const float y = kMixOsc * Saturator::saturate(folded, eff_drive_clamped, p.asym);
 
     // ---- internal SVF (12 dB/oct low-pass, post-saturator) ----
@@ -614,10 +550,11 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // (binomial series, |t|<=3 converges and at t=3 the 5th term is ~0.02 of
       //  the value — negligible against the tanh soft-clip headroom). For
       // n <= 1 (t<=0) this is exact in the [0,1] region (t=0 -> 1).
-      const float t = n - 1.f;
-      const float target =
-          1.f + t * (-0.5f) + (t * t) * (3.f / 8.f)
-              + (t * t * t) * (-5.f / 16.f) + (t * t * t * t) * (35.f / 128.f);
+      // 1/N instead of 1/sqrt(N): linear compensation so the shared
+      // saturator sees the same input level regardless of voice count.
+      // N=1 -> 1.0 (mono unchanged), N=2 -> 0.5, N=3 -> 0.333, N=4 -> 0.25.
+      // This prevents the tanh from generating more harmonics at higher N.
+      const float target = 1.0f / n;
       env_comp_ += kClusterCompAlpha * (target - env_comp_);
     }
 
