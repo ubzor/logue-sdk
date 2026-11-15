@@ -158,11 +158,7 @@ static RndWindow rnd_window_for(uint8_t idx)
     // (CH2D2/CH2F were removed — the chord/interval concept is gone.)
     case 32: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
     case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
-    // GLIDE (edit 34): portamento time of the polyphonic cluster. Window
-    // 0..40% (raw 0..409) — a quick-to-moderate scoop so a Random preset still
-    // feels responsive; a long full-knob glide would make every re-roll sound
-    // like a slow siren sweep and hide the new note.
-    case 34: w.kind=0; w.lo=0;    w.hi=409;  w.div=0; break; // GLIDE 0..40%
+    // (GLIDE (edit 34) removed: the portamento knob is gone.)
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, etc.)
   }

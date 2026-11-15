@@ -30,19 +30,19 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 
   // ---- K-rate prepass (see blockPrepass) -------------------------------------
   // Consume the (sim-only) Rnd re-roll request, advance the Rnd debounce
-  // clock (rndTick) and the Rnd re-roll morph (rndMorphTick), and advance
-  // the pitch glide. Everything here runs at K-rate (once per block, before
-  // the per-sample loop) and is extracted from process() so that this file
-  // stays a pure per-sample audio path (see the file header comment).
+  // clock (rndTick) and the Rnd re-roll morph (rndMorphTick). Everything here
+  // runs at K-rate (once per block, before the per-sample loop) and is
+  // extracted from process() so that this file stays a pure per-sample audio
+  // path (see the file header comment).
   blockPrepass(frames);
   // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
   const Params p = params_;
 
   // ---- Per-voice base w0 (the raw note-rate phasor advance) --------------------
-  // In the polyphonic cluster each voice has its OWN w0 (voice_[vi].w0),
-  // advanced by the per-voice GLIDE block in the loop below. There is no
-  // single shared w0 anymore. The static A/B detune is the SHARED factor pair
-  // det_f_a_ / det_f_b_ (K-rate, apply_edit_param(DETUNE)) multiplied by each
+  // In the polyphonic cluster each voice has its OWN w0 (voice_[vi].w0), set
+  // once per note (no glide). There is no single shared w0. The static A/B
+  // detune is the SHARED factor pair det_f_a_ / det_f_b_ (K-rate,
+  // apply_edit_param(DETUNE)) multiplied by each
   // voice's w0 in the loop; the random-walk detune (rw_dev_a/b_cents) is also
   // shared and added per-voice.
   //
@@ -142,14 +142,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   {
     // ================================================================
     // POLYPHONIC CLUSTER: kVoiceCount notes, identical settings, shared
-    // post-stage. Per sample we (1) advance each voice's GLIDE, (2) advance
-    // its phasors (with the SHARED random-walk detune/morph/FM/jitter), (3)
-    // sum its A/B wavetable outputs, subs and ring-mod into shared accumu-
-    // lators, then (4) run the SINGLE common post-stage (folder -> saturator
-    // -> SVF -> formant -> comb -> duck -> makeup + soft-clip) on the sums.
-    // The A-H-R envelope is per-voice (each note fades in/out on its own);
-    // the duck follower is shared (one drone's low end).
-    // (glide removed: no K-rate glide advance)
+    // post-stage. Per sample we (1) advance each voice's phasors (with the
+    // SHARED random-walk detune/morph/FM/jitter), (2) sum its A/B wavetable
+    // outputs, subs and ring-mod into shared accumulators, then (3) run the
+    // SINGLE common post-stage (folder -> saturator -> SVF -> formant -> comb
+    // -> duck -> makeup + soft-clip) on the sums. The A-H-R envelope is
+    // per-voice (each note fades in/out on its own); the duck follower is
+    // shared (one drone's low end).
 
     // ---- Shared random walk (advance ONCE per sample, shared by all voices)
     // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
@@ -278,10 +277,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         if (!v.active && v.eg.phase == AhEnvelope::kIdle)
           continue;
 
-        // Current base phase increment: if gliding, compute ABSOLUTELY as
-        // glide_to * 2^(-glide_dist/4096); otherwise use v.w0 (the target,
-        // which equals glide_to once the glide completes).
-        // Current base phase increment (glide removed: always v.w0).
+        // Current base phase increment (glide removed: always v.w0, the fixed
+        // per-note rate).
         float vw0 = v.w0;
 
         // Per-voice detuned A/B increments. Walk active: combine static + walk
@@ -366,8 +363,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // (The old common env_max = max over all voices read the cluster's
         // level as its loudest note, so the instant a 2nd note started from
         // env=0 the shared gain could momentarily collapse -> "silence" on the
-        // 2nd note, especially with GLIDE>0 where the new note's glide and the
-        // envelope reset coincide. Per-voice gating removes that shared-dip.)
+        // 2nd note, especially where the new note's envelope reset coincides
+        // with the others. Per-voice gating removes that shared-dip.)
         const float eg = v.eg.env;
         sum_main += (wav_a * lvl_a + wav_b * lvl_b) * eg;
         sum_sub  += osc_sinf(v.ph_sub) * eg;
@@ -622,7 +619,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // main voice yields. This is the audible drone behaviour: at a held note
     // the sub sines are steady, so the follower settles to a constant duck
     // gain (the main tone sits a few dB lower while the subs are present) and
-    // any low-end movement (Breath stream on SUB1, note glides, SUB2 gate)
+    // any low-end movement (Breath stream on SUB1, note on/off, SUB2 gate)
     // moves the main tone with it. The duck gain is floored at kDuckFloor
     // (0.7, ~-3 dB) so the main voice never disappears. The duck is ALWAYS
     // active (the follower advances every sample); the RMOD branch ducks with
@@ -658,9 +655,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 // K-rate per-block prepass extracted from process() (see the call site there):
 // web-sim edit-parameter request consumption (K-rate atomic apply of the
 // select_/PARAM_VAL pair), rndTick() (Rnd debounce + re-roll), rndMorphTick()
-// (BPM-synced re-roll morph), and the pitch-glide advance. All of it runs
-// once per block, before the per-sample loop, so osc_mix.h keeps its
-// "pure audio path" property.
+// (BPM-synced re-roll morph). All of it runs once per block, before the
+// per-sample loop, so osc_mix.h keeps its "pure audio path" property.
 inline void Osc::blockPrepass(uint32_t frames)
 {
 
@@ -704,8 +700,7 @@ inline void Osc::blockPrepass(uint32_t frames)
 
   // (chord interval pitch crossfade removed — the chord/interval concept is gone.)
 
-  // (The single-note LINEAR pitch glide was removed in the polyphonic build.
-  //  Each cluster voice now glides INDEPENDENTLY (GRIMM-style exponential) in
-  //  the per-sample loop of process() — see the "Per-voice GLIDE" block there.
-  //  blockPrepass no longer advances any glide.)
+  // (All pitch glide / portamento was removed in the polyphonic build: each
+  //  cluster note starts at its exact pitch with a random per-voice start
+  //  phase, so blockPrepass advances no glide.)
 }

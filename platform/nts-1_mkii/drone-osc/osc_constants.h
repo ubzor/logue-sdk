@@ -171,63 +171,9 @@
   //   w0_sub_ = w0_ * kSubW0Scale  (== w0/2 * 2^(kSubDetuneCents/1200))
   // so the audio path does not recompute 2^(-4/1200) on every setPitch().
   static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
-  // ---- Note glide (portamento) — GRIMM-style EXPOENTIAL ----------------------
-  // When a new cluster note starts, its per-voice w0 does NOT jump: it slides
-  // from the cluster's LAST note to its own pitch. The slide is EXPOENTIAL
-  // (fast at first, then easing in) — the GRIMM GLIDE behaviour. The per-sample
-  // step is a fixed Q16 fraction of the distance LEFT (like GRIMM's
-  // vc_gl: d = k * x / 65536; x -= d), so the remaining distance shrinks
-  // geometrically and the voice converges on the target. gl_k_ (Osc::gl_k_,
-  // recomputed at K-rate from the GLIDE edit parameter) is that Q16 fraction:
-  //   gl_k_ = kGlideNum / (t_ms / kGlideMsStep)   (clamped to [kGlideStepMin,1])
-  // where t_ms is the GLIDE time (kGlideMinMs .. kGlideMaxMs, a quadratic
-  // mapping of the knob) and kGlideMsStep (0.726 ms = one 32-sample control
-  // block @48 kHz) is the step granularity. GLIDE = 0 (raw 0) disables the
-  // glide (the note jumps straight to its pitch, regression-safe). The snap
-  // threshold is kGlideSnap (1/4096-octave units, the same unit as gl_want_).
-  static constexpr float    kGlideMinMs   = 10.f;    // raw 1   -> ~10 ms (a quick scoop)
-  static constexpr float    kGlideMaxMs   = 2500.f;  // raw 1023-> ~2.5 s (a slow siren)
-  static constexpr float    kGlideMsStep  = 0.726f;  // one 32-sample block @48 kHz
-  static constexpr uint32_t kGlideNum     = 328516U; // 6.9 * 47618 (numerator, pre-scaled)
-  static constexpr uint32_t kGlideStepMin = 1U;      // floor so the glide always finishes
-  static constexpr int32_t  kGlideSnap    = 11;      // |x| < 11 (1/4096-octave) -> snap (~0.03 st)
-  // (kGlideSamples was removed: the fixed 1 s LINEAR glide is gone, replaced by
-  //  the knob-set EXPOENTIAL GRIMM glide above.)
-  // 2^i LUT for the GLIDE pitch computation (osc_mix.h). Indexed by (i + 12)
-  // for i ∈ [-12, +12] (±12 semitones). A `static const` LOCAL inside the
-  // audio callback was a data race on first-touch initialization under the
-  // WASM build's -matomics / SharedArrayBuffer (two voices / two blocks could
-  // first-read the table concurrently before it was fully initialized), which
-  // intermittently produced a corrupt vw0 -> silence on the 2nd/3rd note.
-  // Making it a namespace-scope constexpr (this header) guarantees single,
-  // pre-thread initialization.
-  static constexpr float kTwoPow[25] = {
-      0.000244140625f, // 2^-12
-      0.00048828125f,  // 2^-11
-      0.0009765625f,   // 2^-10
-      0.001953125f,    // 2^-9
-      0.00390625f,     // 2^-8
-      0.0078125f,      // 2^-7
-      0.015625f,       // 2^-6
-      0.03125f,        // 2^-5
-      0.0625f,         // 2^-4
-      0.125f,          // 2^-3
-      0.25f,           // 2^-2
-      0.5f,            // 2^-1
-      1.f,             // 2^0
-      2.f,             // 2^1
-      4.f,             // 2^2
-      8.f,             // 2^3
-      16.f,            // 2^4
-      32.f,            // 2^5
-      64.f,            // 2^6
-      128.f,           // 2^7
-      256.f,           // 2^8
-      512.f,           // 2^9
-      1024.f,          // 2^10
-      2048.f,          // 2^11
-      4096.f           // 2^12
-  };
+  // (Note glide / portamento removed: kGlide* constants and the kTwoPow 2^i
+  //  LUT are gone. Each cluster note now starts at its exact pitch with a
+  //  random per-voice start phase — no glide, no per-sample w0 slide.)
 
 
 
@@ -386,4 +332,4 @@
 // (env_comp_): tau ~50 ms, fast enough to follow note count / the 2 s envelope
 // without per-sample pumping, slow enough not to ring on a fast note-on burst.
 // -----------------------------------------------------------------------------
-  static constexpr float    kClusterCompAlpha = 0.0041658f; // 1 - exp(-1/(0.005s*48kHz)); one-pole tau ~5 ms (was 50 ms, too slow for note-on transients -> perceived as "quieter" with GLIDE>0)
+  static constexpr float    kClusterCompAlpha = 0.0041658f; // 1 - exp(-1/(0.005s*48kHz)); one-pole tau ~5 ms (was 50 ms, too slow for note-on transients -> perceived as "quieter")

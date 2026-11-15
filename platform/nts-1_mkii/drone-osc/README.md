@@ -13,22 +13,24 @@ lives inside the Osc class.
 
 ## Sound path
 
-The drone is now a **polyphonic 4-voice CLUSTER** (Osc::process, osc_mix.h).
-Every MIDI note gets its own lightweight voice in a cluster of `kVoiceCount = 4`;
+The drone is now a **polyphonic 6-voice CLUSTER** (Osc::process, osc_mix.h).
+Every MIDI note gets its own lightweight voice in a cluster of `kVoiceCount = 6`;
 LATCH is ALWAYS ON (notes are held; re-pressing the SAME note toggles it off; a
-5th note steals the OLDEST voice). Each new note GLIDES from the cluster's LAST
-note using the GRIMM-style **exponential** portamento (the `GLIDE` knob). The
-4 voices are **identically configured** (same wavetables, DETU, SATU/ASYM/FOLD,
-random walks, SVF, formant, comb, duck); only their pitch (w0 + glide), phasors,
-sub-voice states and A-H-R envelope differ.
+7th note steals the OLDEST voice). The
+6 voices are **identically configured** (same wavetables, DETU, SATU/ASYM/FOLD,
+random walks, SVF, formant, comb, duck); only their pitch (w0), random start
+phasors, sub-voice states and A-H-R envelope differ. (The old GRIMM-style
+exponential GLIDE/portamento knob was removed: each note now starts at its own
+fixed random phase to de-correlate the inter-voice detune beats, which is what
+keeps 2-6 held notes from summing into a low-frequency "howl".)
 
-Per sample the path (1) advances each voice's GLIDE, (2) runs each voice's
+Per sample the path (1) runs each voice's
 lightweight source (A/B phasors + wavetables + sub/sub-2 + ring-mod), summing
-them into shared accumulators, then (3) applies the SINGLE common post-stage to
-the sums (so 4 notes read as one blended drone, not 4 instruments):
+them into shared accumulators, then (2) applies the SINGLE common post-stage to
+the sums (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
-PER VOICE (x kVoiceCount = 4):  [ GLIDE: v.w0 += gl_k_ step toward target ]
+PER VOICE (x kVoiceCount = 6):
   phasor A  ->  wavetable A (WA1)   [ DETU, FM1, FMAB, JIT, + walk detune ]
   phasor B  ->  wavetable B (WA2)   [ DETU, FM2, FMBB, JIT, + walk detune ]
   phasor sub->  sub-octave sine (SUB1)            [ f/2, LFO-FM ]
@@ -40,17 +42,16 @@ PER VOICE (x kVoiceCount = 4):  [ GLIDE: v.w0 += gl_k_ step toward target ]
      (shared per-sample: the random walks, FM index, JIT are ONE drone)
 
 PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
-  Each of the 4 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
+  Each of the 6 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
   accumulation loop: a new note (env 0->1 over 2 s) ADDS to the cluster
   instead of dragging the whole thing through a common MAX. (A common
   output envelope = max over all voices used to dip the entire cluster the
   instant a 2nd note started from env=0 -- the "silence on the 2nd note"
-  bug, worst with GLIDE>0 where the new note's glide and envelope reset
-  coincide. Per-voice gating removes that shared-dip.)
-  env_sum  = sum over the 4 voices of its A-H-R envelope (0..kVoiceCount)
-  env_comp = one-pole smoothed (tau ~50 ms, kClusterCompAlpha) of
+  bug. Per-voice gating removes that shared-dip.)
+  env_sum  = sum over the 6 voices of its A-H-R envelope (0..kVoiceCount)
+  env_comp = one-pole smoothed (tau ~5 ms, kClusterCompAlpha) of
              1 / sqrt(env_sum)   (floored at 1 -> a single note is never
-             attenuated; N=1 -> 1 exactly, N=4 -> ~0.5)
+             attenuated; N=1 -> 1 exactly, N=6 -> ~0.41)
   The SUMMED voice signals (sum_main / sum_sub / sum_sub2 / sum_ring) are
   each multiplied by env_comp BEFORE the shared post-stage, so N notes read
   at ~one note's loudness instead of N times louder (the kMix* budget is
@@ -83,15 +84,19 @@ make the polyphonic cluster both level-independent of note count AND free of
 the 1->2 note boundary dip.
 ```
 
-The CPU cost is ~1.6x the old mono (4 light sources + 1 shared post-stage +
-one extra env_sum pass + the one-pole env_comp), not 4x — the heavy
-SVF/formant/comb/duck run only ONCE on the summed signal.
-(Glide: `d = (gl_k_ * x) >> 16; x -= d`, snap when |x| < kGlideSnap; `gl_k_` is
-the GRIMM step coefficient from the GLIDE knob. The current pitch is computed
-ABSOLUTELY as `vw0 = glide_to * 2^(-glide_dist/4096)` where `glide_dist` is in
-1/4096-octave units (1 semitone = 4096/12 ≈ 341 units). `v.w0` is never modified
-during the glide — it holds the target. This avoids the cumulative-multiplication
-blow-up of the old `v.w0 *= 2^(x/4096)` approach.)
+The CPU cost scales ~linearly with the number of ACTIVE notes, not with
+kVoiceCount: the heavy SVF/formant/comb/duck saturator run only ONCE on the
+summed signal (shared post-stage); each active note adds only its lightweight
+source (2 wavetable scans + sub/sub-2 + FM-smooth + envelope + accumulators).
+Measured (web-sim, `Osc::process` only, no FX, median of 5 runs): the shared
+floor (post-stage + 6 idle-voice envelope passes) is ~95 ns/sample, and each
+ADDED active note costs ~77 ns/sample. So: 1 note ≈ 172 ns/smp, 4 notes ≈ 410
+ns/smp, 6 notes ≈ 558 ns/smp. Against a single 48 kHz core's per-sample budget
+(20 833 ns/smp) that is ~0.8% (1 note) / ~2.0% (4) / ~2.7% (6) — i.e. 4→6 notes
+is a +36% CPU step on the OSC stage, comfortably within budget. (The hardware
+Cortex-M7 @ 48 kHz runs this far faster per sample than the wasm browser build,
+so the on-device fraction is lower still; these figures are the relative 1/4/6
+comparison, which is what matters for the voice-count trade-off.)
 
 
 
@@ -113,9 +118,11 @@ The A-H-R envelope (2 s / 2 s) multiplies the whole sum (note attack/release).
 
 Key facts about the path:
 
-* **Detune (DET)** is applied *per voice* (A gets +c/2 cents, B gets -c/2),
-  so the inter-voice beat is ~4x stronger than a post-mix sum detune. The sub
-  voices stay on the base note (stable "anchors").
+* **Detune (DET)** is applied *per voice* **asymmetrically (GRIMM-style)**:
+  A stays exactly at the note (factor 1.0), B is shifted UP by the full DET
+  cents (B = f * 2^(DET/1200)). The beat is |f_B - f_A| ~ f * DET * ln2/1200
+  per voice, and it is applied BEFORE the A/B sum so every note keeps its own
+  beating pair. The sub voices stay on the base note (stable "anchors").
 * **Phase-FM** (FM_A / FM_B) modulates the carrier *phasors* (classic Bessel
   sidebands). The modulator is the *other* voice's wavetable output, one sample
   delayed. The static index is **not** gated by RATE; RFM_A / RFM_B add a
@@ -125,12 +132,12 @@ Key facts about the path:
 * The **SUB2** voice bypasses the main soft-clip on purpose (a low-frequency
   sine through tanh would be heavily attenuated) and is gated closed below
   ~120 Hz base pitch (f/4 < 30 Hz).
-* **Note glide**: when the base note changes, the base phase increment is
-  interpolated linearly over **1 s** and every derived voice (A/B, sub-1,
-  sub-2, wavetable morph) is recomputed from it, so the whole
-  sound slides in pitch together.
-  // (The chord-voice fade/crossfade notes were removed — the chord/interval
-  //  concept is gone.)
+* **No pitch glide (removed)**: a new note starts at its exact pitch with a
+  random per-voice start phase (the GRIMM-style de-correlation that kills the
+  polyphonic "howl"); there is no portamento between notes. (The old linear
+  1 s glide, and later the GRIMM exponential `GLIDE` knob, were both removed.)
+  (The chord-voice fade/crossfade notes were removed — the chord/interval
+   concept is gone.)
 
 ### Rnd re-roll (BPM-synced smooth morph)
 
@@ -186,7 +193,7 @@ all at once.
     `cur = from`, `t = 0`, `start = now`). Without this, such a parameter's
     slider would jump instantly to the new target (and the DSP would snap)
     because `edit_value_` is committed immediately by the caller. Starting it
-    now (no stagger on a re-aim — the user already clicked) makes it glide.
+    now (no stagger on a re-aim — the user already clicked) makes it morph.
   - **unchanged** (`new_to == current value`): skipped — nothing to morph.
   The anchor is NOT applied on a re-aim (parameters already have their start
   delays; newly-added ones start immediately).
@@ -228,12 +235,12 @@ Each cluster voice runs its own **A-H-R** envelope (the platform EG is set to
 2 s exponential release. **LATCH is ALWAYS ON** (there is no Legato switch):
 key release does **not** stop the note — it is held. Behaviour:
 
-* **New note** -> starts its own voice in the cluster (up to 4 at once), with a
-  fresh 2 s A-H-R attack. The note **GLIDES from the cluster's LAST note**
-  (GRIMM exponential, the `GLIDE` knob); the very first note just jumps.
+* **New note** -> starts its own voice in the cluster (up to 6 at once), with a
+  fresh 2 s A-H-R attack at its exact pitch (random per-voice start phase, no
+  glide); the very first note behaves the same.
 * **Same note re-pressed** -> TOGGLE-OFF that one voice (2 s release, fades out
   while the others keep sounding).
-* **> 4 notes held** -> the OLDEST active voice is **stolen** (released) and the
+* **> 6 notes held** -> the OLDEST active voice is **stolen** (released) and the
   new note takes it, so the cluster never exceeds `kVoiceCount`.
 * The whole cluster is stopped only by All-Notes-Off (instant, no release tail).
 
@@ -338,7 +345,7 @@ default and effect:
 | # | Name | Display | Range | Default | Effect |
 |---|------|---------|-------|---------|--------|
 | 0 | RATE | % | 0..100% (quadratic) | 0% (off) | Shared ceiling for every random-walk stream. 0 = all wandering off. (First in the multiplexer -- the most-edited chaos lever.) |
-| 1 | DET | +/-c | -10..+10 c | 0 c | Static symmetric detune: A = +c/2, B = -c/2. |
+| 1 | DET | +/-c | -10..+10 c | 0 c | Static ASYMMETRIC detune (GRIMM-style): A stays at f, B = f * 2^(DET/1200) (shifted UP). |
 | 2 | SPD1 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Tone** stream period (mean target-update gap). |
 | 3 | SM1 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Tone** stream time constant. |
 | 4 | SPD2 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Timbre** stream period. |
@@ -371,7 +378,6 @@ default and effect:
 | 31 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
 | 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
-| 34 | GLIDE | ms/s | 0 = OFF (jump); 1..1023 -> ~10 ms..2.5 s (quadratic) | 0% (off) | **Portamento** of the polyphonic cluster: each new note glides from the cluster's LAST note using the GRIMM exponential step (`d = (gl_k_*x)>>16; x -= d`, `x` in 1/4096-octave units, 1 st = 341 units). The current pitch is `glide_to * 2^(-x/4096)` (absolute, not cumulative). 0 = the note jumps straight to its pitch (regression-safe); low knob = a quick scoop, full knob = a slow siren. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -400,7 +406,6 @@ independent of the period, so the walk depth does not depend on speed.
 | Behaviour | Value | Notes |
 |-----------|-------|-------|
 | Attack / release | 2 s / 2 s | Exponential A-H-R, own envelope (platform EG open). |
-| Note glide | 1 s | Linear interpolation; all derived voices follow. |
 | Sub-1 detune | -4 c | One octave below the base, fixed. |
 | Sub-2 pitch gate | base < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. |
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
@@ -445,8 +450,8 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_param_apply.h | apply_edit_param() -- the single raw-10-bit -> DSP-float converter (source of truth for ranges). |
 | osc_param_display.h | getParameterStrValue() -- raw -> display string. |
 | osc_rnd.h | Rnd re-roll + morph engine: rndArm/rndTick (0.5 s debounce), rndMorphStart/rndMorphTick (BPM-synced morph), RndM mode state, web-sim request channels. |
-| osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle; polyphonic cluster voice allocation (steal oldest), LATCH toggle-off, per-voice GLIDE arming; setPitch is a no-op. |
-| osc_mix.h | process() -- the per-sample audio path; blockPrepass() -- the K-rate per-block prepass (edit/Rnd request consumption, rndTick, rndMorphTick, glide). |
+| osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle; polyphonic cluster voice allocation (steal oldest), LATCH toggle-off; setPitch is a no-op. |
+| osc_mix.h | process() -- the per-sample audio path; blockPrepass() -- the K-rate per-block prepass (edit/Rnd request consumption, rndTick, rndMorphTick). |
 | osc_waves.h | Wavetable bank scanning + pitch-shifted morph + LFO-morph crossfade. |
 | osc_saturator.h | Stateless wavefolder (fold) + asymmetric tanh saturator (saturate). |
 | osc_svf.h | 12 dB/oct state-variable low-pass (cutoff/resonance/dry-wet + stability clamps). |
@@ -455,7 +460,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
 | osc_lfo_sim.h | Web-simulator-only shape-LFO synthesizer. |
-| osc_constants.h | All static tuning constants (max depths, scales, glide/envelope lengths). |
+| osc_constants.h | All static tuning constants (max depths, scales, envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |
 | Makefile / config.mk | Build: the ARM unit (`make` / `make install`). |

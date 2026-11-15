@@ -9,8 +9,8 @@
  *  Out-of-line unit lifecycle: init() (factory-state reset of every DSP
  *  stage), reset() (allNoteOff semantics on stop), the legato note handlers
  *  (noteOn/noteOff/allNoteOff: the drone is held until the same key is
- *  re-pressed or all-notes-off), and setPitch() (arms the 2 s linear pitch
- *  glide; the audio path in osc_mix.h advances it per sample).
+ *  re-pressed or all-notes-off), and setPitch() (legacy no-op in the
+ *  polyphonic build; the cluster's pitch is driven by noteOn()).
  *
  *  This was a ~235-line block of osc.h. It now lives here so the class
  *  skeleton stays small. It is #included at the BOTTOM of osc.h, after the
@@ -28,7 +28,7 @@ inline void Osc::init(float *)
     lfo_ = 0.f;
     // ---- Polyphonic voice cluster: zero every voice --------------------------
     // Each cluster voice is independent state (phasors, sub phasors, sub-2
-    // state, A-H-R, glide, w0). All start silent (w0 = 0, idle envelope) so
+    // state, A-H-R, w0). All start silent (w0 = 0, idle envelope) so
     // an all-off cluster produces exactly zero (regression: 0 notes = silent).
     for (uint8_t vi = 0; vi < kVoiceCount; vi++)
     {
@@ -48,10 +48,6 @@ inline void Osc::init(float *)
       v.active = false;
       v.gen = 0;
       v.eg.reset();
-      // Per-voice SVF (polyphonic cluster DISCORD avoidance): zero the
-      // integrator states (vel/pos) so each per-voice filter starts clean.
-      // The coefficients (cc/ae) are set by apply_edit_param below (FCUT/RES).
-      svf_voice_[vi].reset();
     }
     // (glide removed: no gl_k_ / gl_want_); no last note yet.
     last_note_ = -1;
@@ -60,7 +56,7 @@ inline void Osc::init(float *)
     // PARAM SEL / PARAM VAL display agree on startup (the header's "init"
     // value of PARAM_VAL already matches edit_value_[0], but this keeps the
     // two in sync if either side is edited independently later). This also
-    // recomputes det_f_a_/det_f_b_ (DETUNE) and gl_k_ (GLIDE).
+    // recomputes det_f_a_/det_f_b_ (DETUNE).
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
@@ -154,11 +150,6 @@ inline void Osc::reset()
       v.sub2.gate = 0.f;
       v.active = false;
       v.eg.reset();
-      // Per-voice SVF (polyphonic cluster DISCORD avoidance): zero the
-      // integrator states (vel/pos) so each per-voice filter starts clean on
-      // reset (the coefficients are kept — they are knob-derived, not audio
-      // history).
-      svf_voice_[vi].reset();
     }
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
@@ -187,10 +178,10 @@ inline void Osc::reset()
   }
 
 
-  // Start (or re-target) one cluster voice on a note, arming its GRIMM-style
-  // exponential GLIDE from the cluster's LAST note (gl_want_ is the pending
-  // distance, written by noteOn). A new note always gets its own voice + a
-  // fresh 2 s A-H-R attack (the cluster is polyphonic: notes sound together).
+  // Start (or re-target) one cluster voice on a note. A new note always gets
+  // its own voice + a fresh 2 s A-H-R attack (the cluster is polyphonic: notes
+  // sound together). (No glide: the note starts at its exact pitch with a
+  // random per-voice start phase.)
   inline void Osc::voiceStart(Voice &v, uint8_t note, float w0)
   {
     v.note = note;
@@ -222,18 +213,6 @@ inline void Osc::reset()
     v.ph_b = v.ph_a + 0.25f; // +1/4 cycle (GRIMM's ph[1]=ph[0]+0x40000000)
     if (v.ph_b >= 1.f) v.ph_b -= 1.f; // wrap
     v.ph_sub = osc_white();
-    // PER-VOICE RANDOM PITCH OFFSET (polyphonic cluster DISCORD avoidance):
-    // A fixed random +/-30-cent offset drawn once per note. Applied to the
-    // voice's base w0 (vw0 * pitch_offset_factor) BEFORE the A/B detune and
-    // sub-oscillator phasors, so ALL of this voice's frequencies (A, B, sub,
-    // sub2) are shifted by the same random amount. This de-correlates the
-    // inter-voice DETUNE beat spectra: with 2-3 notes, the A2-B1 / B2-A1
-    // differences (the ~16-19 Hz "howl") are now offset by up to 60 cents
-    // per voice-pair (~22 Hz at 440 Hz), so the howl is spread across a wide
-    // band and inaudible. The mono timbre (1 note) is slightly detuned
-    // (+/-30c) but still reads as the same note.
-    v.pitch_offset_cents = (osc_white() - 0.5f) * 200.f; // +/-100 cents
-    v.pitch_offset_factor = Detune::factor(v.pitch_offset_cents); // 2^(cents/1200)
     v.ph_sub2 = osc_white();
     v.prev_wav_a = 0.f;
     v.prev_wav_b = 0.f;
@@ -249,8 +228,8 @@ inline void Osc::reset()
   //  * Re-pressing the SAME note -> TOGGLE-OFF that voice (fade out).
   //  * A new note while all kVoiceCount voices are busy -> STEAL the OLDEST
   //    active voice (lowest gen) and start this note on it.
-  // The new note GLIDES from the cluster's LAST note (GRIMM exponential):
-  // gl_want_ = (last_note - new_note) * 256 * 4 (1/16 semitone * 256 units).
+  // (No glide: the new note starts at its exact pitch with a random
+  //  per-voice start phase; last_note_ is still tracked for bookkeeping.)
 inline void Osc::noteOn(uint8_t note, uint8_t velo) 
   {
     (void)velo;
@@ -266,17 +245,7 @@ inline void Osc::noteOn(uint8_t note, uint8_t velo)
         return;
       }
     }
-    // Compute the glide distance from the cluster's LAST note (GRIMM vc_gl
-    // semantics: positive = new note is HIGHER than the last, the voice glides
-    // UP; negative = glides down). last_note_ < 0 (first note) -> no glide.
-    // Scale: 1 semitone = 4096/12 units (1/12 octave per semitone, 4096
-    // units per octave). The audio path (osc_mix.h) computes:
-    //   current_w0 = glide_to * 2^(-glide_dist / 4096)
-    // so glide_dist = 4096 * (octaves from target) and the sign is:
-    //   glide_dist > 0 -> current < target (still gliding UP from below)
-    //   glide_dist < 0 -> current > target (still gliding DOWN from above)
-    // At glide_dist = 0 -> current = glide_to (arrived).
-    // (glide removed: no gl_want_ computation)
+    // (glide removed: no gl_want_ / glide-distance computation)
     last_note_ = (int32_t)note; // this note becomes the cluster's last
     // Find a free voice, or steal the oldest active one.
     uint8_t target = kVoiceCount;
@@ -321,11 +290,10 @@ inline void Osc::allNoteOff()
   // audio processing callbacks
 
   // setPitch: LEGACY single-note entry point. In the polyphonic build the
-  // cluster's pitch is driven entirely by noteOn() (which arms each voice's
-  // per-voice GLIDE), so setPitch does nothing. It is kept (and still wired in
-  // unit.cc / wasm.cc) for API compatibility and the hardware's per-block
-  // pitch callback; the hardware's note MIDI events (noteOn) are what drive the
-  // cluster. (The old 2 s linear single-voice glide is gone.)
+  // cluster's pitch is driven entirely by noteOn(), so setPitch does nothing.
+  // It is kept (and still wired in unit.cc / wasm.cc) for API compatibility
+  // and the hardware's per-block pitch callback; the hardware's note MIDI
+  // events (noteOn) are what drive the cluster.
 inline void Osc::setPitch(float w0)
   {
     (void)w0; // no-op: polyphonic cluster, pitch driven by noteOn()

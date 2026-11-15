@@ -151,11 +151,6 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     return buf;
   }
 
-  // GLIDE (portamento): raw 0 = "OFF" (jump); raw 1..1023 = the quadratic
-  // time in ms ("NNN ms" < 1 s, "N.Ns" >= 1 s). Shows the ACTUAL slide time
-  // the knob maps to (kGlideMinMs .. kGlideMaxMs), so the display never
-  // overstates the glide.
-
   int v;
   if (k == WAV1 || k == WAV2)
     v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));

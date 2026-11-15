@@ -186,10 +186,10 @@ public:
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..GLIDE).
-  static constexpr uint8_t kEditParamCount = 34; // RATE_AMT..COMB (GLIDE removed)
-  // The first editable enum value. The UI (header.c PARAM slot, 0..34) expects
-  // this order (select_ index -> parameter), 35 parameters total:
+  // Number of editable DSP parameters (RATE_AMT..COMB).
+  static constexpr uint8_t kEditParamCount = 34; // RATE_AMT..COMB
+  // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
+  // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
   //   2 SPD1             3 SM1   (Tone stream period / smooth)
   //   4 SPD2             5 SM2   (Timbre stream period / smooth)
@@ -210,9 +210,8 @@ public:
   //   30 FMBB (RFM_B: random-walk depth on FM B, RATE-gated)
   //   31 FMVT (formant vowel position)  32 FLVL (formant dry/wet)
   //   33 COMB (comb resonator)
-  //   34 GLIDE (portamento: 0 = off, 1..1023 = 10 ms..2.5 s)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 35 = (GLIDE - RATE_AMT + 1); select_ 0..34 -> RATE_AMT..GLIDE.
+  // kEditParamCount = 34 = (COMB - RATE_AMT + 1); select_ 0..33 -> RATE_AMT..COMB.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -227,8 +226,6 @@ public:
   // Enrichment-2 defaults (indices 31..33): FORM 511 (middle vowel, but the
   // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
   // COMB 0 (all off, regression-safe). SUB2 (index 9) defaults to 410 (~40%).
-  // GLIDE (index 34) defaults to 0 (off = jump, regression-safe; the user
-  // turns it on to get the GRIMM-style exponential portamento, 10 ms..2.5 s).
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
   int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0};
@@ -485,24 +482,24 @@ public:
   // edit-menu path (setParameter(DETUNE..CHFLD)) and by the PARAM_VAL
   // multiplexer path. The body lives in osc_param_apply.h.
   void apply_edit_param(uint8_t idx, int32_t value);
-  // ---- Polyphonic voice cluster (kVoiceCount = 4) ---------------------------
+  // ---- Polyphonic voice cluster (kVoiceCount = 6) ---------------------------
   // The drone is a single-voice instrument whose ONE voice plays up to
   // kVoiceCount notes AT THE SAME TIME (a "cluster"). Every note in the
   // cluster shares IDENTICAL settings: the same wavetables (WAV1/WAV2),
   // DETU, SATU/ASYM/FOLD, the random walks, the SVF, the formant, the comb
   // and the sidechain duck. What differs per note is ONLY the pitch (its own
-  // w0 + glide), the phasors, the A-H-R envelope and the sub-voice states.
+  // w0), the phasors, the A-H-R envelope and the sub-voice states.
   // LATCH is ALWAYS ON: a note-on starts (or retargets) a cluster note; a
   // note-off is a no-op (the note is held); re-pressing the SAME note toggles
-  // it off. GLIDE (the GRIMM-style exponential portamento) slides each new
-  // note from the cluster's LAST note to its own pitch.
+  // it off. (No glide/portamento: each new note starts at its exact pitch with
+  // a random per-voice start phase to de-correlate the inter-voice beats.)
   //
   // The audio path (osc_mix.h) runs a per-voice loop over these (phasors ->
   // wavetables -> sub/sub-2 -> A-H-R) and feeds a SINGLE common post-stage
   // (wavefolder -> saturator -> SVF -> formant -> comb -> duck -> makeup +
   // soft-clip) so the kVoiceCount notes read as one blended drone, not kVoice
   // independent instruments.
-  static constexpr uint8_t kVoiceCount = 4U;
+  static constexpr uint8_t kVoiceCount = 6U;
   struct Voice
   {
     float   w0 = 0.f;         // current base phase increment (glide removed: always fixed per note)
@@ -519,21 +516,6 @@ public:
     uint8_t  note = 0;        // MIDI note this voice plays (for toggle-off)
     bool     active = false;  // a note is latched on this voice
     uint32_t gen = 0;         // monotonically increasing: used for "oldest" steal
-    // ---- Per-voice RANDOM pitch offset (polyphonic cluster DISCORD avoidance) ---
-    // A fixed random pitch offset (+/-30 cents) drawn once per note in voiceStart.
-    // Applied to the voice's base w0 (vw0 * pitch_offset_factor) BEFORE the
-    // A/B detune and sub-oscillator phasors, so ALL of this voice's frequencies
-    // (A, B, sub, sub2) are shifted by the same random amount. This de-correlates
-    // the inter-voice DETUNE beat spectra: with 2-3 notes, the A2-B1 / B2-A1
-    // differences (the ~16-19 Hz low-frequency "howl") are now offset by up to
-    // 60 cents per voice-pair (~22 Hz at 440 Hz), so the howl is spread across
-    // a wide band and inaudible. The mono timbre (1 note) is slightly detuned
-    // (+/-30c) but still reads as the same note (30c is well within the
-    // "acceptable intonation" range for a drone). The FACTOR
-    // (Detune::factor(pitch_offset_cents)) is precomputed in voiceStart and
-    // applied per-sample as a cheap multiply (no per-sample Taylor).
-    float pitch_offset_cents = 0.f;    // +/-30 cents, fixed per note
-    float pitch_offset_factor = 1.f;   // 2^(pitch_offset_cents/1200), cached
   };
   Voice voice_[kVoiceCount];
   // Shared K-rate static-detune FACTORS (the DETU knob, applied per-voice in
@@ -544,13 +526,9 @@ public:
   // when the random walk is off (regression-cheap).
   float det_f_a_ = 1.f; // GRIMM-style asymmetric: A stays at f (no shift)
   float det_f_b_ = 1.f; // GRIMM-style asymmetric: B = f * 2^(detune_cents/1200)
-  // GLIDE (the GRIMM-style exponential portamento): the per-sample step
-  // coefficient k = 6.9 / (t_ms / 0.726 ms) as a Q16 fraction of the way left,
-  // recomputed at K-rate from the GLIDE edit parameter. 0 = glide off (jump).
-  // gl_want_ is the (last_note - new_note) distance in 1/16 semitones * 256
-  // (Q24-ish), written by noteOn and consumed by the newly-started voice's
-  // (glide removed: gl_k_ / gl_want_ no longer exist); last_note_ tracks the
-  // cluster's most recent note for the next one.
+  // (GLIDE / portamento removed: no per-sample step coefficient, no gl_want_
+  //  glide distance.) last_note_ tracks the cluster's most recent note for the
+  //  next one (kept for noteOn bookkeeping / toggle-off semantics).
   int32_t  last_note_ = -1; // the cluster's last note (for the next noteOn)
   uint32_t gen_counter_ = 0U; // monotonic voice-start counter (steal ordering)
   // Sum of the per-voice A-H-R envelope levels (0..kVoiceCount). Recomputed
@@ -587,8 +565,8 @@ public:
     det_f_b_ = Detune::factor(params_.detune_cents); // B = f * 2^(det/1200)
   }
   // Start (or re-target) one cluster voice on a note, arming its per-voice
-  // GLIDE (gl_want_ is the pending distance written by noteOn). The body lives
-  // in osc_lifecycle.h (included at the bottom, after the class is complete).
+  // Starts (or re-targets) one cluster voice on a note. The body lives in
+  // osc_lifecycle.h (included at the bottom, after the class is complete).
   void voiceStart(Voice &v, uint8_t note, float w0);
   // MIDI note -> base phase increment (w = f/sr), self-contained (no firmware
   // LUT). The body lives in osc_lifecycle.h.
@@ -641,18 +619,18 @@ public:
   // the name of the selected parameter, PARAM_VAL shows its formatted
   // value. The body lives in osc_param_display.h.
   const char *getParameterStrValue(uint8_t id, int32_t value) const override final;
-  // Unit lifecycle: construction/reset, note handling (legato drone) and the
-  // per-voice pitch glide. The bodies live in osc_lifecycle.h (included at
-  // the bottom of this file, after the class is complete).
+  // Unit lifecycle: construction/reset and note handling (latched cluster).
+  // The bodies live in osc_lifecycle.h (included at the bottom of this file,
+  // after the class is complete).
   void init(float *) override final;
   void reset() override final;
   void noteOn(uint8_t note, uint8_t velo) override final;
   void noteOff(uint8_t note) override final;
   void allNoteOff() override final;
   // setPitch: legacy single-note entry point. In the polyphonic build the
-  // cluster's pitch is driven entirely by noteOn() (which arms the per-voice
-  // GLIDE), so setPitch is a no-op. It is kept (and still wired in unit.cc /
-  // wasm.cc) for API compatibility and the hardware's per-block pitch callback.
+  // cluster's pitch is driven entirely by noteOn(), so setPitch is a no-op.
+  // It is kept (and still wired in unit.cc / wasm.cc) for API compatibility
+  // and the hardware's per-block pitch callback.
   void setPitch(float w0);
 
   // lfo in (-1.0f, 1.0f)
@@ -690,8 +668,8 @@ public:
   }
 #endif
   // Per-block K-rate prepass (web-sim edit/Rnd request consumption, rndTick,
-  // rndMorphTick, pitch-glide advance). Body lives in osc_mix.h (before the
-  // per-sample loop, which it calls first).
+  // rndMorphTick). Body lives in osc_mix.h (before the per-sample loop,
+  // which it calls first).
   void blockPrepass(uint32_t frames);
   // Per-sample audio path (phasor advance, wavetable resolve, A+B chain,
   // sub/sub-2, final mix, envelope). The body lives in osc_mix.h.
@@ -724,25 +702,9 @@ private:
   // crossfade (svf_wet) blends the raw saturator output with the LPF output.
   Svf::State svf_;
 
-  // ---- Per-voice SVF (polyphonic cluster DISCORD avoidance) ----------------
-  // Each voice passes through its OWN 12 dB/oct SVF BEFORE the voices are
-  // summed into the shared post-stage. This is the GRIMM analog: each voice in
-  // GRIMM's VA engine goes through its own tsvf_lp filter, so inter-voice
-  // DETUNE beats (A2−B1 / B2−A1, the ~16-19 Hz "howl") are filtered PER VOICE
-  // (the filter's integrator state vel/pos is per-voice, so the beats of
-  // different voices are NOT coherently summed — they are independently
-  // low-passed, which smears and attenuates the howl). The per-voice SVF uses
-  // the SAME coefficients (cc/ae) as the shared post-stage SVF (FCUT/RES
-  // knobs), so the overall timbre is unchanged; only the inter-voice beat
-  // interference is decorrelated. When svf_wet == 0 (FCUT dry), the per-voice
-  // SVF is transparent (no filtering) — same as the shared post-stage SVF.
-  Svf::State svf_voice_[kVoiceCount];
-
   // LATCH is ALWAYS ON (see the voice-cluster block). The per-voice "active"
-  // flag, the A-H-R envelope and the per-voice glide state live in Voice
-  // (voice_[]). The cluster's last note (last_note_) and the pending glide
-  // distance (gl_want_) + step coefficient (gl_k_) are declared in the
-  // voice-cluster block.
+  // flag and the A-H-R envelope live in Voice (voice_[]). The cluster's last
+  // note (last_note_) is declared in the voice-cluster block.
 
   // First-order relaxation coefficients for attack/release, precomputed in
   // init() (never in the audio path). Shared by every voice's A-H-R envelope.

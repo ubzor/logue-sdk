@@ -35,10 +35,10 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 34; // 34 = RATE..COMB (GLIDE removed)
+      const EDIT_PARAM_COUNT = 34; // 34 = RATE..COMB
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
-      // polyphonic 4-voice cluster: each new note gets its own voice and GLIDES
-      // from the cluster's last note (GLIDE, the GRIMM exponential portamento).
+      // polyphonic 6-voice cluster: each new note gets its own voice (no
+      // glide: notes start at their exact pitch with random per-voice phases).
       // 0 RATE (shared depth ceiling), 1 DETU,
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
       // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
@@ -77,7 +77,7 @@
       // as a true column BLOCK (not a round-robin):
       //   col 0: MAIN + BREATH + FORMANT — A+B voice (static params) + wander
       //   col 1: WANDER (global) + WANDER TGT (targets)
-      //   col 2: SUBS + FILTER + CLUSTER (polyphonic 4-voice: COMB + GLIDE)
+      //   col 2: SUBS + FILTER + CLUSTER (polyphonic 6-voice: COMB)
       //   MAIN        MAIN WAV1 WAV2 DETU SATU ASYM FOLD FM1 FM2 JIT RMOD
       //   BREATH      RVLL RVLS RVLSM (voice-level wander, 4th stream)
       //   FORMANT     FMVT FLVL
@@ -85,7 +85,7 @@
       //   WANDER TGT  RWAV RWFC RDRV RFLD RFMA RFMB
       //   SUBS        SUB1 SUB2
       //   FILTER      FCUT RES
-      //   CLUSTER     COMB GLIDE (portamento time for the polyphonic cluster)
+      //   CLUSTER     COMB (comb resonator)
       const PARAM_GROUPS = [
         // ---- Column 0 ----
         { title: "MAIN",       col: 0, items: [15, 13, 14, 10, 11, 12, 27, 28, 25, 26, 0] },
@@ -170,16 +170,6 @@
           // curve that the audio path applies: powf(raw/1023, 2) * kFmMaxCents.
           // Low knob -> ~0c (near-silent "breathing"), full knob -> 0.1c.
           return (Math.pow(raw / 1023, 2) * 0.1).toFixed(2) + "c";
-        }
-        if (idx === 34) {
-          // GLIDE (edit 34): portamento time. 0 = "OFF" (jump); 1..1023 = the
-          // quadratic time (kGlideMinMs=10 .. kGlideMaxMs=2500), "NNNms" < 1 s
-          // or "N.Ns". Mirrors Osc::getParameterStrValue.
-          if (raw <= 0) return "OFF";
-          const x = raw / 1023;
-          const tms = 10 + (2500 - 10) * x * x;
-          if (tms < 1000) return Math.round(tms) + "ms";
-          return (tms / 1000).toFixed(1) + "s";
         }
         if (idx === 19) {
           // FCUT (edit 19): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.

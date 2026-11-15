@@ -150,13 +150,6 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         // unresolved libm dynamic symbol on the device.
         const float freq = 80.f * fasterpowf(12000.f / 80.f, x);
         svf_.updateCutoff(freq, 0.5f, kSampleRate);
-        // Per-voice SVF (polyphonic cluster DISCORD avoidance): copy the
-        // coefficients (cc/ae) from the shared post-stage SVF to each per-voice
-        // SVF so they use the same cutoff/resonance. The integrator states
-        // (vel/pos) are per-voice (zeroed on init/reset), so the per-voice
-        // filters are independent (decorrelating inter-voice DETUNE beats).
-        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
-          svf_voice_[vi].updateCutoff(freq, 0.5f, kSampleRate);
       }
       break;
     case RES:
@@ -166,10 +159,6 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         params_.svf_res = x;
         const float freq = 80.f * fasterpowf(12000.f / 80.f, params_.svf_cut);
         svf_.updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
-        // Per-voice SVF: copy the updated coefficients (cc/ae) to each per-voice
-        // SVF (the resonance Q changed, so the damping coefficient ae changed).
-        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
-          svf_voice_[vi].updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
       }
       break;
     case RW_FC:
