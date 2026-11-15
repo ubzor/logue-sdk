@@ -57,16 +57,8 @@ struct OscParamsData
   float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
   float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
   float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
-  // ---- Chord wavetable (WAV3): the third oscillator's own timbre -----------
-  // Before the WAV3 edit-param, the chord voice (osc C) was forced to use the
-  // same wavetable as osc A (wave_a) in the audio path, so the chord could
-  // never sound different from the main voice. WAV3 gives the chord voice its
-  // own table index, so the three-voice cluster can span three independent
-  // timbres (A / B / C). Default = 0 (the first airy table of bank A), which
-  // is a musically-usable, non-aliasing starting point; users who want the
-  // old "chord copies A" behavior can set WAV3 to the same value as WAV1.
-  float wave_c;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc C (chord) wavetable index
-  float chord_level;  // 0.f .. 1.f, edit: chord-voice level
+  // (wave_c / chord_level / chord_cents were removed — the chord/interval
+  //  concept is gone; the main A+B voice + SUB1/SUB2 remain.)
   // ---- MAIN: level of the "main" voice (the A+B mixed output) --------------
   // The "main" voice is the result of mixing oscillators A and B (WAV1 + WAV2)
   // and running them through the folder/saturator/SVF chain — i.e. the
@@ -77,7 +69,6 @@ struct OscParamsData
   // ducked (only SUB1/SUB2/chord remain) and 1 = full level. Default = 1.0,
   // which keeps the stock sound bit-identical (regression-safe).
   float main_level;   // 0.f .. 1.f, edit: main (A+B mixed) voice level (MAIN)
-  float chord_cents;  // 0.f .. ChordVoice::kMaxCents (1900), edit: chord interval (CINT)
   float rw_wav;       // 0.f .. 1.f, edit: random-walk depth on wavetable morph (RW_WAV)
   float rw_drv;       // 0.f .. 1.f, edit: random-walk depth on saturator drive (RW_DRV)
   float rw_fld;       // 0.f .. 1.f, edit: random-walk depth on wavefolder depth (RW_FLD)
@@ -105,30 +96,8 @@ struct OscParamsData
   float rw_lvl;       // 0.f .. 1.f, edit: breath depth on voice levels (RW_LVL)
   float rw_lsp;       // 0.f .. 1.f, edit: breath stream period (RW_LSP, log)
   float rw_lsm;       // 0.f .. 1.f, edit: breath stream time constant (RW_LSM, log)
-  // ---- Chord voice's OWN drive/fold (CHSAT / CHFLD) -------------------------
-  // Independent of the A+B voice's SATU/FOLD so the chord can be driven (or
-  // kept clean) separately. ASYM is shared. Defaults match the A+B SATU/FOLD
-  // defaults (drive=1.0, fold=0) so the stock sound is bit-identical.
-  float chord_drive;  // 0.f .. 3.f, edit CHSAT: chord's own saturator drive
-  float chord_fold;   // 0.f .. 1.f, edit CHFLD: chord's own wavefolder depth
-  // ---- Enrichment: second chord interval, jitter, ring-mod, phase-FM ----
-  // CINT2: second chord-voice interval (0..ChordVoice::kMaxCents). Shares the
-  // chord's level (chord_level/CHRD) and the Breath stream's lvl_c (both
-  // intervals breathe in sync). It has its OWN drive/fold (chord2_drive /
-  // chord2_fold via CHSAT2/CHFLD2), independent of CINT's CHSAT/CHFLD and of
-  // the A+B SATU/FOLD, so the higher interval can be softened/filtered on its
-  // own (see the CINT2 branch in osc_mix.h).
-  float chord2_cents; // 0.f .. ChordVoice::kMaxCents (1900), edit CINT2
-  // ---- CINT2's OWN drive/fold (CHSAT2 / CHFLD2) ----------------------------
-  // The CINT2 interval gets its OWN folder+saturator pass, independent of both
-  // the A+B SATU/FOLD and the CINT voice's CHSAT/CHFLD. This lets the higher
-  // interval (e.g. octave+fifth at CINT2 = 1900 c) be softened/filtered
-  // separately, which is where a shared drive/fold tends to turn the top
-  // metallic on wide intervals. Defaults MATCH CHSAT/CHFLD (drive = 1.0,
-  // fold = 0) so the stock sound is unchanged (the chord behaves as one object
-  // until the user explicitly splits the drive). ASYM is shared with everything.
-  float chord2_drive; // 0.f .. 3.f, edit CHSAT2: CINT2's own saturator drive
-  float chord2_fold;  // 0.f .. 1.f, edit CHFLD2: CINT2's own wavefolder depth
+  // (chord_drive / chord_fold / chord2_cents / chord2_drive / chord2_fold were
+  //  removed — the chord/interval concept is gone.)
   // JIT: random phase jitter on A/B. The knob maps 0..1023 -> 0..kJitMaxCycles
   // (peak phase deviation, in cycles). The audio path adds (white()-0.5)*jit
   // to each voice's phasor increment, so the carrier "smears" into a dense
@@ -166,6 +135,15 @@ struct OscParamsData
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
 
+  // ---- Polyphonic glide (portamento) -----------------------------------------
+  // GLIDE: the raw knob depth (0..1, quadratic-mapped to kGlideMinMs..kGlideMaxMs
+  // in the audio path / apply_edit_param). 0 = off (the note jumps straight to
+  // its pitch). The per-sample step coefficient gl_k_ (a Q16 fraction of the
+  // distance left) is recomputed at K-rate from this in apply_edit_param(GLIDE)
+  // and lives on the Osc (not here) because it is a derived coefficient, not a
+  // raw parameter.
+  float glide_raw;    // 0.f .. 1.f, edit GLIDE (0 = off, the cluster note jumps)
+
   void reset()
   {
     detune_cents = 0.f;     // default: in tune (sum voice)
@@ -186,10 +164,8 @@ struct OscParamsData
     asym = 0.f;         // default: symmetric saturator
     wave_a = 0.f;       // default: first wave of bank A
     wave_b = 11.f;      // default: a different (still airy) wave from bank A
-    wave_c = 0.f;       // default: chord voice starts on the first wave of bank A
-    chord_level = 0.2f; // default: soft chord voice
+    // (wave_c / chord_level / chord_cents were removed — chord concept gone.)
     main_level = 1.0f;  // default: main (A+B) voice at full level (stock sound)
-    chord_cents = 700.f;// default: perfect fifth (~700 cents)
     rw_wav = 0.f;       // default: walk off for wavetable morph
     rw_drv = 0.f;       // default: walk off for drive
     rw_fld = 0.f;       // default: walk off for fold depth (was 0.5: dead knob at stock RATE=0,
@@ -208,21 +184,10 @@ struct OscParamsData
       // Defaults match the A+B SATU/FOLD defaults (drive=1.0, fold=0) so the
       // stock sound is unchanged; the chord starts with the same gentle drive
       // and no fold as the main voice.
-      chord_drive = 1.0f; // default: gentle drive (same as SATU)
-      chord_fold = 0.f;   // default: chord wavefolder off (same as FOLD)
-      // ---- Enrichment defaults (CINT2 / JIT / RMOD / FM1 / FM2) ----
-      // CINT2 defaults to a major sixth (950 c): with the default CINT=700 c
-      // (fifth) and CINT2=950 c (sixth) the stock drone gains a gentle major-
-      // sixth "sparkle" on top of the fifth. The user can turn it off by
-      // setting CINT2 to 0 (unison) or CHRD to 0 (silences the whole chord).
+      // (CINT2 / CHSAT2 / CHFLD2 were removed — the chord/interval concept is gone.)
+      // ---- Enrichment defaults (JIT / RMOD / FM1 / FM2) ----
       // JIT / RMOD / FM1 / FM2 all default to 0 (off), so the enrichment
       // voices are silent at the factory preset.
-      chord2_cents = 950.f; // default: major sixth (~950 c)
-       // CINT2's own drive/fold default to the CHSAT/CHFLD values (drive = 1.0,
-       // fold = 0) so the chord starts as one object (both intervals share the
-       // same drive/fold) and the stock sound is unchanged.
-       chord2_drive = 1.0f; // default: gentle drive (same as CHSAT)
-       chord2_fold  = 0.f;  // default: CINT2 wavefolder off (same as CHFLD)
       jit_cycles   = 0.f;   // default: jitter off
       ring_mix     = 0.f;   // default: ring-mod off
       fm_a         = 0.f;   // default: static phase-FM off (A)
@@ -236,6 +201,7 @@ struct OscParamsData
       formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
+      glide_raw    = 0.f;   // default: GLIDE off (the cluster note jumps, regression-safe)
   }
 
   OscParamsData() { reset(); }

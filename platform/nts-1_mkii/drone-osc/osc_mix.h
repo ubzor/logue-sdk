@@ -38,78 +38,26 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // Caching current parameter values. Consider smoothing sensitive parameters in audio loop
   const Params p = params_;
 
-  // base phase increment (the raw note-rate phasor advance; tape wow/flutter
-  // were removed, so there is no per-sample pitch-wander multiplier here).
-  const float w0 = w0_;
-
-  // ---- Random-walk detune deviation (target-based wandering, dual channel) ----
-  // When rw_amount == 0 (knob at 0) the walk is disabled and w0_a / w0_b are
-  // the cached static values (regression: byte-for-byte identical to the old
-  // code). rw_amount is the quadratic-mapped knob value (see setParameter),
-  // so rw_active is true for any non-zero knob position.
+  // ---- Per-voice base w0 (the raw note-rate phasor advance) --------------------
+  // In the polyphonic cluster each voice has its OWN w0 (voice_[vi].w0),
+  // advanced by the per-voice GLIDE block in the loop below. There is no
+  // single shared w0 anymore. The static A/B detune is the SHARED factor pair
+  // det_f_a_ / det_f_b_ (K-rate, apply_edit_param(DETUNE)) multiplied by each
+  // voice's w0 in the loop; the random-walk detune (rw_dev_a/b_cents) is also
+  // shared and added per-voice.
   //
-  // The walk state (rw_.dev_a/b) is NORMALIZED to [-1, +1]; RATE AMT (the
-  // quadratic-mapped rw_amount) is the depth ceiling, and the audio path
-  // scales it to cents (kRwDetuneScaleCents = +/-10 cents) so neither voice
-  // strays further from its DETUNE knob value than AMT allows. The two
-  // channels wander with INDEPENDENT random targets (chosen on the same
-  // period), so the inter-voice beat frequency shifts over time — an
-  // asymmetric, ever-changing chorus.
-  //
-  // The deviations smoothly track random targets (see RandomWalk::advance)
-  // that are regenerated every `interval` samples. RATE SPD sets that period
-  // (0.1 s .. 10 s), RATE SMTH sets the tracking time constant (10 ms ..
-  // 1.5 s); keeping them independent makes the audible depth stable
-  // regardless of SPEED.
-  // (The A-H-R envelope is advanced per-sample inside the loop below; the
-  // relaxation coefficients are cached once per block for cheap access.)
+  // (The A-H-R relaxation coefficients are cached once per block for cheap
+  //  access by the per-voice envelope advance below.)
   const float alpha_a = eg_alpha_a_;
   const float alpha_r = eg_alpha_r_;
 
-  // ---- Chord interval fades (INT / INT2 on-off, see kChordFadeSamples) ------
-  // Each chord interval's level is relaxed toward (cents > 0 ? 1 : 0) with a
-  // one-pole exponential (the SAME curve as the note attack/release envelope),
-  // so switching an interval on fades it IN over 2 s and switching it off
-  // fades it OUT over 2 s -- no click, no instant "start screaming". The fade
-  // state (chord1_fade_ / chord2_fade_) is advanced per sample below and
-  // multiplies the interval's level in the final mix. The active targets are
-  // const per block (the cents knobs are L-rate), so only the state moves.
-  const float chord_fade_alpha = chord_fade_alpha_;
-  const float chord1_target = (p.chord_cents > 0.f) ? 1.f : 0.f;
-  const float chord2_target = (p.chord2_cents > 0.f) ? 1.f : 0.f;
-
-  // ---- Second sub (SUB2) level (see osc_sub2.h for the voice DSP) ----
-  const float sub2_level = p.sub2_level;
-
-  // ---- Chord voice gain (precomputed once per block) ----
-  // Linear gain: chord_gain = p.chord_level (0..1), like SUB1/SUB2. At lvl=0
-  // the voice is silent. At lvl=1 (CHRD=100%) the voice reaches full
-  // amplitude and is then shaped by its own folder+saturator (see the CHORD
-  // branch in the final mix) before being scaled by kMixChordDirect.
-  //
-  // (Previously this used the normalized kMixChord*lvl/(1+lvl) form so the
-  // chord could not push the shared A+B saturator into clipping — that
-  // constraint no longer applies now that the chord has its OWN saturator
-  // pass, and the old double-normalization was the root cause of the chord
-  // reading far too quiet. See osc_chord.h for the kMixChord constant, now
-  // unused by the audio path.)
-  const float chord_gain = p.chord_level;
-
   const bool rw_active = p.rw_amount > 0.f;
-  // A and B run at the base note ± the static DETU knob (symmetric ±c/2,
-  // cached in w0_a_det_/w0_b_det_ at K-rate), plus the random-walk detune
-  // (asymmetric, per-sample) when rw_active. When the walk is off, the
-  // cached values are used directly (0 Taylor cost per sample).
-  float w0_a = w0_a_det_; // static symmetric detune (osc A, +c/2)
-  float w0_b = w0_b_det_; // static symmetric detune (osc B, -c/2)
 
-  // wavetable morph: base (knob) + pitch-shift (K-rate cached), the LFO
-  // offset is added per-sample below. waves_.wave_shift_ is recomputed on
-  // setParameter(WAV1/WAV2/WAV3) / setPitch(); wave_a / wave_b / wave_c are
-  // the knobs (the chord voice now has its own table, see WAV3).
-  const float wave_base_a = p.wave_a + waves_.wave_shift_;
-  const float wave_base_b = p.wave_b + waves_.wave_shift_;
-  const float wave_base_c = p.wave_c + waves_.wave_shift_;
+  // wavetable morph: base (WAV1/WAV2 knob). The pitch-shift morph is now
+  // PER-VOICE (computed from each voice's own w0 in the loop), so only the
+  // knob base is cached here; the LFO + walk morph offsets are added per-sample.
+  const float wave_base_a = p.wave_a;
+  const float wave_base_b = p.wave_b;
   if (rw_active)
   {
     // Recompute each stream's interval / tracking from its own SPDx/SMTx
@@ -183,10 +131,6 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // The knob is L-rate; cache the > 0 gate so the loop's ring-mod branch is a
   // simple const test. At 0 (default) the ring-mod is off.
   const bool rmod_active = p.ring_mix > 0.f;
-  // ---- CINT2: per-block cache (the per-sample chord2 advance is in the loop) ----
-  // chord2_gain mirrors chord_gain (the CINT2 voice shares the CHRD level).
-  // Used to gate the second chord's resolve_wave lookup (skip when silent).
-  const float chord2_gain = p.chord_level;
   // SVF: the internal 12 dB/oct low-pass is engaged when the dry/wet (svf_wet)
   // is non-zero. When svf_wet == 0 (the default) the filter is transparent
   // and its state update is skipped (regression-safe). The walk-modified
@@ -196,48 +140,84 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 
   for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
   {
-    // update random-walk deviations (advance once per sample when active).
+    // ================================================================
+    // POLYPHONIC CLUSTER: kVoiceCount notes, identical settings, shared
+    // post-stage. Per sample we (1) advance each voice's GLIDE, (2) advance
+    // its phasors (with the SHARED random-walk detune/morph/FM/jitter), (3)
+    // sum its A/B wavetable outputs, subs and ring-mod into shared accumu-
+    // lators, then (4) run the SINGLE common post-stage (folder -> saturator
+    // -> SVF -> formant -> comb -> duck -> makeup + soft-clip) on the sums.
+    // The A-H-R envelope is per-voice (each note fades in/out on its own);
+    // the duck follower is shared (one drone's low end).
+    // ================================================================
+    // ---- Per-voice GLIDE (GRIMM-style exponential portamento) ---------
+    // Each voice glides from its old pitch to a new one (glide_to) by
+    // exponentially decaying glide_dist (in 1/4096-octave units) toward 0:
+    //   d = (gl_k_ * x) >> 16;  x -= d;  snap when |x| < kGlideSnap.
+    // gl_k_ is the per-sample Q16 fraction of the way left (K-rate, from the
+    // GLIDE knob). The CURRENT pitch is computed ABSOLUTELY (not
+    // cumulatively):
+    //   vw0 = glide_to * 2^(-glide_dist / 4096)
+    // where glide_dist > 0 means "still below target, gliding UP" and
+    // glide_dist < 0 means "still above target, gliding DOWN". At
+    // glide_dist = 0, vw0 = glide_to (arrived). v.w0 is NEVER modified
+    // during the glide — it holds the target and is used once the glide
+    // completes. This avoids the cumulative-multiplication blow-up that
+    // would occur if v.w0 were scaled by 2^(x/4096) every sample (at an
+    // octave offset x/4096 = 1, so 2^1 = 2 per sample → exponential
+    // runaway in a few dozen samples).
+    //
+    // 2^f is computed as 2^int(f) * 2^frac(f) where frac ∈ [0,1) (or
+    // [-1,0) for negative f). 2^int(f) is a power-of-two float (exact).
+    // 2^frac is a 4th-order Taylor in e = frac * ln2 (|e| < 0.693 →
+    // converges, error < 1e-6). No libm needed.
+    {
+      const int32_t gk = (int32_t)gl_k_; // Q16 per-sample glide fraction
+      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+      {
+        Voice &v = voice_[vi];
+        if (v.glide_active && v.glide_dist != 0)
+        {
+          int32_t x = v.glide_dist;
+          if (gk > 0)
+          {
+            int32_t d = (int32_t)(((int64_t)gk * x) >> 16);
+            if (d == 0) d = (x > 0) ? 1 : -1; // at least a step
+            x -= d;
+            if (x > -kGlideSnap && x < kGlideSnap)
+            {
+              x = 0;
+              v.glide_active = false;
+              v.w0 = v.glide_to; // arrived: snap v.w0 to the target
+            }
+            v.glide_dist = x;
+          }
+          else
+          {
+            // GLIDE = 0 (off): snap straight to the target.
+            v.glide_active = false;
+            v.glide_dist = 0;
+            v.w0 = v.glide_to;
+          }
+        }
+        else if (v.glide_dist != 0)
+        {
+          // Not gliding (shouldn't happen) but a stale offset: clear it.
+          v.glide_dist = 0;
+        }
+      }
+    }
+
+    // ---- Shared random walk (advance ONCE per sample, shared by all voices)
     // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
     // every random-walk modulation (detune below; wavetable morph / drive /
     // fold further down). The normalized deviations (rw_.dev_a/b, in [-1,+1])
     // are multiplied by p.rw_amount (0..1, quadratic-mapped from the knob)
-    // at each point of use, so RATE = 0 means no wandering at all and
-    // RATE = 100% gives full scale. Without this factor the knobs would be
-    // binary (any non-zero RATE gave full-depth walk) — see the bug this
-    // fixes (rw_amount was only used as an on/off gate, never as a scale).
+    // at each point of use, so RATE = 0 means no wandering at all.
     const float rw_amt = p.rw_amount;
     float rw_dev_a_cents = 0.f;
     float rw_dev_b_cents = 0.f;
 
-    // Advance the chord interval fades by one sample (one-pole toward their
-    // per-block targets, see above). At cents == 0 the fade relaxes to 0 over
-    // 2 s (fade-out); at cents > 0 it relaxes to 1 over 2 s (fade-in). A
-    // re-target mid-fade is continuous, so scrubbing INT / INT2 through 0 is
-    // click-free. (The whole chord is also gated by the note A-H-R envelope
-    // eg_.env, so a note-off still kills it instantly -- these fades only
-    // shape the interval's on/off level.)
-    chord1_fade_ += (chord1_target - chord1_fade_) * chord_fade_alpha;
-    chord2_fade_ += (chord2_target - chord2_fade_) * chord_fade_alpha;
-
-    // Advance the chord pitch crossfade coefficients (one-pole toward 1, same
-    // alpha as the on/off level fade above). When a crossfade is active
-    // (cross < 0.999) the old and new phasors diverge in frequency; when it
-    // completes, sync the old phasor to the new one (same phasor + w0) so the
-    // next change-detection starts from a consistent state.
-    chord1_cross_ += (1.f - chord1_cross_) * chord_fade_alpha;
-    chord2_cross_ += (1.f - chord2_cross_) * chord_fade_alpha;
-    if (chord1_cross_ >= 0.999f)
-    {
-      chord_ = chord_new_;  // sync old → new (phasor + w0 + cents)
-      chord1_cross_ = 1.f;  // snap to exact (avoid infinite 0.001 drift)
-      chord_old_cents_ = params_.chord_cents;  // old now tracks the settled target
-    }
-    if (chord2_cross_ >= 0.999f)
-    {
-      chord2_ = chord2_new_;
-      chord2_cross_ = 1.f;
-      chord2_old_cents_ = params_.chord2_cents;
-    }
 
     if (rw_active)
     {
@@ -251,13 +231,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // Per-sample scaled Tone-stream walk values (dev_a/b change every sample).
       rw_dev_a_cents = rw_[0].dev_a * rw_amt * kRwDetuneScaleCents;
       rw_dev_b_cents = rw_[0].dev_b * rw_amt * kRwDetuneScaleCents;
-      // recompute w0_a / w0_b from the combined (static + walk) per-voice
-      // detune: A gets +c/2 (static) + rw_dev_a (walk), B gets -c/2 (static)
-      // + rw_dev_b (walk). 4th-order Taylor via Detune::w0_detuned
-      // (see osc_detune.h).
-      const float half_det = 0.5f * p.detune_cents;
-      w0_a = Detune::w0_detuned(w0, +half_det + rw_dev_a_cents);
-      w0_b = Detune::w0_detuned(w0, -half_det + rw_dev_b_cents);
+      // (w0_a / w0_b are now computed PER-VOICE in the loop below from each
+      //  voice's own w0 + the shared det_f_a_/det_f_b_ factors + these walks.)
     }
     // Timbre stream (rw_[1]): wavetable morph A/B.
     const float rw_dev_a_tables = rw_wav_active ? rw_[1].dev_a * rw_amt * kRwMorphScaleTables : 0.f;
@@ -290,238 +265,211 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // static so the low end never "flutters".
     float lvl_a = 1.f;
     float lvl_b = 1.f;
-    float lvl_c = 1.f;
     float lvl_sub = 1.f;
+    // (lvl_c was removed — the chord/interval concept is gone.)
     if (rw_active && p.rw_lvl > 0.f)
     {
       rw_[3].advance(p.rw_amount, osc_white); // ceiling for advance() stays quadratic (unchanged)
       const float swing = p.rw_lvl * p.rw_amount_lin * 2.f; // 0..2 — full depth at RATE=100% & RVLL=100%
       lvl_a   = 1.f + swing * rw_[3].dev_a;
       lvl_b   = 1.f + swing * rw_[3].dev_b;
-      lvl_c   = 1.f + swing * rw_[3].dev_c;
       lvl_sub = 1.f + swing * rw_[3].dev_d;
       if (lvl_a < 0.f) lvl_a = 0.f; else if (lvl_a > 1.f) lvl_a = 1.f;
       if (lvl_b < 0.f) lvl_b = 0.f; else if (lvl_b > 1.f) lvl_b = 1.f;
-      if (lvl_c < 0.f) lvl_c = 0.f; else if (lvl_c > 1.f) lvl_c = 1.f;
       if (lvl_sub < 0.f) lvl_sub = 0.f; else if (lvl_sub > 1.f) lvl_sub = 1.f;
     }
 
-    // phasor update (plus optional phase-FM and JIT)
-    // FM: each osc's phase is modulated by the OTHER osc's
-    // wavetable output, scaled by a CYCLES-based index. The modulation
-    // index (peak phase deviation, in cycles) is
-    //   (other_wavetable_out) * eff_index
-    // where eff_index = static (fm_a_static) + walk (dev * rw_amt * wander_depth).
-    // The wavetable output is in [-1, +1]; the index is bounded to
-    // +/-kFmMaxCents/2 cycles. The raw index is then passed through a
-    // one-pole low-pass (kFmSmoothAlpha) that softens the fast part of
-    // the modulation without touching the carrier itself.
-    // This is frequency-INDEPENDENT: the same FM knob position gives the
-    // same sideband spread on a 50 Hz drone and on a 2 kHz note.
-    // At fm=0 & rfm=0 this adds 0. (The wavetable values are read AFTER the
-    // phasor wrap below, so the modulated phasor and the wavetable sample
-    // are from the same instant.)
-    //
-    // NOTE: we read the *previous* sample's wavetable output for the
-    // modulation (a one-sample lookback) to avoid a data-dependency on the
-    // current phasor (which we are about to advance). For a drone this is
-    // inaudibly different and keeps the audio path branch-light.
-    // We use the cached previous wavetable values (prev_wav_a_ / prev_wav_b_)
-    // updated at the end of each iteration.
+    // ---- Simulator-only shape-LFO (shared, phase-coherent) ------------------
+    // On hardware lfo_ is delivered by the platform via setShapeLfo(); in the
+    // web sim we synthesize it here. All voices share this one LFO.
+#ifdef EMSCRIPTEN
+    lfo_ = lfo_sim_.process();
+#endif
+    const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
+
+    // ---- Per-voice loop: phasors, wavetables, subs, ring-mod ----------------
+    // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its
+    // own w0 (possibly gliding). The A/B detune uses the SHARED static factors
+    // (det_f_a_/det_f_b_) + the SHARED random-walk detune (rw_dev_a/b_cents);
+    // the FM index, JIT, morph and walk are all SHARED (one drone); only the
+    // phasors, FM-lookback, sub phasors, sub-2 state and A-H-R are per-voice.
+    // Accumulators feed the single common post-stage below.
+    float sum_main = 0.f;   // sum over voices of (wav_a*lvl_a + wav_b*lvl_b)
+    float sum_sub  = 0.f;   // sum over voices of the sub-octave sine
+    float sum_sub2 = 0.f;   // sum over voices of the f/4 sub-2 output
+    float sum_ring = 0.f;   // sum over voices of (wav_a * wav_b)
     {
-      // ---- Phase-FM (FM1/FM2): static index + RFM walk "breathing" ----
-      // eff_index = static (fm_a_static) + walk (dev * rw_amt * wander_depth).
-      // The static part is ALWAYS present (no RATE gate) — turning FM on gives
-      // constant sidebands immediately. The walk part (RFM) is RATE-gated and
-      // adds a slow "breathing" on top, like RDRV on SATU. The combined index
-      // is then scaled by the modulator's wavetable output (prev_wav * 0.5 is
-      // already folded into the static/wander depths above, so here we
-      // multiply by the full prev_wav in [-1,1] to get the per-sample index).
-      // One-pole (kFmSmoothAlpha) tames the fast sign-flips; the state lives in
-      // fm_smooth_a_/b_. At fm=0 & rfm=0 the
-      // eff_index is 0 and the LPF relaxes to 0 (regression-safe).
+      // Shared per-sample FM index (advance once, use for all voices).
       const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
       const float fm_b_wander = fm_b_wander ? (rw_[0].dev_a * rw_amt * fm_b_wander_depth) : 0.f;
       const float fm_a_eff = fm_a_static + fm_a_wander;  // effective index (cycles)
       const float fm_b_eff = fm_b_static + fm_b_wander;  // effective index (cycles)
-      const float fm_a_raw = prev_wav_b_ * fm_a_eff;  // modulator ([-1,1]) * index
-      const float fm_b_raw = prev_wav_a_ * fm_b_eff;  // modulator ([-1,1]) * index
-      fm_smooth_a_ += kFmSmoothAlpha * (fm_a_raw - fm_smooth_a_);
-      fm_smooth_b_ += kFmSmoothAlpha * (fm_b_raw - fm_smooth_b_);
-      // ---- JIT: random phase jitter on A/B (per-sample white() draws) ----
-      // (osc_white() - 0.5) * jit_cycles is a uniform offset in
-      // [-jit/2, +jit/2] cycles, "smearing" the carrier into a dense partial.
-      // At jit_cycles = 0 (default) both offsets are 0 (regression-safe).
-      // Each voice draws its OWN white() so A and B are not phase-locked.
-      const float jit_a = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
-      const float jit_b = jit_active ? (osc_white() - 0.5f) * p.jit_cycles : 0.f;
-      // Combined per-sample phase increment: base detuned w0 + FM (phase mod,
-      // smoothed) + JIT (random wobble). The floorf wrap below (modular,
-      // x - floorf(x)) handles the signed FM/JIT offsets, so the phasor stays
-      // in [0, 1) for any finite input (no negative-LUT-UB, see the wrap
-      // comment below).
-      phasor_a_ += w0_a + fm_smooth_a_ + jit_a;
-      phasor_b_ += w0_b + fm_smooth_b_ + jit_b;
-    }
-    // Chord phasor: advances at w0 * kScale[interval] (see osc_chord.h).
-    // No random-walk modulation — the chord voice is a stable "anchor"
-    // like SUB2, not a beating voice. The phasor ALWAYS advances (even at
-    // cents == 0) so the signal shape is continuous; the LEVEL is gated by
-    // chord1_fade_ / chord2_fade_ (see the fade comment above).
-    chord_.advance();
-    // "New" CINT phasor (target offset for the pitch crossfade). Advances at
-    // the FRESH w0 (set by chord_new_.update() in blockPrepass). When no
-    // crossfade is active, chord_new_ is synced to chord_ (identical w0),
-    // so this advance is a no-op cost-wise (one extra float add + floorf).
-    chord_new_.advance();
-    // Second chord phasor (CINT2): same behavior as chord_. The phasor
-    // always advances; chord2_gain * chord2_fade_ gates the level.
-    chord2_.advance();
-    chord2_new_.advance();
-
-    // sub-octave phasor: base rate is w0_sub_ (f/2 * 2^(sub_detune/1200)),
-    // modulated by the platform shape-LFO (±kSubLfoFmCents around w0_sub_).
-    // The LFO is applied as a per-sample detune via Detune::factor (4th-order
-    // Taylor, see osc_detune.h) — the LFO value is small (±5 cents), so the
-    // series is more than accurate enough.
-    {
-      const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-      phasor_sub_ += w0_sub_ * Detune::factor(lfo_fm_cents);
-    }
-
-    // second sub phasor: pure f/4, no LFO-FM and no fixed detune (it is a
-    // stable low-end anchor, not a beating voice). Advances exactly at
-    // w0/4 (w0_sub2_ is cached in update_w0_sub2()).
-    phasor_sub2_ += w0_sub2_;
-
-    // wrap phasors into [0, 1).
-    //
-    // Use a modular floor (x - floorf(x)) instead of a single subtract.
-    // The single-subtract form (if (p >= 1) p -= 1) only handles the
-    // case where the per-sample increment is in (0, 1) and the phasor
-    // starts in [0, 1). FM (FM_A / FM_B) adds a signed per-sample
-    // phase offset of up to +/-kFmMaxCents/2 cycles (see the FM branch
-    // above: prev_wav * eff_index), so when the previous
-    // sample's wavetable output has the opposite sign to the index
-    // the combined increment (w0_a + fm_a_idx) can be NEGATIVE,
-    // pushing phasor_a_ below 0. The single subtract never corrects a
-    // negative phasor, so it would feed a value < 0 into osc_wave_scanf()
-    // whose `(uint32_t)x` cast is undefined behavior for negative floats
-    // (out-of-bounds LUT read -> garbage/NaN -> NaN-lock in the SVF /
-    // FM feedback loop). floorf normalizes to [0, 1) for ANY finite
-    // input (positive, negative, or > 1), so the LUT is always queried
-    // with a valid phase. Cost: one fast_floorf per phasor per sample (4 total);
-    // it is a no-op when the phasor is already in [0, 1) (the common case at
-    // FM = 0), so the stock sound is bit-identical. fast_floorf() (not libm
-    // floorf) keeps the unit free of unresolved libm dynamic symbols.
-    phasor_a_   -= fast_floorf(phasor_a_);
-    phasor_b_   -= fast_floorf(phasor_b_);
-    phasor_sub_ -= fast_floorf(phasor_sub_);
-    phasor_sub2_-= fast_floorf(phasor_sub2_);
-
-    // Simulator-only: synthesize the shape-LFO at audio rate (phase-coherent
-    // sine). On hardware lfo_ is delivered by the platform via setShapeLfo()
-    // and this line is compiled out, so the two paths share the same
-    // morph code below. See osc_lfo_sim.h for the synthesizer.
-#ifdef EMSCRIPTEN
-    lfo_ = lfo_sim_.process();
-#endif
-
-    // generate wavetable samples in -1..1. Each voice's table index is the
-    // base position (knob + pitch-shift) plus the LFO morph offset, so the
-    // timbre "breathes" across the wavetable. WaveTable::resolve_wave() crossfades the
-    // fractional part between adjacent tables, so the morph glides smoothly.
-    const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
-    // Wavetable scan positions: base (WAV1/WAV2 knob) + LFO morph (platform
-    // shape-LFO) + random-walk morph (RW_WAV knob, via rw_dev_a/b_tables).
-    // The walk morph is added so each voice wanders through the 91 Korg
-    // wavetables around its knob position — an unpredictable, organic
-    // timbre drift that the static LFO sweep alone cannot produce.
-    const float wav_a_pos = wave_base_a + lfo_morph + rw_dev_a_tables;
-    const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables;
-    const float wav_a = WaveTable::resolve_wave(wav_a_pos, phasor_a_);
-    const float wav_b = WaveTable::resolve_wave(wav_b_pos, phasor_b_);
-    // Cache this sample's wavetable outputs for the NEXT sample's FM
-    // modulation (one-sample lookback, see the FM branch in the phasor
-    // update above). When FM is off these writes are the only cost.
-    prev_wav_a_ = wav_a;
-    prev_wav_b_ = wav_b;
-
-    // Chord voice: third oscillator at a selectable interval above the base
-    // (CINT knob: OFF/5TH/OCT/O+5/M3). Uses the WAV1 (osc A) wavetable so
-    // it blends with the main voice. Computed only when both the interval
-    // is active (chord_active) and the level is non-zero (chord_gain > 0)
-    // to keep the default path (CHORD = 0 or CINT = OFF) free of the extra
-    // wavetable lookup. See osc_chord.h for the interval table.
-    // Chord pitch crossfade: when a cents change is in flight (cross < 0.999)
-    // TWO wavetable lookups are blended (old-offset phasor × (1-cross) +
-    // new-offset phasor × cross). When stable (cross >= 0.999) only the new
-    // phasor is read — one lookup, identical to the pre-crossfade code path.
-    // The AM blend is in the DOMAIN BEFORE the folder/saturator, so the
-    // saturation is shared (the blended signal drives the same saturator).
-    float wav_c = 0.f;
-    if ((chord_gain * chord1_fade_) > 0.f)
-    {
-      const float wave_idx = wave_base_c + lfo_morph;
-      if (chord1_cross_ < 0.999f)
+      // Per-voice JIT: each voice draws its OWN white() so the notes are not
+      // phase-locked (a shared draw would beat them together). (Plain arrays,
+      // not const — they are written inside the loop below.)
+      float jit_a[kVoiceCount];
+      float jit_b[kVoiceCount];
+      if (jit_active)
       {
-        const float wav_old = WaveTable::resolve_wave(wave_idx, chord_.phasor);
-        const float wav_new = WaveTable::resolve_wave(wave_idx, chord_new_.phasor);
-        wav_c = wav_old * (1.f - chord1_cross_) + wav_new * chord1_cross_;
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        {
+          jit_a[vi] = (osc_white() - 0.5f) * p.jit_cycles;
+          jit_b[vi] = (osc_white() - 0.5f) * p.jit_cycles;
+        }
       }
       else
       {
-        wav_c = WaveTable::resolve_wave(wave_idx, chord_new_.phasor);
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        {
+          jit_a[vi] = 0.f;
+          jit_b[vi] = 0.f;
+        }
+      }
+
+      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+      {
+        Voice &v = voice_[vi];
+        // Skip entirely silent voices (no note latched, envelope at 0): their
+        // phasors need not advance and they contribute nothing. This keeps an
+        // all-off cluster at near-zero cost (regression: 0 notes = silent).
+        if (!v.active && v.eg.phase == AhEnvelope::kIdle)
+          continue;
+
+        // Current base phase increment: if gliding, compute ABSOLUTELY as
+        // glide_to * 2^(-glide_dist/4096); otherwise use v.w0 (the target,
+        // which equals glide_to once the glide completes).
+        float vw0;
+        if (v.glide_active && v.glide_dist != 0)
+        {
+          // f = -glide_dist / 4096  (negative when glide_dist > 0 → gliding UP)
+          // Clamp to [-12, 12] (±12 semitones) to stay within the kTwoPow LUT
+          // range. A larger interval (beyond an octave of offset) clamps so a
+          // very wide glide "runs out" at the extremes instead of indexing the
+          // LUT out of bounds (which would corrupt vw0 -> silence / garbage).
+          float f = -(float)v.glide_dist / 4096.0f;
+          if (f > 12.0f) f = 12.0f;
+          else if (f < -12.0f) f = -12.0f;
+          // Split into integer + fractional: 2^f = 2^int(f) * 2^frac(f)
+          const int32_t fi = (int32_t)f; // truncates toward 0
+          const float frac = f - (float)fi; // ∈ (-1, 1)
+          // 2^frac via Taylor: e = frac * ln2, |e| < 0.693
+          const float ln2 = 0.6931471805599453f;
+          const float e = frac * ln2;
+          const float e2 = e * e;
+          const float two_frac = 1.f + e + e2 * 0.5f + (e2 * e) * (1.f / 6.f)
+                                + (e2 * e2) * (1.f / 24.f); // 4th-order
+          // 2^fi: exact power-of-two from the namespace-scope kTwoPow LUT
+          // (osc_constants.h). fi ∈ [-12, 12] after the clamp above, so
+          // (fi + 12) is always a valid index.
+          const int idx = (fi >= -12 && fi <= 12) ? (fi + 12) : ((fi > 0) ? 24 : 0);
+          vw0 = v.glide_to * kTwoPow[idx] * two_frac;
+        }
+        else
+        {
+          vw0 = v.w0; // not gliding (or glide just completed → v.w0 = glide_to)
+        }
+
+        // Per-voice detuned A/B increments. Walk active: combine static + walk
+        // cents in one Taylor (shared by all voices); walk off: cached static
+        // factors det_f_a_/det_f_b_ (0 Taylor cost).
+        float w0_a, w0_b;
+        if (rw_active)
+        {
+          const float half_det = 0.5f * p.detune_cents;
+          w0_a = Detune::w0_detuned(vw0, +half_det + rw_dev_a_cents);
+          w0_b = Detune::w0_detuned(vw0, -half_det + rw_dev_b_cents);
+        }
+        else
+        {
+          w0_a = vw0 * det_f_a_;
+          w0_b = vw0 * det_f_b_;
+        }
+
+        // ---- Phase-FM (shared index, per-voice lookback state) --------------
+        const float fm_a_raw = v.prev_wav_b * fm_a_eff;
+        const float fm_b_raw = v.prev_wav_a * fm_b_eff;
+        v.fm_smooth_a += kFmSmoothAlpha * (fm_a_raw - v.fm_smooth_a);
+        v.fm_smooth_b += kFmSmoothAlpha * (fm_b_raw - v.fm_smooth_b);
+
+        // ---- Advance A/B phasors (+FM smoothed +JIT), wrap to [0,1) --------
+        // (The modular fast_floorf wrap handles the signed FM/JIT offsets so
+        //  the phasor stays in [0,1) for any finite input — see the original
+        //  wrap comment; one fast_floorf per phasor per sample.)
+        v.ph_a += w0_a + v.fm_smooth_a + jit_a[vi];
+        v.ph_b += w0_b + v.fm_smooth_b + jit_b[vi];
+        v.ph_a -= fast_floorf(v.ph_a);
+        v.ph_b -= fast_floorf(v.ph_b);
+
+        // ---- Sub-octave (f/2) phasor: shared LFO-FM detune -----------------
+        {
+          const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
+          v.ph_sub += vw0 * kSubW0Scale * Detune::factor(lfo_fm_cents);
+          v.ph_sub -= fast_floorf(v.ph_sub);
+        }
+        // ---- Sub-2 (f/4) phasor: stable low-end anchor, no LFO-FM ----------
+        v.ph_sub2 += vw0 * 0.25f;
+        v.ph_sub2 -= fast_floorf(v.ph_sub2);
+
+        // ---- Wavetable samples (per-voice morph shift from its own w0) ------
+        const float pitch_n = (vw0 * WaveTable::kSampleRate) / WaveTable::kRefHz;
+        const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? WaveTable::kWaveMorphShift : (WaveTable::kWaveMorphShift * pitch_n);
+        const float wav_a_pos = wave_base_a + lfo_morph + rw_dev_a_tables + shift;
+        const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables + shift;
+        const float wav_a = WaveTable::resolve_wave(wav_a_pos, v.ph_a);
+        const float wav_b = WaveTable::resolve_wave(wav_b_pos, v.ph_b);
+        v.prev_wav_a = wav_a; // FM lookback cache (next sample's modulator)
+        v.prev_wav_b = wav_b;
+
+        // ---- Accumulate the common-post-stage inputs (per-voice Breath lvl) --
+        // PER-VOICE ENVELOPE: each voice is gated by its OWN A-H-R envelope
+        // (v.eg.env). This is what makes the polyphonic cluster work: a new
+        // note (env 0→1 over 2 s) ADDS to the cluster instead of dragging the
+        // whole thing through a common MAX that dips on the 1→2 note boundary.
+        // (The old common env_max = max over all voices read the cluster's
+        // level as its loudest note, so the instant a 2nd note started from
+        // env=0 the shared gain could momentarily collapse -> "silence" on the
+        // 2nd note, especially with GLIDE>0 where the new note's glide and the
+        // envelope reset coincide. Per-voice gating removes that shared-dip.)
+        const float eg = v.eg.env;
+        sum_main += (wav_a * lvl_a + wav_b * lvl_b) * eg;
+        sum_sub  += osc_sinf(v.ph_sub) * eg;
+        sum_ring += (wav_a * wav_b) * eg;
+        // Sub-2: per-voice Sub2Voice state (LPF + gate); level = this voice's
+        // envelope (the common post-stage scales by p.sub2_level * lvl_sub).
+        sum_sub2 += v.sub2.process(v.ph_sub2, vw0, eg);
       }
     }
-    // Second chord voice (CINT2): same wavetable (WAV3) + LFO morph as the
-    // first chord, but at a different interval (chord2_.phasor). Gated by
-    // chord2_active (interval > 0) AND chord2_gain > 0 (CHRD > 0) to keep the
-    // default path (CINT2 = 0 or CHRD = 0) free of the extra lookup. Both
-    // intervals share the CHRD level (chord_gain) and lvl_c (Breath stream
-    // dev_c) in the final mix, so they breathe in sync. Each interval then
-    // runs its OWN folder+saturator (CINT: CHSAT/CHFLD, CINT2: CHSAT2/CHFLD2).
-    // Same pitch crossfade as CINT (see above).
-    float wav_c2 = 0.f;
-    if ((chord2_gain * chord2_fade_) > 0.f)
-    {
-      const float wave_idx = wave_base_c + lfo_morph;
-      if (chord2_cross_ < 0.999f)
-      {
-        const float wav_old = WaveTable::resolve_wave(wave_idx, chord2_.phasor);
-        const float wav_new = WaveTable::resolve_wave(wave_idx, chord2_new_.phasor);
-        wav_c2 = wav_old * (1.f - chord2_cross_) + wav_new * chord2_cross_;
-      }
-      else
-      {
-        wav_c2 = WaveTable::resolve_wave(wave_idx, chord2_new_.phasor);
-      }
-    }
 
-    // sub-octave sine in -1..1 (LUT lookup, ~4 VFP ops)
-    const float sub = osc_sinf(phasor_sub_);
-
-    // ---- second sub (f/4): clean sine -> very soft saturator -> LPF -> gate ----
-    // Only computed when the voice is actually audible (level > 0) to keep
-    // the default path (SUB2 = 0) free of this cost.
-    // See osc_sub2.h for the DSP details (sine -> soft saturator -> LPF -> gate).
-    const float sub2 = sub2_.process(phasor_sub2_, w0, sub2_level);
-
-    // mix the two main voices (A+B) equally, then run through the pre-drive
-    // wavefolder (FOLD knob) and the asymmetric soft-clip saturator
-    // (SATU/ASYM knobs). See osc_saturator.h for the DSP details.
+    // A+B mix (the shared post-stage input); per-voice Breath levels are
+    // already folded into sum_main.
     //
-    // The chord voice is NOT in this mix: it is mixed in parallel in the
-    // final mix below, through its OWN folder+saturator pass (same SATU/ASYM/
-    // FOLD knobs), so the MAIN level knob can duck only the A+B main tone —
-    // MAIN=0 silences A+B while CHORD (and the subs) keep sounding. Because
-    // the chord has its own drive, it keeps the unit's timbre "color" (the
-    // old double-normalized bypass path read far too quiet and "dry").
-    const float mix = kMixOsc * (wav_a * lvl_a + wav_b * lvl_b);
-    // (The static DETU knob is applied per-voice above, via w0_a / w0_b —
-    //  not post-mix: A and B are detuned in opposite directions around the
-    //  base note, producing a per-voice phase drift that sounds ~4x
-    //  stronger than an equivalent post-mix sum detune.)
+    // POLYPHONIC LOUDNESS COMPENSATION (Variant A): every summed voice signal
+    // (sum_main / sum_sub / sum_sub2 / sum_ring) grows linearly with the number
+    // of sounding notes, but the downstream kMix* budget (kMixOsc = 0.5, ...)
+    // was designed for ONE note. Without compensation N notes add coherently
+    // (worst case ~x4) and, fed through fold/saturate at the same FOLD/SATU,
+    // clip and "shout" (fastertanh2f pegs at +1). So we scale each summed
+    // signal by env_comp_ ~= 1/sqrt(env_sum): N=1 -> 1 (mono EXACTLY
+    // unchanged), N=4 -> ~0.5 (one note's level back). This is applied BEFORE
+    // the shared fold/saturator/SVF so the shared post-stage sees a
+    // single-note-magnitude signal and the whole cluster reads as one DRONE
+    // at the intended loudness. (env_comp_ is the smoothed 1/sqrt(N) from
+    // the envelope-advance block above, so the 2 s attack/release don't pump
+    // it per sample.)
+    const float mix  = kMixOsc * (sum_main * env_comp_);
+    // RMOD: A*B ring-mod DERIVED voice (summed per-voice), MAIN-ducked.
+    const float ring_out = rmod_active ? (sum_ring * env_comp_) * p.ring_mix * p.main_level : 0.f;
+    // Sub-octave / sub-2 (shared sums; scaled by their levels in the mix).
+    const float sub  = sum_sub  * env_comp_;
+    const float sub2 = sum_sub2 * env_comp_;
+
+    // The COMMON post-stage input is `mix` (the per-voice A+B sum, computed in
+    // the loop above as kMixOsc * sum_main). It is then run through the SINGLE
+    // shared pre-drive wavefolder (FOLD knob) and the asymmetric soft-clip
+    // saturator (SATU/ASYM knobs) — one instance for the whole cluster.
+    // (The static DETU knob is applied per-voice above via det_f_a_/det_f_b_,
+    //  not post-mix: A and B are detuned in opposite directions around each
+    //  voice's note, so every note keeps its own beating A/B pair.)
     // Wavefolder depth: FOLD knob modulated by random-walk fold (RW_FLD knob).
     // Multiplicative: eff_fold = p.fold_depth * (1 + rw_fold_mod), where
     // rw_fold_mod = dev_b * p.rw_fld (normalized -1..1 * 0..1 = -1..1).
@@ -540,7 +488,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // (FOLD2 — the second cascaded wavefolder — was removed: the A+B chain
     //  now runs a single wavefolder (FOLD) before the saturator.)
     const float folded = Saturator::fold(mix, eff_fold);
-    const float y = Saturator::saturate(folded, eff_drive_clamped, p.asym);
+    // Fold kMixOsc into the saturator input (mix already carries it): the
+    // shared post-stage output is kMixOsc * (folder/saturator/SVF) * main, so
+    // y = kMixOsc * saturate(...). One multiply here instead of in the final mix.
+    const float y = kMixOsc * Saturator::saturate(folded, eff_drive_clamped, p.asym);
 
     // ---- internal SVF (12 dB/oct low-pass, post-saturator) ----
     // When the FCUT dry/wet (svf_wet) is non-zero, the saturator output is
@@ -629,9 +580,46 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // IIR comb: y = in + fb * delayed (one feedback tap).
       y_filt = y_filt + p.comb_fb * yd;
     }
-    // ---- advance the A-H-R envelope by one sample ----
-    // (per-sample so the 2 s phases are sample-accurate at any block size)
-    eg_.advance(alpha_a, alpha_r);
+    // ---- advance the A-H-R envelopes by one sample (PER-VOICE) -------------
+    // Each cluster note has its OWN envelope (attack when its note starts,
+    // release when it is toggled off / stolen / allNoteOff), so the notes
+    // fade in and out independently — the heart of the cluster. (Per-sample
+    // so the 2 s phases are sample-accurate at any block size.)
+    //
+    // While advancing, also build env_sum_ : the sum of the per-voice
+    // envelope levels (0..kVoiceCount). This is how "many" notes are sounding;
+    // it feeds the POLYPHONIC LOUDNESS COMPENSATION (env_comp_ = 1/sqrt(N),
+    // a per-sample one-pole smooth below) that scales the summed voice signals
+    // so N notes read at ~one note's loudness instead of N times louder.
+    // (The per-voice envelope itself is applied in the accumulation loop above,
+    // NOT here: each voice is gated by its own v.eg.env.)
+    {
+      float s = 0.f;
+      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+      {
+        Voice &v = voice_[vi];
+        v.eg.advance(alpha_a, alpha_r);
+        s += v.eg.env;
+      }
+      env_sum_ = s;
+    }
+    // One-pole follow the cluster loudness (1/sqrt(N)) so the makeup gain
+    // moves smoothly with note count / the 2 s envelope, not per-sample.
+    // Target = 1/sqrt(env_sum) with env_sum floored at 1 (a single note is
+    // never attenuated; silence -> 1 = no effect on the zero signal).
+    {
+      const float n = (env_sum_ > 1.f) ? env_sum_ : 1.f;
+      // 1/sqrt(n) via 1/sqrt(1 + (n-1)): with t = n - 1 in [0, 3], use
+      //   (1 + t)^-1/2 ~= 1 - t/2 + 3 t^2/8 - 5 t^3/16 + 35 t^4/128
+      // (binomial series, |t|<=3 converges and at t=3 the 5th term is ~0.02 of
+      //  the value — negligible against the tanh soft-clip headroom). For
+      // n <= 1 (t<=0) this is exact in the [0,1] region (t=0 -> 1).
+      const float t = n - 1.f;
+      const float target =
+          1.f + t * (-0.5f) + (t * t) * (3.f / 8.f)
+              + (t * t * t) * (-5.f / 16.f) + (t * t * t * t) * (35.f / 128.f);
+      env_comp_ += kClusterCompAlpha * (target - env_comp_);
+    }
 
     // scale output to a musical level (saturator max output is ~0.76)
     // and apply the A-H-R envelope level.
@@ -654,50 +642,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // defaults to 0 (off). A hard clip prevents digital overflow when all
     // branches peak simultaneously.
     //
-    // Each chord interval through its OWN folder + saturator (stateless — same
-    // functions as the A+B path, but driven by the interval's OWN knobs: CINT
-    // uses CHSAT/CHFLD, CINT2 uses CHSAT2/CHFLD2, so both are independent of
-    // the A+B SATU/FOLD and of each other).
-    // chord_gain is linear (p.chord_level, 0..1); lvl_c is the per-sample
-    // LFO level modulation. ASYM is SHARED (p.asym, same as A+B) per design.
-    //
-    // The chord's drive/fold are clamped exactly like the A+B path (no
-    // random-walk modulation — RW_DRV/RW_FLD affect only the A+B voice).
-    float chord_drive_clamped = p.chord_drive;
-    if (chord_drive_clamped < 0.f) chord_drive_clamped = 0.f;
-    else if (chord_drive_clamped > kSatuMax) chord_drive_clamped = kSatuMax;
-    float chord_fold_clamped = p.chord_fold;
-    if (chord_fold_clamped < 0.f) chord_fold_clamped = 0.f;
-    else if (chord_fold_clamped > 1.f) chord_fold_clamped = 1.f;
-    // CINT2's OWN drive/fold (CHSAT2/CHFLD2), clamped exactly like the CINT
-    // voice's. At the defaults they equal chord_drive_clamped / chord_fold_clamped,
-    // so the CINT2 branch reduces to the CINT branch's gain structure.
-    float chord2_drive_clamped = p.chord2_drive;
-    if (chord2_drive_clamped < 0.f) chord2_drive_clamped = 0.f;
-    else if (chord2_drive_clamped > kSatuMax) chord2_drive_clamped = kSatuMax;
-    float chord2_fold_clamped = p.chord2_fold;
-    if (chord2_fold_clamped < 0.f) chord2_fold_clamped = 0.f;
-    else if (chord2_fold_clamped > 1.f) chord2_fold_clamped = 1.f;
-    // The two chord intervals each run their OWN folder+saturator pass now:
-    // CINT through (CHSAT/CHFLD) and CINT2 through (CHSAT2/CHFLD2). They still
-    // share the CHRD level (chord_gain) and the Breath stream's lvl_c (so they
-    // breathe in sync — the chord is one object in level). ASYM is shared with
-    // everything. Summing AFTER the saturator means each interval is driven at
-    // its OWN level, so the higher interval (CINT2) can be softened/filtered
-    // independently of the lower one. The interval's ON/OFF level (INT/INT2 ==
-    // 0 vs > 0) is the chord1_fade_ / chord2_fade_ one-pole (2 s, see above),
-    // so switching an interval fades it in/out instead of clicking. At
-    // CINT2 = 0 (default off) or CHRD = 0, wav_c2 = 0 and the CINT2 branch is
-    // 0 (regression-safe).
-    const float c1 = Saturator::saturate(
-        Saturator::fold(wav_c * chord_gain * lvl_c * chord1_fade_, chord_fold_clamped),
-        chord_drive_clamped, p.asym);
-    const float c2 = (chord2_gain > 0.f && chord2_fade_ > 0.f)
-        ? Saturator::saturate(
-              Saturator::fold(wav_c2 * chord_gain * lvl_c * chord2_fade_, chord2_fold_clamped),
-              chord2_drive_clamped, p.asym)
-        : 0.f;
-    const float chord_sat = c1 + c2;
+    // (chord_drive_clamped / chord_fold_clamped / chord_sat were removed — the
+    //  chord/interval concept is gone.)
     // ---- RMOD: A*B ring-mod DERIVED voice (NOT in A+B, but ducks with it) ----
     // (wav_a * wav_b) * ring_mix is a spectral "difference" (the two
     // wavetables' partials shifted by +/- each other's frequencies) — it
@@ -715,7 +661,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // "muted" voice. (FM A / FM B themselves modulate the A/B phasors, not
     // levels: they reshape wav_a/wav_b and hence the ring spectrum, but
     // cannot raise its amplitude — |wav_a * wav_b| <= 1 always.)
-    const float ring_out = rmod_active ? (wav_a * wav_b) * p.ring_mix * p.main_level : 0.f;
+    // (ring_out is computed in the per-voice loop above from the summed
+    //  per-voice ring-mod: rmod_active ? sum_ring * p.ring_mix * p.main_level.)
     // Final output: the summed mix is lifted by the makeup gain kOutDrive
     // (~+8 dB) and passed through the SAME tanh soft-clip the reference
     // oscillators use (kOutSat = 1.4125, see platform/nts-1_mkii/waves/osc.h).
@@ -747,19 +694,26 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // the same logic the MAIN knob applies (see the RMOD comment above).
     {
       // Follower source: the (level-scaled) sub-voice sum, i.e. the low end
-      // that actually reaches the mix (sub*s SUB1 * lvl_sub, sub2*s SUB2).
-      const float sub_src = sub * p.sub_level * lvl_sub + sub2 * sub2_level;
+      // that actually reaches the mix (sub * SUB1, sub2 * SUB2).
+      const float sub_src = sub * p.sub_level + sub2 * p.sub2_level;
       const float inst = (sub_src < 0.f) ? -sub_src : sub_src;
       env_follower_ += (inst - env_follower_) * duck_alpha_;
       float duck_gain = 1.f - kDuckConstant * env_follower_ * kDuckScale;
       if (duck_gain < kDuckFloor) duck_gain = kDuckFloor;
       if (duck_gain > 1.f) duck_gain = 1.f;
-      // Final output: the ducked main+ring cluster + the UNTOUCHED sub branches.
-      const float raw = (y_filt * kMixOsc * p.main_level * duck_gain
-                       + chord_sat * kMixChordDirect
-                       + sub * p.sub_level * lvl_sub * kMixSub
-                       + sub2 * sub2_level * kMixSub2
-                       + ring_out * kMixRing * duck_gain) * eg_.env * kOutDrive;
+      // The COMMON post-stage output (main + ring, ducked by the shared low end)
+      // is shared by all voices. The A-H-R is now PER-VOICE: each voice was
+      // already gated by its own envelope (v.eg.env) in the accumulation loop
+      // above, so there is NO common output envelope here. N simultaneous notes
+      // each fade in/out on their own; the cluster reads as one blended drone
+      // whose level is the SUM of the individually-enveloped voices (each
+      // already scaled by env_comp_ = 1/sqrt(env_sum) for polyphonic makeup).
+      // A single note -> env = its own level (mono exact); N notes -> each
+      // note contributes its own envelope, no shared-dip on the 1→2 boundary.
+      const float raw = (y_filt * p.main_level * duck_gain
+                       + sub * p.sub_level * kMixSub
+                       + sub2 * p.sub2_level * kMixSub2
+                       + ring_out * kMixRing * duck_gain) * kOutDrive;
       out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
     }
   }
@@ -811,65 +765,10 @@ inline void Osc::blockPrepass(uint32_t frames)
   // Osc::rndMorphStart / rndMorphTick in osc.h.
   rndMorphTick(frames);
 
-  // ---- Chord interval pitch crossfade ---------------------------------------
-  // NOTE: the crossfade is started EXCLUSIVELY by apply_edit_param(CHRD_INT /
-  // CINT2) -- the single path every interval change takes (manual slider edit,
-  // Rnd re-roll, and the Rnd morph all funnel through it). It resets the "new"
-  // phasor, sets chord_old_cents_ to the pre-change cents, and starts the blend
-  // from 0. The per-sample loop above advances chord1_cross_ / chord2_cross_
-  // toward 1 (2 s one-pole) and syncs the old phasor when the fade completes.
-  // There is NO separate change-detection here: a second detector would race
-  // with apply_edit_param and re-trigger / shorten the crossfade.
+  // (chord interval pitch crossfade removed — the chord/interval concept is gone.)
 
-  // ---- Pitch glide (portamento) ---------------------------------------------
-  // If a note change is in flight, advance the base phase increment LINEARLY
-  // from glide_from_ toward glide_to_ and refresh every derived voice (A/B
-  // detuned pair, sub-1, sub-2, chord, chord-2, wavetable morph position) so
-  // the WHOLE sound slides in pitch together. Runs per sample while active so
-  // the 2 s glide is sample-accurate at any block size. When it completes, w0_
-  // snaps exactly to the target and the derived voices settle to their final
-  // values; the glide is then disarmed so the rest of the block (and every
-  // later block) uses the plain cached path with zero extra work.
-  //
-  // Note: this runs BEFORE the params_ / w0_ caches below, so the block picks
-  // up the (possibly gliding) w0_ immediately. A re-target from setPitch()
-  // (mid-glide) is picked up on the next block (K-rate -> audio thread), which
-  // is the natural ~2.9 ms latency of every parameter in this unit.
-  if (glide_active_)
-  {
-    const uint32_t elapsed = glide_elapsed_ + frames;
-    if (elapsed >= kGlideSamples)
-    {
-      w0_ = glide_to_; // snap to the target
-      recalc_pitch_derived();
-      glide_active_ = false;
-      glide_elapsed_ = 0;
-    }
-    else
-    {
-      glide_elapsed_ = elapsed;
-      const float t = (float)elapsed / (float)kGlideSamples; // 0..1, linear
-      w0_ = glide_from_ + (glide_to_ - glide_from_) * t;
-      // Use the FRESH params_ for this frame: if a K-rate edit (CINT / CINT2 /
-      // DETUNE / WAV*) landed in the same block it already updated params_ on
-      // the worklet thread before this sample, so reading it here (not the
-      // stale `p` cache built below) avoids a one-frame stale derived voice.
-      {
-        const Params p = params_;
-        const float w = w0_;
-        update_w0_det();
-        // OLD phasors track chord_old_cents_ (the pre-change cents during an
-        // active crossfade) so the glide does not destroy the fade; NEW phasors
-        // track params_.chord*_cents (the target). Identical when no fade is
-        // active (chord_old_cents_ == params_.chord*_cents).
-        chord_.update(w, chord_old_cents_);
-        chord_new_.update(w, p.chord_cents);
-        chord2_.update(w, chord2_old_cents_);
-        chord2_new_.update(w, p.chord2_cents);
-        update_w0_sub();
-        update_w0_sub2();
-        waves_.update(w);
-      }
-    }
-  }
+  // (The single-note LINEAR pitch glide was removed in the polyphonic build.
+  //  Each cluster voice now glides INDEPENDENTLY (GRIMM-style exponential) in
+  //  the per-sample loop of process() — see the "Per-voice GLIDE" block there.
+  //  blockPrepass no longer advances any glide.)
 }

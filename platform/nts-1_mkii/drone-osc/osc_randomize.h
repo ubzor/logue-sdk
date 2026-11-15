@@ -84,53 +84,8 @@ inline int32_t Osc::rnd_int(uint32_t count) const
   return (int32_t)(s % count);   // [0, count-1]
 }
 
-// Discrete consonant chord intervals (cents) CINT / CINT2 are randomized over.
-// Mirrors CINT_SET in websim/osc.html exactly (same values, same order).
-// constexpr so it inlines into cint_raw() with no rodata / no static init.
-static constexpr int32_t kRndCintSet[9] = {0, 400, 500, 700, 900, 1000, 1200, 1500, 1900};
-static constexpr uint32_t kRndCintCount = 9;
-
-// Minimum separation in RAW (0..1023) between the two NON-zero chord intervals
-// (CINT / CINT2) after a re-roll. 94 raw ≈ 175 cents (175 * 1023 / 1900). If
-// both intervals land within this window they sound like one beating note; the
-// randomizer re-draws the second. A 0 (unison) on either side is allowed.
-static constexpr int32_t kRndCintMinSepRaw = 94;
-
-// Enforce minimum separation between CINT (idx 17) / CINT2 (idx 30) in `target`
-// after a re-roll. Works in raw domain (no float conversion). If both are
-// non-zero and |CINT-CINT2| < kRndCintMinSepRaw, re-draw CINT2 from
-// kRndCintSet (non-zero, far enough from CINT) until it fits (at most 9 tries,
-// then accept the last draw -- a small step is better than no step). Audio-thread
-// only (uses rnd_int / osc_rand). ~40 B in the binary.
-inline void Osc::ensure_cint_separation(int32_t* target)
-{
-  const int32_t a = target[17]; // CINT raw
-  int32_t b = target[30];       // CINT2 raw
-  if (a == 0 || b == 0)
-    return; // unison: no second voice to separate from
-  int32_t d = a - b;
-  if (d < 0)
-    d = -d;
-  if (d >= kRndCintMinSepRaw)
-    return; // already separated
-  // Too close: re-draw CINT2 until it's far enough from CINT.
-  for (uint32_t t = 0; t < 9U; ++t)
-  {
-    const int32_t cand = kRndCintSet[rnd_int(kRndCintCount)];
-    if (cand == 0)
-      continue; // skip unison: we need a non-zero second voice
-    int32_t dd = a - cand;
-    if (dd < 0)
-      dd = -dd;
-    if (dd >= kRndCintMinSepRaw)
-    {
-      target[30] = cand;
-      return;
-    }
-    b = cand; // keep the last draw as fallback
-  }
-  target[30] = b;
-}
+// (CINT/CINT2 chord intervals and ensure_cint_separation were removed —
+//  the chord/interval concept is gone.)
 
 // raw for a WAV table index (0..kWavesTotal-1). Mirrors the sim's
 // Math.round(index * 1023 / 90). (kWavesTotal-1 == 90, a power-free divisor.)
@@ -138,13 +93,7 @@ static inline int32_t drone_wav_raw(int32_t index)
 {
   return (int32_t)((float)index * (float)kRawMax / (float)(WaveTable::kWavesTotal - 1) + 0.5f);
 }
-// raw for a cent value (0..ChordVoice::kMaxCents == 1900). Mirrors the sim's
-// Math.round(cents * 1023 / 1900).
-static inline int32_t drone_cents_raw(int32_t cents)
-{
-  return (int32_t)((float)cents * (float)kRawMax / ChordVoice::kMaxCents + 0.5f);
-}
-
+// (drone_cents_raw was removed — the chord/interval concept is gone.)
 
 // ---- Shared "safe windows" (audition-friendly random ranges) -----------------
 // The single source of truth for the raw 0..1023 range each edit parameter is
@@ -164,8 +113,7 @@ static inline int32_t drone_cents_raw(int32_t cents)
 static constexpr int32_t kRndFullRange = 1023; // full 0..1023 window ceiling
 static constexpr int32_t kRndWavMax     = (int32_t)(WaveTable::kWavesTotal - 1); // 90
 static constexpr int32_t kRndWavDiv     = (int32_t)(WaveTable::kWavesTotal - 1); // 90
-static constexpr int32_t kRndCentMax    = (int32_t)ChordVoice::kMaxCents; // 1900
-static constexpr int32_t kRndCentDiv    = (int32_t)ChordVoice::kMaxCents; // 1900
+// (kRndCentMax / kRndCentDiv were removed — the chord/interval concept is gone.)
 
 // The safe window for one edit parameter. Named struct (C++11-safe: an
 // anonymous struct in a function signature is ill-formed in C++11).
@@ -196,27 +144,27 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 10: w.kind=0; w.lo=136;  w.hi=819;  w.div=0; break; // SAT   40..240
     case 11: w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // ASYM  +/-50%
     case 12: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // FLD   0..60%
-    case 16: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CHRD  0..60%
-    case 17: w.kind=2; w.lo=0;    w.hi=0;    w.div=kRndCentDiv; break; // INT  consonant interval
-    case 18: w.kind=0; w.lo=563;  w.hi=1023; w.div=0; break; // MAIN  55..100%
-    case 22: w.kind=0; w.lo=740;  w.hi=1023; w.div=0; break; // CUT   1 kHz..11 kHz
-    case 23: w.kind=0; w.lo=0;    w.hi=669;  w.div=0; break; // RES   0.5..1.8 Q
-    case 25: w.kind=0; w.lo=204;  w.hi=818;  w.div=0; break; // BRT   20..80% breath
-    case 28: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CH2D  0..60% chord drive
-    case 29: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CFLD  0..50% chord fold
-    case 30: w.kind=2; w.lo=0;    w.hi=0;    w.div=kRndCentDiv; break; // INT2 consonant interval
-    case 31: w.kind=0; w.lo=0;    w.hi=153;  w.div=0; break; // JIT   0..15% smear
-    case 32: w.kind=0; w.lo=0;    w.hi=256;  w.div=0; break; // RMOD  0..25% ring
-    case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM1   0..30% color
-    case 34: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM2   0..30% color
-    case 35: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMAB  0..50% FM breath
-    case 36: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMBB  0..50% FM breath
-    case 37: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // CH2D2 0..60% CINT2 drive
-    case 38: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // CH2F  0..50% CINT2 fold
-    case 40: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
-    case 41: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
+    // (CHRD/INT/CH2D/CFLD/INT2 were removed — the chord/interval concept is gone.)
+    case 15: w.kind=0; w.lo=563;  w.hi=1023; w.div=0; break; // MAIN  55..100%
+    case 19: w.kind=0; w.lo=740;  w.hi=1023; w.div=0; break; // CUT   1 kHz..11 kHz
+    case 20: w.kind=0; w.lo=0;    w.hi=669;  w.div=0; break; // RES   0.5..1.8 Q
+    case 22: w.kind=0; w.lo=204;  w.hi=818;  w.div=0; break; // BRT   20..80% breath
+    case 25: w.kind=0; w.lo=0;    w.hi=153;  w.div=0; break; // JIT   0..15% smear
+    case 26: w.kind=0; w.lo=0;    w.hi=256;  w.div=0; break; // RMOD  0..25% ring
+    case 27: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM1   0..30% color
+    case 28: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM2   0..30% color
+    case 29: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMAB  0..50% FM breath
+    case 30: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FMBB  0..50% FM breath
+    // (CH2D2/CH2F were removed — the chord/interval concept is gone.)
+    case 32: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
+    case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
+    // GLIDE (edit 34): portamento time of the polyphonic cluster. Window
+    // 0..40% (raw 0..409) — a quick-to-moderate scoop so a Random preset still
+    // feels responsive; a long full-knob glide would make every re-roll sound
+    // like a slow siren sweep and hide the new note.
+    case 34: w.kind=0; w.lo=0;    w.hi=409;  w.div=0; break; // GLIDE 0..40%
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
-    default: break; // full range (SPDx/SMTx, walk depths, WAV1/2/3, etc.)
+    default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, etc.)
   }
   return w;
 }
@@ -280,10 +228,13 @@ static constexpr uint8_t  kRndOrbiFamilyW[kRndOrbiFamilyCount] = {50U, 20U, 20U,
 
 // The weighted families: a flat list of edit-param indices, one per family
 // (order = kRndOrbiFamilyCount). C++11-safe plain static initializers.
-static const uint8_t kRndOrbiFamCore[12]   = {1, 8, 9, 13, 14, 15, 16, 17, 18, 30, 31, 32};
-static const uint8_t kRndOrbiFamTimbre[10] = {10, 11, 12, 22, 23, 28, 29, 37, 38, 41};
-static const uint8_t kRndOrbiFamMotion[16] = {0, 2, 3, 4, 5, 6, 7, 19, 20, 21, 24, 25, 26, 27, 33, 34};
-static const uint8_t kRndOrbiFamExtra[3]   = {9, 35, 40};
+// (CHRD/INT/CINT2/CHSAT/CHFLD/CHSAT2/CHFLD2 removed — chord concept gone;
+//  indices renumbered: 15=MAIN, 19=CUT, 20=RES, 22=RVLL, 25=JIT, 26=RMOD,
+//  27=FM1, 28=FM2, 29=RFMA, 30=RFMB, 31=FORM, 32=FVOL, 33=COMB.)
+static const uint8_t kRndOrbiFamCore[7]    = {1, 8, 9, 13, 14, 15, 26};
+static const uint8_t kRndOrbiFamTimbre[6]  = {10, 11, 12, 19, 20, 33};
+static const uint8_t kRndOrbiFamMotion[12] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22};
+static const uint8_t kRndOrbiFamExtra[3]   = {9, 29, 31};
 
 // The family's parameter list + length for an Orbit fire (family 0..3).
 static const uint8_t *rnd_orbi_family(uint8_t fam, uint32_t &n)
@@ -308,8 +259,7 @@ inline int32_t Osc::rnd_draw(uint8_t idx)
     return w.lo + rnd_int((uint32_t)(w.hi - w.lo + 1));
   if (w.kind == 1)
     return drone_wav_raw(rnd_int((uint32_t)(kRndWavMax + 1)));
-  if (w.kind == 2)
-    return drone_cents_raw(kRndCintSet[rnd_int((uint32_t)(sizeof(kRndCintSet) / sizeof(kRndCintSet[0])))]);
+  // (kind 2 — CINT_SET lookup — was removed: the chord/interval concept is gone.)
   return 0;
 }
 
@@ -378,10 +328,7 @@ inline void Osc::randomizeAll()
   for (uint8_t i = 0; i < kEditParamCount; ++i)
     target[i] = rnd_draw(i);
 
-  // CINT / CINT2: enforce minimum separation so the two chord voices don't
-  // land within kRndCintMinSepRaw of each other (they'd sound like one beating
-  // note). Works in raw domain (no float conversion). ~20 B.
-  ensure_cint_separation(target);
+  // (CINT / CINT2 separation was removed — the chord/interval concept is gone.)
 
   // Start the morph toward the fresh targets (reads the current values as
   // `from`). Must run BEFORE edit_value_ is overwritten below.
@@ -417,12 +364,9 @@ inline void Osc::randomizePartial()
     target[i] = edit_value_[i];
 
   const uint32_t count = 2U + (uint32_t)rnd_int(5U); // 2..6 parameters
-  uint8_t touched_cint = 0; // was CINT (17) or CINT2 (30) re-rolled this pass?
   for (uint32_t c = 0; c < count; ++c)
   {
     const uint8_t idx = (uint8_t)rnd_int(kEditParamCount);
-    if (idx == 17U || idx == 30U)
-      touched_cint = 1;
     const int32_t current = edit_value_[idx];
     // First draw, then re-draw until the step is significant (or give up after
     // kRndRedrawMax tries and accept the last draw -- a small step is better
@@ -440,10 +384,7 @@ inline void Osc::randomizePartial()
     target[idx] = v;
   }
 
-  // CINT / CINT2 separation: if this pass re-rolled at least one interval,
-  // enforce the minimum separation on the resulting pair. ~15 B.
-  if (touched_cint)
-    ensure_cint_separation(target);
+  // (CINT / CINT2 separation was removed — the chord/interval concept is gone.)
 
   // Morph toward the targets (reads the current values as `from`; unchanged
   // params have target == old target, so the engine skips them). Then commit
@@ -488,19 +429,13 @@ inline void Osc::randomizeOrbi()
     target[i] = stable_value_[i];
 
   const uint32_t count = kRndOrbiMinCount + (uint32_t)rnd_int(kRndOrbiMaxCount - kRndOrbiMinCount + 1U); // 2..4
-  uint8_t touched_cint = 0; // was CINT (17) or CINT2 (30) nudged this fire?
   for (uint32_t c = 0; c < count; ++c)
   {
     const uint8_t idx = rnd_pick_orbi_param();
-    if (idx == 17U || idx == 30U)
-      touched_cint = 1;
     target[idx] = rnd_draw_orbi(idx, target[idx]); // nudge from the stable value
   }
 
-  // CINT / CINT2 separation: if this fire nudged at least one interval, keep the
-  // resulting pair at least kRndCintMinSepRaw apart (same rule as Part/All).
-  if (touched_cint)
-    ensure_cint_separation(target);
+  // (CINT / CINT2 separation was removed — the chord/interval concept is gone.)
 
   // Morph toward the targets (the live sound glides from its CURRENT values to
   // the Orbit result, not from the stable state). Orbit uses a SHORTER phrase

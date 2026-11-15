@@ -36,7 +36,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // 0..1023 -> -kDetuneMaxCents..+kDetuneMaxCents (511 = 0 cents).
     case DETUNE:
       params_.detune_cents = (param_10bit_to_f32(value) * 2.f - 1.f) * kDetuneMaxCents;
-      update_w0_det(); // recompute the A/B detuned phase increments from the new detune
+      update_det_factors(); // recompute the shared A/B detune factors (per-voice w0 * factor in the audio path)
       break;
 
     // ---- Shared random-walk depth ceiling (RATE) ----
@@ -105,52 +105,14 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // between adjacent tables.
     case WAV1:
       params_.wave_a = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      recalc_pitch_derived(); // re-resolve wavetables + keep derived voices in sync
+      // (recalc_pitch_derived removed: the per-voice morph shift is now
+      //  computed per-sample in the audio path from each voice's own w0.)
       break;
     case WAV2:
       params_.wave_b = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      recalc_pitch_derived();
-      break;
-    case WAV3:
-      params_.wave_c = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      recalc_pitch_derived();
       break;
 
     // ---- Chord voice (CHORD level, CINT interval) ----
-    case CHORD:
-      // Linear chord gain (0..1); the chord's own folder+saturator pass and
-      // kMixChordDirect scaling happen in the audio path. See osc_chord.h.
-      params_.chord_level = param_10bit_to_f32(value);
-      break;
-    case CHRD_INT:
-      // Chord interval in cents (0..ChordVoice::kMaxCents). Recompute the
-      // chord phasor's frequency ratio at K-rate (never in the audio path).
-      // params_.chord_cents is the single source of truth (OscParamsData);
-      // chord_.update() sets the phasor's w0 from the base pitch + interval.
-      //
-      // Pitch crossfade: the "new" phasor (chord_new_) takes the FRESH offset
-      // and the blend starts from 0 (all old). The OLD phasor (chord_) is NOT
-      // re-fretted to the new frequency here -- it keeps running at its current
-      // (old) w0, so the per-sample loop (osc_mix.h) genuinely blends the old
-      // note into the new one over 2 s instead of jumping. chord_old_cents_ is
-      // set to the PRE-CHANGE cents so that a base-pitch change MID-FADE
-      // (recalc_pitch_derived / noteOn) keeps the old note at its old frequency
-      // (the crossfade is not destroyed). When the crossfade completes,
-      // chord_old_cents_ is synced back to params_.chord_cents (osc_mix.h).
-      {
-        const float new_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        if (new_cents != prev_chord_cents_)  // only crossfade on an actual change
-        {
-          chord_new_.update(w0_, new_cents);  // fresh offset, phasor unchanged
-          chord_old_cents_ = prev_chord_cents_; // old phasor tracks the pre-change cents
-          chord1_cross_ = 0.f;                // start from "all old"
-        }
-        params_.chord_cents = new_cents;      // single source of truth
-        prev_chord_cents_ = new_cents;
-        // NOTE: chord_.update() intentionally omitted -- the old phasor keeps
-        // its current w0 for the duration of the crossfade (see above).
-      }
-      break;
 
     // ---- MAIN (A+B mixed) voice level ----
     // (y_filt * kMixOsc * main_level) is applied in the audio path; here we
@@ -226,52 +188,13 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // Independent of the A+B SATU/FOLD so the chord can be driven (or kept
     // clean) separately. ASYM is shared. Defaults match the A+B defaults so
     // the stock sound is bit-identical.
-    case CHSAT:
-      params_.chord_drive = param_10bit_to_f32(value) * kSatuMax;
-      break;
-    case CHFLD:
-      params_.chord_fold = param_10bit_to_f32(value);
-      break;
     // ---- CINT2's OWN drive/fold (CHSAT2 / CHFLD2) ----
     // Independent of both the A+B SATU/FOLD and the CINT voice's CHSAT/CHFLD,
     // so the second interval (chord2) can be driven/filtered separately.
     // Defaults match CHSAT/CHFLD (see OscParamsData::reset) so the stock sound
     // is unchanged until the user splits the drive.
-    case CHSAT2:
-      params_.chord2_drive = param_10bit_to_f32(value) * kSatuMax;
-      break;
-    case CHFLD2:
-      params_.chord2_fold = param_10bit_to_f32(value);
-      break;
 
-    // ---- Enrichment: second chord interval (CINT2) ----
-    // A second chord-voice oscillator at a continuous interval above the base
-    // (0..ChordVoice::kMaxCents = 1900 c). Shares the chord's level (CHRD),
-    // wavetable (WAV3), folder/saturator (CHSAT/CHFLD), and the Breath stream's
-    // lvl_c (both intervals breathe in sync — the chord is one object).
-    case CINT2:
-      // Same pitch crossfade as CINT (see the CHRD_INT case above): the "new"
-      // phasor (chord2_new_) takes the fresh offset, the blend starts from 0,
-      // and the OLD phasor (chord2_) is NOT touched -- it keeps its current
-      // (old) w0 for the duration of the crossfade. Do NOT call
-      // recalc_pitch_derived() here: it would re-fret chord2_ (the old phasor)
-      // to the new frequency and break the crossfade. chord2_old_cents_ is set
-      // to the PRE-CHANGE cents so a base-pitch change MID-FADE keeps the old
-      // note at its old frequency (synced back on completion in osc_mix.h).
-      {
-        const float new_cents = param_10bit_to_f32(value) * ChordVoice::kMaxCents;
-        if (new_cents != prev_chord2_cents_)
-        {
-          chord2_new_.update(w0_, new_cents);
-          chord2_old_cents_ = prev_chord2_cents_; // old phasor tracks the pre-change cents
-          chord2_cross_ = 0.f;
-        }
-        params_.chord2_cents = new_cents;      // single source of truth
-        update_w0_sub();
-        update_w0_sub2();
-        prev_chord2_cents_ = new_cents;
-      }
-      break;
+    // (CINT2 / CHSAT2 / CHFLD2 were removed — the chord/interval concept is gone.)
 
     // ---- Enrichment: random phase jitter on A/B (JIT) ----
     // The knob maps 0..1023 -> 0..kJitMaxCycles (peak phase deviation, cycles).
@@ -345,6 +268,32 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // needed (the delay length is constant).
     case COMB:
       params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
+      break;
+
+    // ---- GLIDE (portamento, GRIMM-style exponential) ----
+    // raw 0 -> glide OFF (gl_k_ = 0, the note jumps straight to its pitch,
+    // regression-safe). raw 1..1023 -> a GLIDE time from kGlideMinMs (~10 ms)
+    // to kGlideMaxMs (~2.5 s), QUADRATIC in the knob (fast at the low end, so
+    // the low knob is a gentle "scoop" and the top is a slow siren). The time
+    // is converted to the per-sample Q16 step fraction gl_k_ = kGlideNum /
+    // (t_ms / kGlideMsStep), clamped to [kGlideStepMin, 1]. The audio path
+    // (osc_mix.h) advances each gliding voice by (gl_k_ * x) >> 16 per sample.
+    case GLIDE:
+      params_.glide_raw = param_10bit_to_f32(value); // raw 0..1 depth (display + re-apply)
+      if (value <= 0)
+      {
+        gl_k_ = 0U; // glide off
+      }
+      else
+      {
+        const float x = param_10bit_to_f32(value); // 0..1
+        const float t_ms = kGlideMinMs + (kGlideMaxMs - kGlideMinMs) * x * x; // quadratic
+        const float steps = t_ms / kGlideMsStep; // 60 dB of the way in `steps`
+        uint32_t k = (steps > 1.f) ? (kGlideNum / (uint32_t)steps) : 1U;
+        if (k < kGlideStepMin) k = kGlideStepMin;
+        else if (k > 65535U) k = 65535U;
+        gl_k_ = k;
+      }
       break;
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)

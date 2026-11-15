@@ -120,26 +120,19 @@
 // ---- Final-mix gains ----------------------------------------------------------
 // Worst-case peaks (see the budget comment in process()):
 //   A+B saturator out * kMixOsc < 0.5
-//   CHORD saturator out * kMixChordDirect < 0.6
 //   SUB1 * kMixSub < 0.5
 //   SUB2 * kMixSub2 < 0.4
-// against the driven A+B voice); CHORD (kMixChordDirect) is ~0.8 so the
-// three-voice cluster (A+B, chord, sub) lands in the -12dBFS .. 0dBFS
-// dynamic range without ever over-driving the final hard clip (which only
-// triggers when the branches peak simultaneously).
+// against the driven A+B voice); the sub-voice cluster lands in the -12dBFS
+// .. 0dBFS dynamic range without ever over-driving the final hard clip
+// (which only triggers when the branches peak simultaneously).
+// (kMixChordDirect was removed — the chord/interval concept is gone.)
   // A+B mixed output (pre-saturator) scale.
   static constexpr float    kMixOsc  = 0.5f;
   // Sub-octave sine (parallel) scale.
   static constexpr float    kMixSub  = 0.5f;
   // Second sub (f/4) scale.
   static constexpr float    kMixSub2 = 0.4f;
-  // Chord voice (parallel) scale. The chord runs through its OWN
-  // folder+saturator pass, so this gain sits after the chord's saturator
-  // (bounded in (-1, 1)). 0.8 makes the chord a comparable "partner" to the
-  // peak of ~0.4-0.6 — comparable to A+B (kMixOsc=0.5 over two voices) and
-  // the SUB1 sub (kMixSub=0.5 * 0.5 level). The chord's own CHRD knob scales
-  // the input to its saturator, so users can ride it up or down from here.
-  static constexpr float    kMixChordDirect = 0.8f;
+  // (kMixChordDirect was removed — the chord/interval concept is gone.)
   // (kMixRing for the RMOD parallel voice is defined in the RMOD block above,
   // next to kJitMaxCycles / kFm*, so the enrichment constants stay together.)
 
@@ -178,39 +171,68 @@
   //   w0_sub_ = w0_ * kSubW0Scale  (== w0/2 * 2^(kSubDetuneCents/1200))
   // so the audio path does not recompute 2^(-4/1200) on every setPitch().
   static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
-  // ---- Note glide (portamento) -----------------------------------------------
-  // When the base note changes (any key press, legato or not), the phase
-  // increment w0_ is not swapped instantaneously: it is interpolated LINEARLY
-  // from the old value to the new one over kGlideSamples (1 s @ 48 kHz). All
-  // derived voices (A/B detuned pair, sub-1, sub-2, chord, chord-2) follow
-  // automatically because their phase increments are (re)computed from w0_
-  // every sample during the glide, so the whole sound slides in pitch
-  // smoothly. The length is a fixed constant (per design: 1 s).
-  static constexpr uint32_t kGlideSamples = 1U * 48000U; // 1 s @ 48 kHz
+  // ---- Note glide (portamento) — GRIMM-style EXPOENTIAL ----------------------
+  // When a new cluster note starts, its per-voice w0 does NOT jump: it slides
+  // from the cluster's LAST note to its own pitch. The slide is EXPOENTIAL
+  // (fast at first, then easing in) — the GRIMM GLIDE behaviour. The per-sample
+  // step is a fixed Q16 fraction of the distance LEFT (like GRIMM's
+  // vc_gl: d = k * x / 65536; x -= d), so the remaining distance shrinks
+  // geometrically and the voice converges on the target. gl_k_ (Osc::gl_k_,
+  // recomputed at K-rate from the GLIDE edit parameter) is that Q16 fraction:
+  //   gl_k_ = kGlideNum / (t_ms / kGlideMsStep)   (clamped to [kGlideStepMin,1])
+  // where t_ms is the GLIDE time (kGlideMinMs .. kGlideMaxMs, a quadratic
+  // mapping of the knob) and kGlideMsStep (0.726 ms = one 32-sample control
+  // block @48 kHz) is the step granularity. GLIDE = 0 (raw 0) disables the
+  // glide (the note jumps straight to its pitch, regression-safe). The snap
+  // threshold is kGlideSnap (1/4096-octave units, the same unit as gl_want_).
+  static constexpr float    kGlideMinMs   = 10.f;    // raw 1   -> ~10 ms (a quick scoop)
+  static constexpr float    kGlideMaxMs   = 2500.f;  // raw 1023-> ~2.5 s (a slow siren)
+  static constexpr float    kGlideMsStep  = 0.726f;  // one 32-sample block @48 kHz
+  static constexpr uint32_t kGlideNum     = 328516U; // 6.9 * 47618 (numerator, pre-scaled)
+  static constexpr uint32_t kGlideStepMin = 1U;      // floor so the glide always finishes
+  static constexpr int32_t  kGlideSnap    = 11;      // |x| < 11 (1/4096-octave) -> snap (~0.03 st)
+  // (kGlideSamples was removed: the fixed 1 s LINEAR glide is gone, replaced by
+  //  the knob-set EXPOENTIAL GRIMM glide above.)
+  // 2^i LUT for the GLIDE pitch computation (osc_mix.h). Indexed by (i + 12)
+  // for i ∈ [-12, +12] (±12 semitones). A `static const` LOCAL inside the
+  // audio callback was a data race on first-touch initialization under the
+  // WASM build's -matomics / SharedArrayBuffer (two voices / two blocks could
+  // first-read the table concurrently before it was fully initialized), which
+  // intermittently produced a corrupt vw0 -> silence on the 2nd/3rd note.
+  // Making it a namespace-scope constexpr (this header) guarantees single,
+  // pre-thread initialization.
+  static constexpr float kTwoPow[25] = {
+      0.000244140625f, // 2^-12
+      0.00048828125f,  // 2^-11
+      0.0009765625f,   // 2^-10
+      0.001953125f,    // 2^-9
+      0.00390625f,     // 2^-8
+      0.0078125f,      // 2^-7
+      0.015625f,       // 2^-6
+      0.03125f,        // 2^-5
+      0.0625f,         // 2^-4
+      0.125f,          // 2^-3
+      0.25f,           // 2^-2
+      0.5f,            // 2^-1
+      1.f,             // 2^0
+      2.f,             // 2^1
+      4.f,             // 2^2
+      8.f,             // 2^3
+      16.f,            // 2^4
+      32.f,            // 2^5
+      64.f,            // 2^6
+      128.f,           // 2^7
+      256.f,           // 2^8
+      512.f,           // 2^9
+      1024.f,          // 2^10
+      2048.f,          // 2^11
+      4096.f           // 2^12
+  };
 
-  // ---- Chord interval fade (INT / INT2 on-off) --------------------------------
-  // When a chord interval is switched OFF (0 c, unison) or ON (> 0 c) its LEVEL
-  // is not toggled instantly: a one-pole exponential relaxes toward the
-  // (active ? 1 : 0) target over kChordFadeSamples (2 s @ 48 kHz), the SAME
-  // curve the note attack/release envelope uses (alpha = 1 - exp(-5 / N), see
-  // AhEnvelope). Turning an interval on fades the voice in over 2 s, turning
-  // it off fades it out over 2 s (no click / no instant "start screaming").
-  // The alpha is precomputed in init() (K-rate, one_minus_expf -- no libm).
-  // A re-target mid-fade is continuous (the one-pole keeps relaxing from its
-  // current level), so scrubbing the INT / INT2 knob through 0 is click-free.
-  static constexpr uint32_t kChordFadeSamples = 2U * 48000U; // 2 s @ 48 kHz
 
-  // ---- Chord interval pitch crossfade (CINT / CINT2 offset change) -----------
-  // When the interval cents value CHANGES (Rnd re-roll, manual edit, morph),
-  // the phasor's frequency ratio (w0) jumps and produces an audible click.
-  // The crossfade runs TWO wavetable lookups per chord voice (old-offset
-  // phasor + new-offset phasor) and blends their outputs with a one-pole
-  // coefficient that relaxes from 0 (all old) to 1 (all new) over this many
-  // samples. Same 2 s one-pole curve as the on/off level fade above (kChord-
-  // FadeSamples), so the pitch transition and the level fade are tempo-locked.
-  // When the cents value is stable (no change), cross == 1 and only the new
-  // phasor is read — zero extra lookups (regression-safe).
-  static constexpr uint32_t kChordCrossSamples = kChordFadeSamples; // 2 s
+
+  // (kChordFadeSamples / kChordCrossSamples were removed — the chord/interval
+  //  concept is gone; chord interval fades/crossfades no longer exist.)
 
  // ---- Rnd re-roll morph (BPM-synced smooth transition) -----------------------
  // When a Rnd re-roll fires (All / Part / Orbi), the affected parameters do NOT
@@ -226,8 +248,8 @@
  //     one after another across the whole phrase.
  // Discrete params (WA1/2/3, INT/INT2) morph in their own native space for
  // free: a fractional wavetable index is crossfaded by resolve_wave() (already
- // interpolates between adjacent tables) and fractional chord cents glide the
- // interval continuously (chord_.update() takes a continuous cents value).
+ // interpolates between adjacent tables). (chord cents glide was removed — the
+ // chord/interval concept is gone.)
  // The breathing (RATE walk streams) is untouched: its targets regenerate on
  // their own (0.1..10 s) periods, so morphing RATE/SMTx is inaudible.
  // The morph duration / stagger are computed ONCE at fire time from the
@@ -347,3 +369,21 @@
   static constexpr float    kDuckFollowTauSec = 0.075f; // follower time constant (~75 ms)
   static constexpr float    kDuckFloor        = 0.7f;   // duck gain floor (~-3 dB, never silent)
   static constexpr float    kDuckScale        = 1.0f;   // follower -> duck-gain scaling
+
+// -----------------------------------------------------------------------------
+// Polyphonic-cluster LOUDNESS compensation (Variant A; see osc_mix.h)
+//
+// The cluster sums up to kVoiceCount notes into ONE shared post-stage. Without
+// compensation N simultaneous notes add coherently (worst case ~xN) and, fed
+// through fold/saturate at the same FOLD/SATU, clip and "shout". The summed
+// voice signals (sum_main/sub/sub2/ring) are divided by sqrt(env_sum) [one-pole
+// smoothed, the kClusterCompAlpha one-pole] -> -3 dB/voice, the standard
+// polyphonic-makeup rule. A single note is EXACTLY unchanged (sqrt(1)=1).
+// The per-voice A-H-R envelope is applied per-voice (each voice gated by its
+// own v.eg.env in the accumulation loop), NOT as a common output envelope --
+// this is what stops the 1->2 note boundary from dipping the whole cluster.
+// kClusterCompAlpha is the one-pole coefficient for the smoothed 1/sqrt(N)
+// (env_comp_): tau ~50 ms, fast enough to follow note count / the 2 s envelope
+// without per-sample pumping, slow enough not to ring on a fast note-on burst.
+// -----------------------------------------------------------------------------
+  static constexpr float    kClusterCompAlpha = 0.0041658f; // 1 - exp(-1/(0.005s*48kHz)); one-pole tau ~5 ms (was 50 ms, too slow for note-on transients -> perceived as "quieter" with GLIDE>0)

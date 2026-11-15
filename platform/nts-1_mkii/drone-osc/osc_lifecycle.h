@@ -25,40 +25,50 @@
 inline void Osc::init(float *) 
   {
     params_.reset();
-    phasor_a_ = 0.f;
-    phasor_b_ = 0.f;
-    chord_.reset(); // chord-voice phasor (the CINT interval default lives in params_.chord_cents)
-    chord2_.reset(); // second chord-voice phasor (CINT2)
-    phasor_sub_ = 0.f;
-    phasor_sub2_ = 0.f;
-    sub2_.lpf_state = 0.f;
-    sub2_.gate = 0.f;
-    w0_ = 0.f;
     lfo_ = 0.f;
+    // ---- Polyphonic voice cluster: zero every voice --------------------------
+    // Each cluster voice is independent state (phasors, sub phasors, sub-2
+    // state, A-H-R, glide, w0). All start silent (w0 = 0, idle envelope) so
+    // an all-off cluster produces exactly zero (regression: 0 notes = silent).
+    for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+    {
+      Voice &v = voice_[vi];
+      v.w0 = 0.f;
+      v.glide_from = 0.f;
+      v.glide_to = 0.f;
+      v.glide_dist = 0;
+      v.glide_active = false;
+      v.ph_a = 0.f;
+      v.ph_b = 0.f;
+      v.ph_sub = 0.f;
+      v.ph_sub2 = 0.f;
+      v.prev_wav_a = 0.f; // FM lookback cache: start at 0 (first sample is a no-op)
+      v.prev_wav_b = 0.f;
+      v.fm_smooth_a = 0.f; // phase-FM index LPF state (no FM on the first sample)
+      v.fm_smooth_b = 0.f;
+      v.sub2.lpf_state = 0.f;
+      v.sub2.gate = 0.f;
+      v.note = 0;
+      v.active = false;
+      v.gen = 0;
+      v.eg.reset();
+    }
+    // Cluster glide bookkeeping: no pending distance, no last note yet.
+    gl_k_ = 0U;
+    gl_want_ = 0;
+    last_note_ = -1;
     // Parameter selector: start with RATE (select_ = 0) selected (RATE leads
     // the multiplexer). Re-apply the cached default values so the DSP and the
     // PARAM SEL / PARAM VAL display agree on startup (the header's "init"
     // value of PARAM_VAL already matches edit_value_[0], but this keeps the
-    // two in sync if either side is edited independently later).
+    // two in sync if either side is edited independently later). This also
+    // recomputes det_f_a_/det_f_b_ (DETUNE) and gl_k_ (GLIDE).
     select_ = 0;
     for (uint8_t i = 0; i < kEditParamCount; i++)
       apply_edit_param(kEditParamFirst + i, edit_value_[i]);
-    recalc_pitch_derived(); // resolve wavetables + all derived-voice phase increments from the default w0_
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // each stream starts centered, AMT=0 (off)
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
-    prev_wav_a_ = 0.f; // FM lookback cache: start at 0 (first sample is a no-op)
-    prev_wav_b_ = 0.f;
-    fm_smooth_a_ = 0.f; // phase-FM index LPF state (no FM on the first sample)
-    fm_smooth_b_ = 0.f;
-    // A-H-R envelope: start silent, no note active.
-    note_on_ = false;
-    last_note_ = 0;
-    glide_active_ = false;
-    glide_elapsed_ = 0;
-    glide_from_ = 0.f;
-    glide_to_ = 0.f;
-    eg_.reset();
     // Reset the Rnd debounce state (both builds): no pending re-rolls, clock at
     // zero. (The debounce fields live outside the EMSCRIPTEN block so the
     // hardware build's Rnd slot shares them.)
@@ -119,159 +129,180 @@ inline void Osc::init(float *)
     // tau (~75 ms) as the subs sound.
     env_follower_ = 0.f;
     duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.013
-    // Chord interval fades (INT / INT2 on-off): start SILENT -- the interval
-    // level only ramps up from 0 over 2 s once its cents value is > 0. This
-    // makes the first note-on fade the chord in (no instant "start
-    // screaming") and keeps init() clean. Precompute the one-pole alpha for
-    // the 2 s fade (same curve as the note attack/release: 1 - exp(-5 / N),
-    // one_minus_expf, never libm).
-    chord1_fade_ = 0.f;
-    chord2_fade_ = 0.f;
-    chord_fade_alpha_ = one_minus_expf(-5.f / static_cast<float>(kChordFadeSamples));
-    // Chord interval pitch crossfade: start with "new" phasors synced to the
-    // current (old) phasors and crossfade position = 1 (all new, no active
-    // crossfade). The prev_* cents trackers start at 0 so the first cents
-    // change (from 0 to the init value) does NOT trigger a crossfade — the
-    // phasors are already consistent.
-    chord_new_ = chord_;   // sync "new" phasor to current (old) state
-    chord2_new_ = chord2_;
-    chord1_cross_ = 1.f;
-    chord2_cross_ = 1.f;
-    // No crossfade at init: the old phasors track the same cents as the new.
-    chord_old_cents_ = params_.chord_cents;
-    chord2_old_cents_ = params_.chord2_cents;
-    prev_chord_cents_ = params_.chord_cents;
-    prev_chord2_cents_ = params_.chord2_cents;
+    // Polyphonic-cluster loudness compensation (see env_sum_ in osc.h and its
+    // use in process(): 1/sqrt(env_sum) on the summed voice signals). The
+    // per-voice A-H-R envelope is applied per-voice in the accumulation loop
+    // (each voice gated by its own v.eg.env); env_sum_ only feeds the
+    // loudness-compensation one-pole (env_comp_). Nothing sounding yet, so the
+    // smoothed 1/sqrt(N) starts at 1 (a single note / silence -> no attenuation).
+    env_sum_ = 0.f;
+    env_comp_ = 1.f;
+    // (chord_fade_alpha_ / chord_new_ / chord2_new_ / prev_chord_cents_ /
+    //  prev_chord2_cents_ were removed — the chord/interval concept is gone.)
   }
 
 inline void Osc::reset() 
   {
-    phasor_a_ = 0.f;
-    phasor_b_ = 0.f;
-    chord_.reset();
-    chord2_.reset();
-    phasor_sub_ = 0.f;
-    phasor_sub2_ = 0.f;
-    sub2_.lpf_state = 0.f;
-    sub2_.gate = 0.f;
+    // Stop the whole cluster and kill every voice's A-H-R envelope
+    // (allNoteOff semantics: instant silence, no release tail).
+    for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+    {
+      Voice &v = voice_[vi];
+      v.ph_a = 0.f;
+      v.ph_b = 0.f;
+      v.ph_sub = 0.f;
+      v.ph_sub2 = 0.f;
+      v.sub2.lpf_state = 0.f;
+      v.sub2.gate = 0.f;
+      v.glide_active = false;
+      v.glide_dist = 0;
+      v.active = false;
+      v.eg.reset();
+    }
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
-    prev_wav_a_ = 0.f; // FM lookback cache
-    prev_wav_b_ = 0.f;
-    fm_smooth_a_ = 0.f; // phase-FM index LPF state
-    fm_smooth_b_ = 0.f;
-    // Stop the note and kill the A-H-R envelope (allNoteOff semantics).
-    note_on_ = false;
-    last_note_ = 0;
-    glide_active_ = false;
-    eg_.reset();
-    // Silence the chord interval fades on stop (allNoteOff semantics: the
-    // chord goes quiet instantly, no 2 s tail). The next note-on ramps them
-    // back in from 0 over 2 s.
-    chord1_fade_ = 0.f;
-    chord2_fade_ = 0.f;
+    last_note_ = -1;
+    gl_want_ = 0;
+    env_sum_ = 0.f; // cluster is silent -> no pending loudness compensation
   }
   // ---- note handling ---------------------------------------------------------
 
-  // Key press. Legato is ALWAYS ON: the drone is held until explicitly stopped.
-  //  * If a note is ALREADY sounding: this only re-targets the pitch. The
-  //    envelope is deliberately NOT re-triggered, so the amplitude stays
-  //    continuous (no drop to zero / re-attack) while setPitch() glides the
-  //    whole sound from the old note to this one over 2 s.
-  //  * If nothing is sounding: start the A-H-R attack (2 s ramp-up).
-  //  * The SAME key is pressed while sounding -> TOGGLE-OFF: the sound fades
-  //    out to zero (re-triggering the same key stops it).
+  // MIDI note -> base phase increment (w = f/sr). Used by noteOn (the
+  // polyphonic cluster's pitch driver). It reuses the SDK's authoritative
+  // `midi_to_hz_lut_f` (Hz, 152 entries, extern in common/osc_api.h -- the
+  // SAME table the platform's osc_w0f_for_note / the web sim use), scaled by
+  // 1/48000 to a phase increment. This is numerically identical to
+  // osc_w0f_for_note(note, 0) WITHOUT pulling in that function's mod/clip
+  // logic, and works in both the ARM build (linked firmware LUT) and the web
+  // sim (where drone-chain links websim/dsp/midi_to_hz_lut.c). Note: this
+  // header must be included AFTER unit_osc.h (which brings in osc_api.h and
+  // declares midi_to_hz_lut_f) -- osc.h satisfies that (it includes
+  // unit_osc.h at the top).
+  inline void Osc::noteW0(uint8_t note, float *out_w)
+  {
+    const uint32_t n = (note > 151U) ? 151U : (uint32_t)note;
+    *out_w = midi_to_hz_lut_f[n] * (1.f / 48000.f);
+  }
+
+
+  // Start (or re-target) one cluster voice on a note, arming its GRIMM-style
+  // exponential GLIDE from the cluster's LAST note (gl_want_ is the pending
+  // distance, written by noteOn). A new note always gets its own voice + a
+  // fresh 2 s A-H-R attack (the cluster is polyphonic: notes sound together).
+  inline void Osc::voiceStart(Voice &v, uint8_t note, float w0)
+  {
+    v.note = note;
+    v.active = true;
+    v.gen = ++gen_counter_; // monotonically increasing (steal ordering)
+    v.w0 = w0;
+    v.glide_to = w0;
+    v.glide_from = w0;
+    // Glide from the last note (gl_want_): 0 = jump straight to w0.
+    v.glide_dist = gl_want_;
+    v.glide_active = (gl_want_ != 0) && (gl_k_ > 0U);
+    v.ph_a = 0.f;
+    v.ph_b = 0.f;
+    v.ph_sub = 0.f;
+    v.ph_sub2 = 0.f;
+    v.prev_wav_a = 0.f;
+    v.prev_wav_b = 0.f;
+    v.fm_smooth_a = 0.f;
+    v.fm_smooth_b = 0.f;
+    v.sub2.lpf_state = 0.f;
+    v.sub2.gate = 0.f;
+    v.eg.noteOn(); // 2 s A-H-R attack
+  }
+
+  // Key press (LATCH is ALWAYS ON). Each new note gets its OWN voice in the
+  // kVoiceCount cluster, so up to kVoiceCount notes sound at the same time.
+  //  * Re-pressing the SAME note -> TOGGLE-OFF that voice (fade out).
+  //  * A new note while all kVoiceCount voices are busy -> STEAL the OLDEST
+  //    active voice (lowest gen) and start this note on it.
+  // The new note GLIDES from the cluster's LAST note (GRIMM exponential):
+  // gl_want_ = (last_note - new_note) * 256 * 4 (1/16 semitone * 256 units).
 inline void Osc::noteOn(uint8_t note, uint8_t velo) 
   {
     (void)velo;
-    // Legato: the drone is held until explicitly stopped.
-    //  * same key as the one currently sounding -> TOGGLE-OFF (fade out).
-    //  * different key (or nothing sounding)    -> the new note becomes the
-    //    sounding one: start the attack if we were silent, otherwise only
-    //    retarget the pitch (setPitch glides, amplitude stays continuous).
-    if (note_on_ && note == last_note_)
+    // Toggle-off: re-pressing a note that is already sounding on a voice stops
+    // that voice (the only per-note "off" — LATCH keeps all other notes).
+    for (uint8_t vi = 0; vi < kVoiceCount; vi++)
     {
-      note_on_ = false;
-      last_note_ = 0;
-      eg_.noteOff();
-      return;
+      Voice &v = voice_[vi];
+      if (v.active && v.note == note)
+      {
+        v.active = false;
+        v.eg.noteOff(); // 2 s release (the note fades out, others stay latched)
+        return;
+      }
     }
-    const bool was_sounding = note_on_;
-    last_note_ = note;
-    note_on_ = true;
-    if (!was_sounding)
-      eg_.noteOn(); // genuine new drone: 2 s attack
-    // else: keep the envelope (continuous amplitude); only the pitch glides.
+    // Compute the glide distance from the cluster's LAST note (GRIMM vc_gl
+    // semantics: positive = new note is HIGHER than the last, the voice glides
+    // UP; negative = glides down). last_note_ < 0 (first note) -> no glide.
+    // Scale: 1 semitone = 4096/12 units (1/12 octave per semitone, 4096
+    // units per octave). The audio path (osc_mix.h) computes:
+    //   current_w0 = glide_to * 2^(-glide_dist / 4096)
+    // so glide_dist = 4096 * (octaves from target) and the sign is:
+    //   glide_dist > 0 -> current < target (still gliding UP from below)
+    //   glide_dist < 0 -> current > target (still gliding DOWN from above)
+    // At glide_dist = 0 -> current = glide_to (arrived).
+    int32_t gl_want = 0;
+    if (last_note_ >= 0)
+      gl_want = ((int32_t)note - last_note_) * 4096 / 12; // 1/12 octave per semitone
+    gl_want_ = gl_want;
+    last_note_ = (int32_t)note; // this note becomes the cluster's last
+    // Find a free voice, or steal the oldest active one.
+    uint8_t target = kVoiceCount;
+    for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+      if (!voice_[vi].active) { target = vi; break; }
+    if (target == kVoiceCount)
+    {
+      // All busy: steal the oldest (lowest gen) active voice.
+      uint8_t oldest = 0;
+      for (uint8_t vi = 1; vi < kVoiceCount; vi++)
+        if (voice_[vi].gen < voice_[oldest].gen) oldest = vi;
+      target = oldest;
+      voice_[target].active = false;
+      voice_[target].eg.noteOff(); // release the stolen note (fades under the new one)
+    }
+    float w0;
+    noteW0(note, &w0);
+    voiceStart(voice_[target], note, w0);
   }
 
-  // Key release. Legato is ALWAYS ON, so releasing a key is a NO-OP: it does
-  // not stop the drone. It also must NOT clear the "sounding note" tracking,
-  // otherwise a click (which is a noteOn immediately followed by a noteOff)
-  // would clobber last_note_ and the re-press toggle-off in noteOn could never
-  // match. Only an explicit re-press of the sounding note (noteOn) or
-  // All-Notes-Off stops a drone.
+  // Key release. LATCH is ALWAYS ON, so releasing a key is a NO-OP: the note
+  // is held (latched). Only re-pressing the SAME note (noteOn) or
+  // All-Notes-Off stops a note.
 inline void Osc::noteOff(uint8_t note) 
   {
     (void)note;
   }
 
-  // All-notes-off: note inactive, kill any in-flight envelope immediately
-  // (instant silence — no release tail). This is the global stop: it silences
-  // the held (legato) drone too, which per-key release does not.
+  // All-notes-off: stop the whole cluster, kill every voice's envelope
+  // immediately (instant silence — no release tail).
 inline void Osc::allNoteOff() 
   {
-    note_on_ = false;
-    last_note_ = 0;
-    eg_.allOff();
+    for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+    {
+      voice_[vi].active = false;
+      voice_[vi].glide_active = false;
+      voice_[vi].glide_dist = 0;
+      voice_[vi].eg.allOff();
+    }
+    last_note_ = -1;
+    gl_want_ = 0;
   }
 
   // audio processing callbacks
 
-  // set frequency in digital w (w = f/samplerate, 0.5 is Nyquist).
-  // When the target differs from the current base pitch and a glide is not
-  // already running, launch a 2 s LINEAR glide from the current w0_ to the new
-  // one (the audio path advances it sample by sample and recomputes every
-  // derived voice). A glide already in progress is re-targeted: it slides from
-  // where it is now to the newest note, so a fast run of keys always ends on
-  // the last one. With no glide active and the same pitch this is the cheap
-  // direct path (no state change).
+  // setPitch: LEGACY single-note entry point. In the polyphonic build the
+  // cluster's pitch is driven entirely by noteOn() (which arms each voice's
+  // per-voice GLIDE), so setPitch does nothing. It is kept (and still wired in
+  // unit.cc / wasm.cc) for API compatibility and the hardware's per-block
+  // pitch callback; the hardware's note MIDI events (noteOn) are what drive the
+  // cluster. (The old 2 s linear single-voice glide is gone.)
 inline void Osc::setPitch(float w0)
   {
-    // Nothing is sounding (the previous note faded out / was toggled off /
-    // all-notes-off): there is no "old note" to glide from. Kill any in-flight
-    // glide and jump straight to the new pitch so the NEXT note-on starts clean
-    // at its own pitch, not by sliding up from the (now silent) old one.
-    if (!note_on_)
-    {
-      glide_active_ = false;
-      glide_elapsed_ = 0;
-      w0_ = w0;
-      recalc_pitch_derived();
-      return;
-    }
-    if (!glide_active_ && w0 != w0_)
-    {
-      glide_active_ = true;
-      glide_elapsed_ = 0;
-      glide_from_ = w0_;
-      glide_to_ = w0;
-      // w0_ itself is advanced by the audio path (osc_mix.h) from here to the
-      // target; nothing to do in the K-rate path besides arming the glide.
-      return;
-    }
-    if (glide_active_)
-    {
-      // Re-target an in-flight glide: slide from the CURRENT w0_ to the newest
-      // note over a fresh full kGlideSamples, and restart the clock. Holding a
-      // new key while gliding is the intended legato action, so the move to the
-      // latest key always gets the full glide.
-      glide_from_ = w0_;
-      glide_to_ = w0;
-      glide_elapsed_ = 0;
-      return;
-    }
-    // Same pitch (or already at target with no glide): nothing to do. The
-    // derived voices already match w0_.
+    (void)w0; // no-op: polyphonic cluster, pitch driven by noteOn()
   }
 

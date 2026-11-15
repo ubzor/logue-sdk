@@ -35,43 +35,41 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 44; // 44 = RATE..COMB (FORM/FVOL/COMB at the tail, indices 39..41)
-      // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h):
+      const EDIT_PARAM_COUNT = 35; // 35 = RATE..GLIDE (FORM/FVOL/COMB/GLIDE at the tail, indices 31..34)
+      // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
+      // polyphonic 4-voice cluster: each new note gets its own voice and GLIDES
+      // from the cluster's last note (GLIDE, the GRIMM exponential portamento).
       // 0 RATE (shared depth ceiling), 1 DETU,
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
       // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
       // 6 SPD3, 7 SMT3 (Density stream period / smooth),
       // 8 SUB1, 9 SUB2, 10 SATU, 11 ASYM, 12 FOLD, 13 WAV1, 14 WAV2,
-      // 15 WAV3 (chord-voice wavetable),
-      // 16 CHRD, 17 CINT,
-      // 18 MAIN (main A+B mixed voice level, 0..100%, default 100%),
-      // 19 RWAV, 20 RDRV, 21 RFLD,
-      // 22 FCUT, 23 RES, 24 RWFC,
-      // 25 RVLL (RW_LVL, breath depth), 26 RVLS (RW_LSP, breath period),
-      // 27 RVLSM (RW_LSM, breath smooth),
-      // 28 CHSAT (chord's own saturator drive, 0..300),
-      // 29 CHFLD (chord's own wavefolder depth, 0..100%),
-      // 30 CINT2 (second chord interval, 0..1900 c),
-      // 31 JIT (random phase jitter on A/B, 0..100%),
-      // 32 RMOD (A*B ring-mod parallel voice, 0..100%),
-      // 33 FM1 (STATIC phase-FM on A by B, 0..100%),
-      // 34 FM2 (STATIC phase-FM on B by A, 0..100%),
-      // 35 RFMA (random-walk depth on FM A, 0..100%, RATE-gated),
-      // 36 RFMB (random-walk depth on FM B, 0..100%, RATE-gated).
+      // 15 MAIN (main A+B mixed voice level, 0..100%, default 100%),
+      // 16 RWAV, 17 RDRV, 18 RFLD,
+      // 19 FCUT, 20 RES, 21 RWFC,
+      // 22 RVLL (RW_LVL, breath depth), 23 RVLS (RW_LSP, breath period),
+      // 24 RVLSM (RW_LSM, breath smooth),
+      // 25 JIT (random phase jitter on A/B, 0..100%),
+      // 26 RMOD (A*B ring-mod parallel voice, 0..100%),
+      // 27 FM1 (STATIC phase-FM on A by B, 0..100%),
+      // 28 FM2 (STATIC phase-FM on B by A, 0..100%),
+      // 29 RFMA (random-walk depth on FM A, 0..100%, RATE-gated),
+      // 30 RFMB (random-walk depth on FM B, 0..100%, RATE-gated),
+      // 31 FORM (formant vowel position), 32 FVOL (formant dry/wet),
+      // 33 COMB (comb resonator feedback),
+      // 34 GLIDE (portamento: 0 = off, 1..1023 = 10 ms..2.5 s, exponential).
       const EDIT_PARAM_NAMES = [
         "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
-        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave A", "Wave B", "Wave C",
-        "Chord", "Interval",
+        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave A", "Wave B",
         "Main",
         "Morph Wander", "Drive Wander", "Fold Wander",
         "Cutoff", "Resonance", "Cutoff Wander",
         "Breath Depth", "Breath Rate", "Breath Smooth",
-        "Chord Drive", "Chord Fold",
-        "Interval 2", "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
-        "Chord 2 Drive", "Chord 2 Fold",
+        "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Formant Vowel", "Formant Level",
         "Comb Res",
+        "Glide",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -79,28 +77,29 @@
       // one titled block. Items are edit_ indices (select_ order).
       // Each group has an explicit `col` (0/1/2) so the layout loop places it
       // as a true column BLOCK (not a round-robin):
-      //   col 0: MAIN + BREATH — A+B voice (static params) + voice-level wander
+      //   col 0: MAIN + BREATH + FORMANT — A+B voice (static params) + wander
       //   col 1: WANDER (global) + WANDER TGT (targets)
-      //   col 2: CHORD + SUBS + FILTER
+      //   col 2: SUBS + FILTER + CLUSTER (polyphonic 4-voice: COMB + GLIDE)
       //   MAIN        MAIN WAV1 WAV2 DETU SATU ASYM FOLD FM1 FM2 JIT RMOD
       //   BREATH      RVLL RVLS RVLSM (voice-level wander, 4th stream)
+      //   FORMANT     FMVT FLVL
       //   WANDER      RATE SPD1 SMT1 SPD2 SMT2 SPD3 SMT3
       //   WANDER TGT  RWAV RWFC RDRV RFLD RFMA RFMB
-      //   CHORD       WAV3 CHRD CINT CINT2 CHSAT CHFLD
       //   SUBS        SUB1 SUB2
       //   FILTER      FCUT RES
+      //   CLUSTER     COMB GLIDE (portamento time for the polyphonic cluster)
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [18, 13, 14, 10, 11, 12, 33, 34, 31, 32, 0] },
-        { title: "BREATH",   col: 0, items: [25, 26, 27] },
-        { title: "FORMANT",  col: 0, items: [39, 40] },
+        { title: "MAIN",       col: 0, items: [15, 13, 14, 10, 11, 12, 27, 28, 25, 26, 0] },
+        { title: "BREATH",   col: 0, items: [22, 23, 24] },
+        { title: "FORMANT",  col: 0, items: [31, 32] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
-        { title: "WANDER TGT", col: 1, items: [19, 24, 20, 21, 35, 36] },
+        { title: "WANDER TGT", col: 1, items: [16, 21, 17, 18, 29, 30] },
         // ---- Column 2 ----
-        { title: "CHORD",      col: 2, items: [15, 16, 17, 30, 28, 29, 37, 38] },
         { title: "SUBS",       col: 2, items: [8, 9] },
-        { title: "FILTER",     col: 2, items: [22, 23, 41] },
+        { title: "FILTER",     col: 2, items: [19, 20] },
+        { title: "CLUSTER",    col: 2, items: [33, 34] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable
@@ -152,7 +151,7 @@
         //   RES       -> Q (0.5 .. 2.5)
         //   FM1/FM2   -> 0..0.1c (quadratic curve)
         //   others    -> 0..100%
-        if (idx === 13 || idx === 14 || idx === 15)
+        if (idx === 13 || idx === 14)
           return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
         if (idx === 11) {
           const pct = Math.round((raw * 200) / 1023) - 100;
@@ -163,44 +162,50 @@
           const cents = Math.round(((raw - 511) * 10) / 511); // /511, not /1023
           return (cents >= 0 ? "+" : "") + cents + " c";
         }
-        if (idx === 10 || idx === 28 || idx === 37)
-          return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU / CHSAT)
-        if (idx === 17 || idx === 30) {
-          // CINT (edit idx 17) / CINT2 (edit idx 30): 0..1900 cents (continuous interval)
-          return Math.round((raw / 1023) * 1900) + "c";
-        }
-        if (idx === 33 || idx === 34) {
-          // FM1 / FM2 (edit 33/34): phase-FM index, 0..kFmMaxCents/2 cycles
+        if (idx === 10)
+          return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU)
+        // (CHSAT/CHFLD/CINT/CINT2 were removed — the chord/interval concept is gone.)
+        if (idx === 27 || idx === 28) {
+          // FM1 / FM2 (edit 27/28): phase-FM index, 0..kFmMaxCents/2 cycles
           // (0..0.05 c at kFmMaxCents=0.1, mirrors the constant in osc.h).
           // Display the ACTUAL depth after the quadratic kFmCurveExp (2.0)
           // curve that the audio path applies: powf(raw/1023, 2) * kFmMaxCents.
           // Low knob -> ~0c (near-silent "breathing"), full knob -> 0.1c.
           return (Math.pow(raw / 1023, 2) * 0.1).toFixed(2) + "c";
         }
-        if (idx === 22) {
-          // FCUT (edit 22): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.
+        if (idx === 34) {
+          // GLIDE (edit 34): portamento time. 0 = "OFF" (jump); 1..1023 = the
+          // quadratic time (kGlideMinMs=10 .. kGlideMaxMs=2500), "NNNms" < 1 s
+          // or "N.Ns". Mirrors Osc::getParameterStrValue.
+          if (raw <= 0) return "OFF";
+          const x = raw / 1023;
+          const tms = 10 + (2500 - 10) * x * x;
+          if (tms < 1000) return Math.round(tms) + "ms";
+          return (tms / 1000).toFixed(1) + "s";
+        }
+        if (idx === 19) {
+          // FCUT (edit 19): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.
           // Mirrors Svf::cutoffHz: fc = 80 * (12000/80)^(raw/1023).
           const knob = raw / 1023;
           const fc = 80 * Math.pow(12000 / 80, knob);
           if (fc >= 1000) return (fc / 1000).toFixed(1) + "k";
           return Math.round(fc) + "H";
         }
-        if (idx === 23) {
-          // RES: SVF resonance Q (0.5 .. 2.5)
+        if (idx === 20) {
+          // RES (edit 20): SVF resonance Q (0.5 .. 2.5)
           const q = 0.5 + (raw / 1023) * 2.0;
           return q.toFixed(1);
         }
-        if (idx === 39) {
-          // FORM (edit 39): formant vowel position. Show the nearest vowel
+        if (idx === 31) {
+          // FORM (edit 31): formant vowel position. Show the nearest vowel
           // (A/E/I/O/U) as a single letter.
           const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
           return "AEIOU".charAt(vi);
         }
         // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
-        // 8..9 (SUB1/SUB2), 12 (FOLD), 16 (CHRD), 18 (MAIN, default 100%),
-        // 19..21 (RWAV/RDRV/RFLD), 24 (RWFC), 25..27 (Breath), 29 (CHFLD),
-        // 31..32 (JIT/RMOD), 35..36 (RFMA/RFMB), 38 (CHFLD2),
-        // 40 (FVOL), 41 (COMB).
+        // 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN, default 100%),
+        // 16..18 (RWAV/RDRV/RFLD), 21 (RWFC), 22..24 (Breath),
+        // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -711,7 +716,7 @@
       // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
       // CHFLD 0 (chord fold off, = FOLD default), ..., FMVT 511, FLVL 0, COMB 0.
       // (FOLD2 / DCK removed — 44 params total.)
-      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 0, 205, 377, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 341, 0, 511, 0, 0, 0, 0, 0, 0, 341, 0, 511, 0, 0, 0, 0];
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -757,10 +762,9 @@
         {
           const wav1Index = Math.floor(Math.random() * 91);
           const wav2Index = Math.floor(Math.random() * 91);
-          const wav3Index = Math.floor(Math.random() * 91);
           set("Wave A", Math.round(wav1Index * (1023 / 90)));
           set("Wave B", Math.round(wav2Index * (1023 / 90)));
-          set("Wave C", Math.round(wav3Index * (1023 / 90)));
+          // (Wave C was removed — the chord/interval concept is gone.)
         }
 
         // --- Constrained (critical) parameters -------------------------------
@@ -792,43 +796,8 @@
         // FOLD: pre-drive wavefolder depth (0..1, multiplicative). 0..60%
         // (raw 0..613) — metallic character possible, no "metal mush".
         set("Fold", rRange(0, 613));
-        // CHRD: chord-voice level (0..100%). 0..60% — presence without masking.
-        set("Chord", rRange(0, 613));
-        // CINT: chord interval in cents (0..1900). Randomized over a DISCRETE
-        // set of consonant / musically-usable intervals so the chord voice is
-        // always "in key" (never a random dissonant gap).
-        const CINT_SET = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
-        const MIN_SEP = 175; // cents — mirrors kRndCintMinSepCents in osc_randomize.h
-        const cintRaw = (c) => Math.round((c * 1023) / 1900);
-        const pickCint = () => CINT_SET[Math.floor(Math.random() * CINT_SET.length)];
-        // CINT: first chord interval (consonant set; 0 = unison / off).
-        const c1 = pickCint();
-        // CINT2: the chord's SECOND interval. Same set, so both voices land on
-        // consonant "in key" intervals. Enforce a minimum separation from CINT
-        // (mirrors Osc::rnd_separate_cint): if both are non-zero and closer than
-        // MIN_SEP they sound like one beating note, so re-draw (up to 3x) then
-        // snap to the nearest non-zero set element >= MIN_SEP away. A 0 (unison)
-        // on either side is allowed.
-        let c2 = pickCint();
-        if (c1 !== 0 && c2 !== 0 && Math.abs(c1 - c2) < MIN_SEP) {
-          let fixed = false;
-          for (let t = 0; t < 3 && !fixed; t++) {
-            const cand = pickCint();
-            if (cand !== 0 && Math.abs(c1 - cand) >= MIN_SEP) { c2 = cand; fixed = true; }
-          }
-          if (!fixed) {
-            let best = c2, bestD = -1;
-            for (const cand of CINT_SET) {
-              if (cand === 0) continue;
-              const d = Math.abs(c1 - cand);
-              if (d < MIN_SEP) continue;
-              if (bestD < 0 || d < bestD) { bestD = d; best = cand; }
-            }
-            c2 = best;
-          }
-        }
-        set("Interval", cintRaw(c1));
-        set("Interval 2", cintRaw(c2));
+        // (CHRD/CINT/CINT2/CHSAT/CHFLD/CHSAT2/CHFLD2 were removed — the
+        //  chord/interval concept is gone.)
         // MAIN: main (A+B) voice level (0..100%). Window 55..100%
         // (raw 563..1023) — the main voice stays clearly present (never fully
         // ducked, which would leave only subs/chord and sound "hollow"), but
@@ -853,22 +822,8 @@
         set("Breath Rate", r1023());
         // RVLSM: breath stream time constant (10 ms..1.5 s, log). Full range.
         set("Breath Smooth", r1023());
-        // CHSAT: chord's own saturator drive (0..300). Window 0..60% (raw
-        // 0..613) — a gentle-to-moderate drive on the chord voice, independent
-        // of the A+B SATU knob. The upper bound keeps the chord from clipping
-        // the final mix when the main voice is also driven.
-        set("Chord Drive", rRange(0, 613));
-        // CHFLD: chord's own wavefolder depth (0..100%). Window 0..50%
-        // (raw 0..511) — a light metallic edge on the chord, never a full
-        // triangle fold (which would alias harshly at the chord's higher
-        // partials). 0 keeps the chord clean.
-        set("Chord Fold", rRange(0, 511));
-        // CHSAT2: CINT2's own drive (0..300). Same window as Chord Drive
-        // (0..60% raw 0..613) so the higher interval can be driven independently.
-        set("Chord 2 Drive", rRange(0, 613));
-        // CHFLD2: CINT2's own fold (0..100%). Same window as Chord Fold
-        // (0..50% raw 0..511) — light edge on the higher interval.
-        set("Chord 2 Fold", rRange(0, 511));
+        // (Chord Drive / Chord Fold / Chord 2 Drive / Chord 2 Fold were removed —
+        //  the chord/interval concept is gone.)
         // ---- Enrichment params (formerly left at 0 — now randomized safely) ----
         // JIT: random phase jitter on A/B (0..100% -> 0..0.5% cycle peak).
         // Window 0..15% (raw 0..153) — a light "smear" of the carriers into a
@@ -966,29 +921,7 @@
           }
           base[idx] = v;
         }
-        // CINT / CINT2 separation (mirrors Osc::randomizePartial): if this pass
-        // re-rolled at least one of the two interval sliders, keep the resulting
-        // pair at least 175 cents apart. The re-draws above (which regenerate
-        // the full array) can leave the pair too close when only one was
-        // touched, so enforce it on the FINAL base values.
-        if (picked.has(17) || picked.has(30)) {
-          const raw2cents = (r) => Math.round((r * 1900) / 1023);
-          const MIN_SEP2 = 175;
-          const c1 = raw2cents(base[17]);
-          let c2 = raw2cents(base[30]);
-          if (c1 !== 0 && c2 !== 0 && Math.abs(c1 - c2) < MIN_SEP2) {
-            const CINT_SET2 = [0, 400, 500, 700, 900, 1000, 1200, 1500, 1900];
-            let best = c2, bestD = -1;
-            for (const cand of CINT_SET2) {
-              if (cand === 0) continue;
-              const d = Math.abs(c1 - cand);
-              if (d < MIN_SEP2) continue;
-              if (bestD < 0 || d < bestD) { bestD = d; best = cand; }
-            }
-            c2 = best;
-            base[30] = Math.round((c2 * 1023) / 1900);
-          }
-        }
+        // (CINT/CINT2 separation was removed — the chord/interval concept is gone.)
         return base;
       }
 

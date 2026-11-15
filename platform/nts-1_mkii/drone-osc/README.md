@@ -3,43 +3,101 @@
 A dual wavetable drone generator for the **NTS-1 mkII** (Logue SDK).
 
 The unit is a single-voice evolving drone: two detuned wavetable voices at the
-base note, a two-voice "chord" at selectable intervals, two sub-octave voices,
-an asymmetric saturator + wavefolder, an internal 12 dB/oct SVF, and four
-independent random-walk "wandering" streams that make the tone, timbre,
-density and voice levels breathe over time. There is no per-sample branching on
-audio data and no dynamic allocation -- all state lives inside the Osc class.
+base note, two sub-octave voices, an asymmetric saturator + wavefolder, an
+internal 12 dB/oct SVF, and four independent random-walk "wandering" streams
+that make the tone, timbre, density and voice levels breathe over time. There
+is no per-sample branching on audio data and no dynamic allocation -- all state
+lives inside the Osc class.
 
 ---
 
 ## Sound path
 
-The audio thread runs one pass per sample (Osc::process, in osc_mix.h).
-Five parallel branches are mixed, then lifted by a makeup gain and passed
-through a shared tanh soft-clip:
+The drone is now a **polyphonic 4-voice CLUSTER** (Osc::process, osc_mix.h).
+Every MIDI note gets its own lightweight voice in a cluster of `kVoiceCount = 4`;
+LATCH is ALWAYS ON (notes are held; re-pressing the SAME note toggles it off; a
+5th note steals the OLDEST voice). Each new note GLIDES from the cluster's LAST
+note using the GRIMM-style **exponential** portamento (the `GLIDE` knob). The
+4 voices are **identically configured** (same wavetables, DETU, SATU/ASYM/FOLD,
+random walks, SVF, formant, comb, duck); only their pitch (w0 + glide), phasors,
+sub-voice states and A-H-R envelope differ.
+
+Per sample the path (1) advances each voice's GLIDE, (2) runs each voice's
+lightweight source (A/B phasors + wavetables + sub/sub-2 + ring-mod), summing
+them into shared accumulators, then (3) applies the SINGLE common post-stage to
+the sums (so 4 notes read as one blended drone, not 4 instruments):
 
 ```
-out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK + y_chord + y_sub1 + y_sub2 + y_ring*DUCK ) )
+PER VOICE (x kVoiceCount = 4):  [ GLIDE: v.w0 += gl_k_ step toward target ]
+  phasor A  ->  wavetable A (WA1)   [ DETU, FM1, FMAB, JIT, + walk detune ]
+  phasor B  ->  wavetable B (WA2)   [ DETU, FM2, FMBB, JIT, + walk detune ]
+  phasor sub->  sub-octave sine (SUB1)            [ f/2, LFO-FM ]
+  phasor s2 ->  sub-2 voice (SUB2)                [ f/4, saturated/LPF/gated ]
+  -> sum_main += (wavA*lvlA + wavB*lvlB)
+  -> sum_sub  += sub
+  -> sum_sub2 += sub2
+  -> sum_ring += wavA*wavB
+     (shared per-sample: the random walks, FM index, JIT are ONE drone)
+
+PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
+  Each of the 4 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
+  accumulation loop: a new note (env 0->1 over 2 s) ADDS to the cluster
+  instead of dragging the whole thing through a common MAX. (A common
+  output envelope = max over all voices used to dip the entire cluster the
+  instant a 2nd note started from env=0 -- the "silence on the 2nd note"
+  bug, worst with GLIDE>0 where the new note's glide and envelope reset
+  coincide. Per-voice gating removes that shared-dip.)
+  env_sum  = sum over the 4 voices of its A-H-R envelope (0..kVoiceCount)
+  env_comp = one-pole smoothed (tau ~50 ms, kClusterCompAlpha) of
+             1 / sqrt(env_sum)   (floored at 1 -> a single note is never
+             attenuated; N=1 -> 1 exactly, N=4 -> ~0.5)
+  The SUMMED voice signals (sum_main / sum_sub / sum_sub2 / sum_ring) are
+  each multiplied by env_comp BEFORE the shared post-stage, so N notes read
+  at ~one note's loudness instead of N times louder (the kMix* budget is
+  designed for one note; without this, a full cluster feeds fold/saturate at
+  ~x4 and the fastertanh2f soft-clip pegs -> "shouting / clipping").
+
+COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
+  mix  = kMixOsc * (sum_main * env_comp)
+  -> FLD (wavefolder, FLD)
+  -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)   [ x kMixOsc ]
+  -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
+  -> FORMANT (2 parallel IIR-comb resonators F1+F2, FMVT/FLVL, parallel-add)
+  -> COMB (IIR resonator, COMB feedback, fixed delay)
+  = y_main
+
+out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK
+            + (sum_sub*env_comp)*SUB1 + (sum_sub2*env_comp)*SUB2
+            + (sum_ring*env_comp)*RMOD*MAIN*DUCK ) )
   where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
+        and the per-voice envelopes are already folded into the sums
+        (each sum_main/sub/sub2/ring term was multiplied by that voice's
+        v.eg.env in the loop). There is NO common output envelope: N notes
+        each fade in/out on their own, the cluster reads as one blended
+        drone whose level is the sum of the individually-enveloped voices.
 
-MAIN voice (osc A + osc B)
-  phasor A  ->  wavetable A (WA1)   [ DET, FM1, FMAB, JIT, + walk detune ]
-  phasor B  ->  wavetable B (WA2)   [ DET, FM2, FMBB, JIT, + walk detune ]
-  y = (wavA + wavB) / 2
-    -> FLD (wavefolder, FLD)
-    -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)
-    -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
-    -> FORMANT (2 parallel IIR-comb resonators F1+F2, FMVT/FLVL, parallel-add)  <-- new
-    -> COMB (IIR resonator, COMB feedback, fixed delay)             <-- new
-    = y_main
+Mono-exactness: with 1 note, that voice's env gates its own contribution and
+env_comp = 1/sqrt(1) = 1, so the single-note path is numerically identical to
+the pre-cluster mono unit. Per-voice envelope + 1/sqrt(N) loudness are what
+make the polyphonic cluster both level-independent of note count AND free of
+the 1->2 note boundary dip.
+```
 
-CHORD voice (osc C at INT, osc C2 at INT2)
-  phasor C  ->  wavetable C (WA3)  at base * 2^(INT/1200)
-  phasor C2 ->  wavetable C (WA3)  at base * 2^(INT2/1200)
-  [pitch crossfade: when INT/INT2 changes, old + new phasors are AM-blended
-   over 2 s (same one-pole as the level fade) before the folder/saturator]
-  each: -> FLD (CFLD / CH2F) -> SAT (CH2D / CH2D, shared ASYM)
-  y_chord = (c1 + c2) * CHRD * lvl_c * fade    (lvl_c = Breath stream,
-                                               fade = 2 s one-pole on INT / INT2)
+The CPU cost is ~1.6x the old mono (4 light sources + 1 shared post-stage +
+one extra env_sum pass + the one-pole env_comp), not 4x — the heavy
+SVF/formant/comb/duck run only ONCE on the summed signal.
+(Glide: `d = (gl_k_ * x) >> 16; x -= d`, snap when |x| < kGlideSnap; `gl_k_` is
+the GRIMM step coefficient from the GLIDE knob. The current pitch is computed
+ABSOLUTELY as `vw0 = glide_to * 2^(-glide_dist/4096)` where `glide_dist` is in
+1/4096-octave units (1 semitone = 4096/12 ≈ 341 units). `v.w0` is never modified
+during the glide — it holds the target. This avoids the cumulative-multiplication
+blow-up of the old `v.w0 *= 2^(x/4096)` approach.)
+
+
+
+
+
+
 
 SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub   <-- new
 SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2   <-- new
@@ -56,8 +114,8 @@ The A-H-R envelope (2 s / 2 s) multiplies the whole sum (note attack/release).
 Key facts about the path:
 
 * **Detune (DET)** is applied *per voice* (A gets +c/2 cents, B gets -c/2),
-  so the inter-voice beat is ~4x stronger than a post-mix sum detune. The chord
-  and sub voices stay on the base note (stable "anchors").
+  so the inter-voice beat is ~4x stronger than a post-mix sum detune. The sub
+  voices stay on the base note (stable "anchors").
 * **Phase-FM** (FM_A / FM_B) modulates the carrier *phasors* (classic Bessel
   sidebands). The modulator is the *other* voice's wavetable output, one sample
   delayed. The static index is **not** gated by RATE; RFM_A / RFM_B add a
@@ -69,39 +127,10 @@ Key facts about the path:
   ~120 Hz base pitch (f/4 < 30 Hz).
 * **Note glide**: when the base note changes, the base phase increment is
   interpolated linearly over **1 s** and every derived voice (A/B, sub-1,
-  sub-2, chord, chord-2, wavetable morph) is recomputed from it, so the whole
+  sub-2, wavetable morph) is recomputed from it, so the whole
   sound slides in pitch together.
- * **Chord interval fade**: switching INT / INT2 on (> 0 c) or off (0 c,
-   unison) does not toggle the chord level instantly -- each interval's level
-   is relaxed toward (active ? 1 : 0) with a **2 s one-pole exponential**
-   (`chord1_fade_` / `chord2_fade_`, the same curve as the note attack/release
-   envelope), so an interval **fades in over 2 s when turned on** and **fades
-   out over 2 s when turned off** (no click, no instant "start screaming").
-   The chord phasor **always advances** (even at cents == 0), so the signal
-   shape is continuous (no "sine -> constant" jump) when the interval crosses
-   0; only the LEVEL fades. Re-targeting mid-fade is continuous, so scrubbing
-   the knob through 0 is click-free. The whole chord is still gated by the
-   note A-H-R envelope, so a note-off kills it instantly.
- * **Chord pitch crossfade**: when the INT or INT2 cents value **changes**
-   the phasor's frequency ratio (w0) jumps and would produce an audible click.
-   To smooth the transition, TWO wavetable lookups are run per chord voice —
-   the "old" phasor (running at the previous offset) and the "new" phasor
-   (reset to the fresh offset) — and their outputs are **AM-blended** with a
-   one-pole coefficient that relaxes from 0 (all old) to 1 (all new) over
-   **2 s** (same `kChordCrossSamples` / `kChordFadeSamples` curve as the on/off
-   level fade). The blend happens in the wavetable-output domain, **before**
-   the folder/saturator, so the saturation is shared. When the cents value is
-   stable the old phasor is synced to the new one and only one lookup runs
-   (regression-safe, zero extra cost in steady state). The crossfade is
-   triggered by `apply_edit_param(CINT/CINT2)` (osc_param_apply.h) resetting
-   `chord_new_` / `chord2_new_` and starting `chord1_cross_` / `chord2_cross_`
-   from 0, and records the pre-change cents in `chord_old_cents_` /
-   `chord2_old_cents_` so the "old" phasors keep their pre-change frequency for
-   the whole fade (a base-pitch change mid-fade does not destroy the crossfade;
-   on completion the old cents sync back to `params_`). Because CINT / CINT2 are
-   excluded from the Rnd morph (see the *Rnd re-roll* section), a re-roll
-   applies the new interval **immediately** and the crossfade is the ONLY
-   smoothing — a clean 2 s voice swap, not a cents glide.
+  // (The chord-voice fade/crossfade notes were removed — the chord/interval
+  //  concept is gone.)
 
 ### Rnd re-roll (BPM-synced smooth morph)
 
@@ -128,30 +157,14 @@ all at once.
   every active parameter's start delay at 0..2 s and the re-roll would feel
   "unresponsive". The anchor is only applied on a FRESH morph (not on a
   re-aim mid-morph), so an in-flight morph is never disrupted.
-* **What morphs**: the parameters selected by the re-roll (All → all 44,
+* **What morphs**: the parameters selected by the re-roll (All → all 36,
   Part → the 2..6 re-drawn ones, Orbit → the 2..4 nudged ones), each through the same
   `apply_edit_param()` path a manual PARAM_VAL edit uses, so the derived-voice
-  caches (wavetables, chords, SVF coefficients, formant combs) stay consistent
+  caches (wavetables, SVF coefficients, formant combs) stay consistent
   with the moving raw values. Discrete parameters morph in their native space
   for free: a fractional wavetable index crossfades via `resolve_wave()`.
-  **Exception — CINT / CINT2 do NOT morph**: the two chord intervals are
-  excluded from the morph engine (`rndMorphStart` skips idx 17 / 30) and are
-  applied **immediately** inside `rndMorphStart` instead (an
-  `apply_edit_param()` call for each, on a real change), so the chord
-  **pitch-crossfades** (old interval fades out, new interval fades in over
-  2 s — see the *Chord pitch crossfade* note in the Sound-path section) rather
-  than the interval gliding in cents. This is audible as a clean "voice swap"
-  instead of a slide. (The sim's CINT / CINT2 sliders therefore snap to the
-  new value on a re-roll — the DSP, not the slider, carries the 2 s crossfade.)
-   **CINT / CINT2 minimum separation**: when a re-roll draws the two chord
-   intervals, `rnd_separate_cint()` (osc_randomize.h) guarantees that if BOTH are
-   non-zero they end up at least `kRndCintMinSepCents` (175 c) apart — closer
-   they sound like a single beating note rather than two distinct voices. If the
-   fresh draw is too close, the second interval is re-drawn (up to 3×) and, if
-   still too close, snapped to the nearest consonant-set element far enough away.
-   A 0 (unison) on either interval is always allowed (it silences that voice).
-   Enforced in all three re-roll paths (All / Part / Orbit) and mirrored in the
-   web simulator's `randomizeAllRaw()` / `partialRandomRaw()`.
+  // (The CINT/CINT2 morph exception + minimum-separation rules were removed —
+  //  the chord/interval concept is gone.)
 * **Re-fire mid-morph (C1-continuous re-aim)**: a new fire while a morph is in
   flight does NOT restart the morph. It re-aims **every** parameter (not just
   the currently-active ones), because a new fire (especially Orbit/Part) often
@@ -208,15 +221,25 @@ all at once.
   followed by `Module.stableSync()` so the C++ Orbit reference matches the
   freshly-reset sound).
 
-### Envelope / key behaviour
+### Envelope / key behaviour (LATCH + polyphonic cluster)
 
-The unit runs its own **A-H-R** envelope (the platform EG is set to *open*):
-2 s exponential attack, hold at full level while the note is active, 2 s
-exponential release. **Legato is always on** (there is no Legato switch):
-key release does **not** stop the sound. Re-pressing the *same* key fades it
-out (toggle-off); pressing a *different* key retargets the pitch (1 s glide,
-amplitude stays continuous) and keeps playing. The drone is stopped by the
-toggle-off re-press or by All-Notes-Off.
+Each cluster voice runs its own **A-H-R** envelope (the platform EG is set to
+*open*): 2 s exponential attack, hold at full level while the note is active,
+2 s exponential release. **LATCH is ALWAYS ON** (there is no Legato switch):
+key release does **not** stop the note — it is held. Behaviour:
+
+* **New note** -> starts its own voice in the cluster (up to 4 at once), with a
+  fresh 2 s A-H-R attack. The note **GLIDES from the cluster's LAST note**
+  (GRIMM exponential, the `GLIDE` knob); the very first note just jumps.
+* **Same note re-pressed** -> TOGGLE-OFF that one voice (2 s release, fades out
+  while the others keep sounding).
+* **> 4 notes held** -> the OLDEST active voice is **stolen** (released) and the
+  new note takes it, so the cluster never exceeds `kVoiceCount`.
+* The whole cluster is stopped only by All-Notes-Off (instant, no release tail).
+
+`setPitch()` is now a **no-op** in this build (the cluster's pitch is driven
+entirely by `noteOn`); it is kept for API compatibility with `unit.cc` /
+`wasm.cc`.
 
 The randomization is a **two-slot multiplexer** (edit-menu, device-only):
 
@@ -236,11 +259,11 @@ The randomization is a **two-slot multiplexer** (edit-menu, device-only):
     the result is recognizably the *same* sound, developed. Per fire it:
     * nudges **2..4** parameters (vs Part's 2..6);
     * picks each from **ONE weighted family** -- *core* (harmonic core: detune,
-      subs, A/B/C wavetables, chord, intervals), *timbre* (color: saturation,
+      subs, A/B wavetables), *timbre* (color: saturation,
       fold, filter, ring-mod, comb), *motion* (movement: RATE, the wander
       streams, walk depths, breath, FM) or *extra* (enrichment layers, default
       OFF -- a low-weight "surprise") -- so a single fire develops one "sphere"
-      of the sound rather than reaching across all 44 parameters (a small
+      of the sound rather than reaching across all 36 parameters (a small
       ~4% "surprise" chance still lets a fire touch any parameter);
     * moves each by a step: at least `kRndOrbiMinStepRaw` (64, ~6%, still
       audible) but at most `kRndOrbiMaxStepRaw` (307, ~30%) of the 10-bit range
@@ -309,12 +332,12 @@ two physical knobs:
 * **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 44 editable DSP parameters (select_ index -> name), with range, factory
+All 36 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
 |---|------|---------|-------|---------|--------|
-| 0 | RATE | % | 0..100% (quadratic) | 0% (off) | Shared ceiling for every random-walk stream. 0 = all wandering off. (First in the multiplexer -- the most-edited "chaos" lever.) |
+| 0 | RATE | % | 0..100% (quadratic) | 0% (off) | Shared ceiling for every random-walk stream. 0 = all wandering off. (First in the multiplexer -- the most-edited chaos lever.) |
 | 1 | DET | +/-c | -10..+10 c | 0 c | Static symmetric detune: A = +c/2, B = -c/2. |
 | 2 | SPD1 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Tone** stream period (mean target-update gap). |
 | 3 | SM1 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Tone** stream time constant. |
@@ -329,33 +352,26 @@ default and effect:
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
 | 13 | WA1 | index | 0..90 (banks A-F) | 0 | Osc A wavetable. |
 | 14 | WA2 | index | 0..90 (banks A-F) | ~11 | Osc B wavetable. |
-| 15 | WA3 | index | 0..90 (banks A-F) | 0 | Chord-voice (osc C/C2) wavetable. |
-| 16 | CHRD | % | 0..100% | ~20% | Chord-voice level (both intervals INT + INT2). |
-| 17 | INT | NNNc | 0..1900 c (continuous) | ~700 c (fifth) | First chord interval above the base note. 0 = off (unison); on/off fades over 2 s. |
-| 18 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). |
-| 19 | TWDR | % | 0..100% | 0% (off) | Walk depth on wavetable morph (+/-10 tables). |
-| 20 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
-| 21 | FWDR | % | 0..100% | 0% (off) | Walk depth on wavefolder depth (+/-0.5). |
-| 22 | CUT | Hz / kHz | 80 Hz..12 kHz (log) | ~9 kHz | SVF cutoff **and** dry/wet blend (0% = raw, 100% = full LPF). |
-| 23 | RES | X.Y | 0.5..2.5 Q | 0.5 | SVF resonance. |
-| 24 | WFC | % | 0..100% | 0% (off) | Walk depth on SVF cutoff (+/-1 half-octave). |
-| 25 | BRT | % | 0..100% | 0% (off) | **Breath** stream depth on the four voice levels. |
-| 26 | BRR | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Breath** stream period. |
-| 27 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant. |
-| 28 | CH2D | 0..300 | 0..3.0 drive | = SAT | INT interval's own saturator drive (shared ASYM). |
-| 29 | CFLD | % | 0..100% | = FLD (0%) | INT interval's own wavefolder depth. |
-| 30 | INT2 | NNNc | 0..1900 c (continuous) | ~950 c (major sixth) | Second chord interval (shares CHRD level, WA3, Breath). 0 = off (unison); on/off fades over 2 s. |
-| 31 | JIT | % | 0..100% -> 0..0.5% phase | 0% (off) | Random phase jitter on A/B (smears the carrier). |
-| 32 | RMOD | % | 0..100% | 0% (off) | A*B ring-mod parallel voice (ducked by MAIN). |
-| 33 | FM1 | Nc | 0..100% (quadratic) -> ~0.5% phase | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). |
-| 34 | FM2 | Nc | 0..100% (quadratic) -> ~0.5% phase | 0% (off) | Static phase-FM of osc B by A (not RATE-gated). |
-| 35 | FMAB | % | 0..100% | 0% (off) | Walk depth on the FM-A index ("breathing" FM, RATE-gated). |
-| 36 | FMBB | % | 0..100% | 0% (off) | Walk depth on the FM-B index ("breathing" FM, RATE-gated). |
-| 37 | CH2D | 0..300 | 0..3.0 drive | = CH2D(28) | INT2 interval's own saturator drive. |
-| 38 | CH2F | % | 0..100% | = CFLD (0%) | INT2 interval's own wavefolder depth. |
-| 39 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
-| 40 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
-| 41 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
+| 15 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). |
+| 16 | TWDR | % | 0..100% | 0% (off) | Walk depth on wavetable morph (+/-10 tables). |
+| 17 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
+| 18 | FWDR | % | 0..100% | 0% (off) | Walk depth on wavefolder depth (+/-0.5). |
+| 19 | CUT | Hz / kHz | 80 Hz..12 kHz (log) | ~9 kHz | SVF cutoff **and** dry/wet blend (0% = raw, 100% = full LPF). |
+| 20 | RES | X.Y | 0.5..2.5 Q | 0.5 | SVF resonance. |
+| 21 | WFC | % | 0..100% | 0% (off) | Walk depth on SVF cutoff (+/-1 half-octave). |
+| 22 | BRT | % | 0..100% | 0% (off) | **Breath** stream depth on the voice levels. |
+| 23 | BRR | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Breath** stream period. |
+| 24 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant. |
+| 25 | JIT | % | 0..100% -> 0..0.5% phase | 0% (off) | Random phase jitter on A/B (smears the carrier). |
+| 26 | RMOD | % | 0..100% | 0% (off) | A*B ring-mod parallel voice (ducked by MAIN). |
+| 27 | FM1 | Nc | 0..100% (quadratic) -> 0..0.05 c | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). |
+| 28 | FM2 | Nc | 0..100% (quadratic) -> 0..0.05 c | 0% (off) | Static phase-FM of osc B by A (not RATE-gated). |
+| 29 | FMAB | % | 0..100% | 0% (off) | Walk depth on the FM-A index ("breathing" FM, RATE-gated). |
+| 30 | FMBB | % | 0..100% | 0% (off) | Walk depth on the FM-B index ("breathing" FM, RATE-gated). |
+| 31 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
+| 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
+| 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
+| 34 | GLIDE | ms/s | 0 = OFF (jump); 1..1023 -> ~10 ms..2.5 s (quadratic) | 0% (off) | **Portamento** of the polyphonic cluster: each new note glides from the cluster's LAST note using the GRIMM exponential step (`d = (gl_k_*x)>>16; x -= d`, `x` in 1/4096-octave units, 1 st = 341 units). The current pitch is `glide_to * 2^(-x/4096)` (absolute, not cumulative). 0 = the note jumps straight to its pitch (regression-safe); low knob = a quick scoop, full knob = a slow siren. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -372,7 +388,7 @@ targets are **not** phase-locked:
 | **Tone** | SPD1 / SM1 | (depth from RATE) | A/B detune (+/-10 c) + FM index breathing |
 | **Timbre** | SPD2 / SM2 | TWDR, WFC | wavetable morph (+/-10 tables) + SVF cutoff (+/-1 half-oct) |
 | **Density** | SPD3 / SM3 | DWDR, FWDR | saturator drive (+/-0.5) + wavefolder depth (+/-0.5) |
-| **Breath** | BRR / SMT | BRT | the four voice levels (A / B / chord / sub) |
+| **Breath** | BRR / SMT | BRT | the voice levels (A / B / sub) |
 
 Each stream's targets are drawn from an **exponential distribution** (Poisson
 process) with the SPDx value as the mean, so the cadence "breathes" instead of
@@ -384,7 +400,6 @@ independent of the period, so the walk depth does not depend on speed.
 | Behaviour | Value | Notes |
 |-----------|-------|-------|
 | Attack / release | 2 s / 2 s | Exponential A-H-R, own envelope (platform EG open). |
-| Chord interval fade | 2 s / 2 s | INT / INT2 on-off: per-interval one-pole level fade (same curve as the note envelope); 0 c = off. |
 | Note glide | 1 s | Linear interpolation; all derived voices follow. |
 | Sub-1 detune | -4 c | One octave below the base, fixed. |
 | Sub-2 pitch gate | base < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. |
@@ -414,7 +429,7 @@ OSC (mono)  ->  FILTER (low-pass / high-pass / band-pass, with Cutoff and Resona
 
 DRONE's own internal 12 dB/oct SVF (CUT/RES) is **in addition to** (not a
 replacement for) the platform's FILTER block: the unit's SVF shapes the main
-A+B voice before the chord/subs are mixed in, while the platform filter and the
+A+B voice before the subs are mixed in, while the platform filter and the
 downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 
 ---
@@ -430,13 +445,12 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_param_apply.h | apply_edit_param() -- the single raw-10-bit -> DSP-float converter (source of truth for ranges). |
 | osc_param_display.h | getParameterStrValue() -- raw -> display string. |
 | osc_rnd.h | Rnd re-roll + morph engine: rndArm/rndTick (0.5 s debounce), rndMorphStart/rndMorphTick (BPM-synced morph), RndM mode state, web-sim request channels. |
-| osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle, legato note handling, 2 s pitch glide. |
+| osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle; polyphonic cluster voice allocation (steal oldest), LATCH toggle-off, per-voice GLIDE arming; setPitch is a no-op. |
 | osc_mix.h | process() -- the per-sample audio path; blockPrepass() -- the K-rate per-block prepass (edit/Rnd request consumption, rndTick, rndMorphTick, glide). |
 | osc_waves.h | Wavetable bank scanning + pitch-shifted morph + LFO-morph crossfade. |
 | osc_saturator.h | Stateless wavefolder (fold) + asymmetric tanh saturator (saturate). |
 | osc_svf.h | 12 dB/oct state-variable low-pass (cutoff/resonance/dry-wet + stability clamps). |
 | osc_random_walk.h | RandomWalk -- multi-channel wandering (exponential target cadence). |
-| osc_chord.h | ChordVoice -- the interval oscillator (INT / INT2 phasor). |
 | osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |

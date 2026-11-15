@@ -32,16 +32,12 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   static const char *const names[kEditParamCount] = {
       "RATE", "DET",
       "SPD1", "SM1", "SPD2", "SM2", "SPD3", "SM3",
-      "SUB1", "SUB2", "SAT", "ASYM", "FLD", "WA1", "WA2", "WA3",
-      "CHRD", "INT",
-      "MAIN",
+      "SUB1", "SUB2", "SAT", "ASYM", "FLD", "WA1", "WA2",      "MAIN",
       "TWDR", "DWDR", "FWDR",
       "CUT", "RES", "WFC",
       "BRT", "BRR", "SMT",
-      "CH2D", "CFLD",
-      "INT2", "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
-      "CH2D", "CH2F",
-      "FMVT", "FLVL", "COMB"};
+      "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
+      "FMVT", "FLVL", "COMB", "GLIDE"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -69,34 +65,14 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   const int32_t raw = edit_value_[idx];
   const int32_t k = kEditParamFirst + idx;
 
-  static char buf[8];
+  static char buf[8]; // "OFF" / "NNNms" / "N.Ns" / "NNN H" / "NN.Nk" all fit in 8
 
   // SPDx / SMTx (stream period / time constant): display as 0..100% (the
   // default branch). The actual s / ms value is a log mapping of the raw
   // 0..1023 value; showing % keeps the display consistent and avoids
   // pulling a fasterpowf into the K-rate display path.
 
-  // INT (chord interval): display cents (0..1900), not a name.
-  // INT2 (second chord interval) uses the same format.
-  if (k == CHRD_INT || k == CINT2)
-  {
-    int ci = (int)(param_10bit_to_f32(raw) * ChordVoice::kMaxCents + 0.5f);
-    // format as "NNNc" (e.g. "700c", "1900c")
-    int n2 = 0;
-    int t2 = ci;
-    char d2[5];
-    int nd2 = 0;
-    do
-    {
-      d2[nd2++] = (char)('0' + t2 % 10);
-      t2 /= 10;
-    } while (t2 > 0);
-    for (int i = nd2 - 1; i >= 0; --i)
-      buf[n2++] = d2[i];
-    buf[n2++] = 'c';
-    buf[n2] = '\0';
-    return buf;
-  }
+  // (INT / INT2 chord intervals were removed — the chord/interval concept is gone.)
 
   // FM_A / FM_B (phase-FM depth): "Nc" (0..kFmMaxCents, <= 2 digits).
   // Shows the ACTUAL depth after the quadratic kFmCurveExp
@@ -175,21 +151,58 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     return buf;
   }
 
+  // GLIDE (portamento): raw 0 = "OFF" (jump); raw 1..1023 = the quadratic
+  // time in ms ("NNN ms" < 1 s, "N.Ns" >= 1 s). Shows the ACTUAL slide time
+  // the knob maps to (kGlideMinMs .. kGlideMaxMs), so the display never
+  // overstates the glide.
+  if (k == GLIDE)
+  {
+    if (raw <= 0)
+    {
+      buf[0] = 'O'; buf[1] = 'F'; buf[2] = 'F'; buf[3] = '\0';
+      return buf;
+    }
+    const float x = param_10bit_to_f32(raw);
+    const float t_ms = kGlideMinMs + (kGlideMaxMs - kGlideMinMs) * x * x;
+    if (t_ms < 1000.f)
+    {
+      int t = (int)(t_ms + 0.5f); // 0..999
+      int n = 0;
+      if (t >= 100) buf[n++] = (char)('0' + t / 100);
+      t %= 100;
+      if (t >= 10 || t_ms >= 100.f) buf[n++] = (char)('0' + t / 10);
+      buf[n++] = (char)('0' + t % 10);
+      buf[n++] = 'm'; buf[n++] = 's';
+    }
+    else
+    {
+      int t10 = (int)(t_ms / 10.f + 0.5f); // 100..250 (N.N * 10)
+      int whole = t10 / 10;
+      int frac = t10 % 10;
+      int n = 0;
+      buf[n++] = (char)('0' + whole);
+      buf[n++] = '.';
+      buf[n++] = (char)('0' + frac);
+      buf[n++] = 's';
+      buf[n] = '\0';
+    }
+    return buf;
+  }
+
   int v;
-  if (k == WAV1 || k == WAV2 || k == WAV3)
+  if (k == WAV1 || k == WAV2)
     v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
   else if (k == ASYM)
     v = (int)((raw * 200) / kRawMax) - 100;
   else if (k == DETUNE)
     v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
-  else if (k == SATU || k == CHSAT || k == CHSAT2)
-    v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (SATU / CHSAT / CHSAT2 = per-voice drive)
+  else if (k == SATU)
+    v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (per-voice drive)
   else
     v = (int)((raw * 100) / kRawMax);
 
-  // CHFLD formats as 0..100% (the default branch), so it is NOT in this
-  // no-percent list. CHSAT, like SATU, shows a bare 0..300 number.
-  const bool percent = (k != WAV1 && k != WAV2 && k != WAV3 && k != SATU && k != CHSAT && k != DETUNE && k != CHRD_INT);
+  // FLD formats as 0..100% (the default branch). SATU shows a bare 0..300 number.
+  const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE);
   int n = 0;
   if (v < 0)
     buf[n++] = '-';

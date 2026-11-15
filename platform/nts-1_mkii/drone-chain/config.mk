@@ -28,6 +28,7 @@ PROJECT := drone_chain
 #
 WASMSRC_C := $(PROJECT_ROOT)/header.c \
              $(PROJECT_ROOT)/../../../websim/dsp/wavetable_lut.c \
+             $(PROJECT_ROOT)/../../../websim/dsp/midi_to_hz_lut.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-a.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-b.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-c.c \
