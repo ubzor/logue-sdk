@@ -111,6 +111,13 @@ struct RandomWalk
                           // gap.
   uint32_t next_interval_c; // gap for the NEXT C target (independent cadence)
   uint32_t next_interval_d; // gap for the NEXT D target (independent cadence)
+  // Monotonic counter: incremented every time the A/B targets are redrawn
+  // (counter wraps to 0 in advance()). The Osc (process) uses this to detect
+  // the "tick" sample: when redraw_count_ changes, every cluster voice redraws
+  // its OWN per-voice breath target (see Osc::process, osc_mix.h). This lets
+  // the Breath stream drive PER-VOICE levels (each note breathes independently)
+  // instead of a single shared level for all voices.
+  uint32_t redraw_count_ = 0;
   // Cached RATE SPD / RATE SMTH values (0..1). setup() recomputes k/mean_interval
   // only when these change (K-rate, not per-block), avoiding 2 fasterpowf
   // calls per block in Osc::process when the walk is active.
@@ -159,6 +166,19 @@ struct RandomWalk
       next_interval_d = mean_interval; // D channel: independent cadence
     }
   }
+
+  // Monotonic redraw counter: incremented every time the A/B targets are
+  // regenerated in advance(). The Osc reads this once per sample and compares
+  // it against a cached value to detect the "tick" sample (when every
+  // per-voice breath target must be redrawn). This is the mechanism that lets
+  // the Breath stream drive PER-VOICE levels (each cluster note breathes
+  // independently) instead of a single shared level for all voices.
+  uint32_t getRedrawCount() const { return redraw_count_; }
+
+  // Per-sample tracking coefficient (from the time constant / SMOOTH knob):
+  // the coefficient k in dev += (target - dev) * k. The Osc reads this once
+  // per sample to advance each voice's breath_dev toward its breath_target.
+  float getK() const { return k; }
 
   // Draw the next target-update gap from an exponential distribution with
   // mean = mean_interval samples. Uses -ln(U) * mean where U is a uniform
@@ -218,6 +238,7 @@ struct RandomWalk
       target_a = white();
       target_b = white();
       draw_next_interval(white);
+      ++redraw_count_; // signal the tick to per-voice breath tracking (Osc)
     }
     if (++counter_c >= next_interval_c)
     {
@@ -271,6 +292,7 @@ struct RandomWalk
     counter = 0;
     counter_c = 0;
     counter_d = 0;
+    redraw_count_ = 0;
     cached_rate = -1.f;
     cached_smooth = -1.f;
     // The next gap starts as the (last-computed) mean so the first target

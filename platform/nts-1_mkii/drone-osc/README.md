@@ -366,9 +366,9 @@ default and effect:
 | 19 | CUT | Hz / kHz | 80 Hz..12 kHz (log) | ~9 kHz | SVF cutoff **and** dry/wet blend (0% = raw, 100% = full LPF). |
 | 20 | RES | X.Y | 0.5..2.5 Q | 0.5 | SVF resonance. |
 | 21 | WFC | % | 0..100% | 0% (off) | Walk depth on SVF cutoff (+/-1 half-octave). |
-| 22 | BRT | % | 0..100% | 0% (off) | **Breath** stream depth on the voice levels. |
-| 23 | BRR | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Breath** stream period. |
-| 24 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant. |
+| 22 | BRT | % | 0..100% | 0% (off) | **Breath** depth: per-voice level swing on the MAIN (A+B) voice. INDEPENDENT of RATE — turns on with BRT > 0 even at RATE = 0. Only the main voice breathes; SUB1/SUB2 stay static. |
+| 23 | BRR | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Breath** stream period: how often each note's breath target is redrawn. |
+| 24 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant: how quickly each note's level tracks its target. |
 | 25 | JIT | % | 0..100% -> 0..0.5% phase | 0% (off) | Random phase jitter on A/B (smears the carrier). |
 | 26 | RMOD | % | 0..100% | 0% (off) | A*B ring-mod parallel voice (ducked by MAIN). |
 | 27 | FM1 | Nc | 0..100% (quadratic) -> 0..0.05 c | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). |
@@ -385,21 +385,33 @@ removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
 
 ### The four random-walk streams
 
-RATE is the single ceiling that enables all wandering (0 = everything static).
-Each stream is independent (own period SPDx, own time constant SMx) and its
-targets are **not** phase-locked:
+RATE is the ceiling that enables the first three wandering streams
+(0 = Tone / Timbre / Density static). The **Breath** stream is INDEPENDENT of
+RATE: it is gated only by BRT (Breath Depth) and breathes even at RATE = 0.
+Each stream is independent (own period, own time constant) and its targets are
+**not** phase-locked:
 
-| Stream | Period / Smooth | Target knob(s) | Drives |
-|--------|-----------------|----------------|--------|
-| **Tone** | SPD1 / SM1 | (depth from RATE) | A/B detune (+/-10 c) + FM index breathing |
-| **Timbre** | SPD2 / SM2 | TWDR, WFC | wavetable morph (+/-10 tables) + SVF cutoff (+/-1 half-oct) |
-| **Density** | SPD3 / SM3 | DWDR, FWDR | saturator drive (+/-0.5) + wavefolder depth (+/-0.5) |
-| **Breath** | BRR / SMT | BRT | the voice levels (A / B / sub) |
+| Stream | Period / Smooth | Target knob(s) | Drives | RATE-gated |
+|--------|-----------------|----------------|--------|------------|
+| **Tone** | SPD1 / SM1 | (depth from RATE) | A/B detune (+/-10 c) + FM index breathing | yes |
+| **Timbre** | SPD2 / SM2 | TWDR, WFC | wavetable morph (+/-10 tables) + SVF cutoff (+/-1 half-oct) | yes |
+| **Density** | SPD3 / SM3 | DWDR, FWDR | saturator drive (+/-0.5) + wavefolder depth (+/-0.5) | yes |
+| **Breath** | BRR / SMT | BRT | per-note MAIN (A+B) voice level (each note breathes independently) | **no** |
 
 Each stream's targets are drawn from an **exponential distribution** (Poisson
-process) with the SPDx value as the mean, so the cadence "breathes" instead of
-ticking at a fixed period. The tracking time constant (SMx / SMT) is
-independent of the period, so the walk depth does not depend on speed.
+process) with the period value as the mean, so the cadence "breathes" instead
+of ticking at a fixed period. The tracking time constant is independent of the
+period, so the walk depth does not depend on speed.
+
+The **Breath** stream drives the MAIN voice level of EACH cluster note using a
+**"Rotating Focus"** algorithm: on each tick (period = BRR), the "focus"
+(highlighted note) advances to the next active voice in round-robin order. The
+focus voice's level increases by BRT (Breath Depth); the other voices' levels
+decrease by BRT / (n_active - 1), so the SUM of all levels stays constant (the
+overall loudness does not pump). The transition is SMOOTH: each voice's level
+tracks its target with the SMT time constant (exponential, non-linear). With
+only 1 note, breathing is off (level stays at 1.0). SUB1 (f/2) and SUB2 (f/4)
+are intentionally NOT breathed — the low-end anchor stays static.
 
 ### Non-editable (fixed) behaviour
 

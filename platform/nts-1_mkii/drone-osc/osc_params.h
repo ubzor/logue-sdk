@@ -35,12 +35,11 @@ struct OscParamsData
   float drive;          // 0.f .. 3.f, SATU knob
   float rw_amount;    // 0.f .. 1.f, edit: SHARED random-walk depth ceiling (quadratic-mapped)
                      //            for all three wandering streams (RATE knob).
-  float rw_amount_lin;// 0.f .. 1.f, edit: LINEAR RATE-knob depth, used ONLY by the Breath
-                     //            stream (voice-level wandering). Linear so that at
-                     //            RATE=50% the breath can still reach full depth
-                     //            (dev=-1 -> lvl=0) and voices can fully disappear;
-                     //            the quadratic rw_amount would cap breath at 25%
-                     //            depth (lvl >= 0.75) at RATE=50%.
+  float rw_amount_lin;// 0.f .. 1.f, edit: LINEAR RATE-knob depth. (Historically
+                     //            used by the Breath stream; since the Breath
+                     //            stream became RATE-independent (gated only by
+                     //            RW_LVL), this field is no longer read by the
+                     //            audio path. Kept for struct compatibility.)
   // Three independent wandering streams (Tone / Timbre / Density), each with
   // its own period (SPDx) and time constant (SMTx). They wander with
   // independent random targets on independent (randomly-drawn) periods, so the
@@ -78,22 +77,24 @@ struct OscParamsData
   float svf_wet;      // 0.f .. 1.f, edit: FCUT dry/wet (0 = raw, 1 = full LPF)
   float rw_fc;        // 0.f .. 1.f, edit: random-walk depth on SVF cutoff (RWFC)
 
-  // ---- Breath stream (voice-level wandering): RW_LVL / RW_LSP / RW_LSM ----
-  // A fourth random-walk stream (rw_[3] in the Osc) drives the four voice
-  // LEVELS (A / B / chord / sub) so they slowly "breathe" in and out of
-  // prominence — the heart of a drone, which is a cluster of voices trading
-  // the floor. The three knobs below are its three degrees of freedom:
+  // ---- Breath stream (PER-VOICE level wandering): RW_LVL / RW_LSP / RW_LSM ----
+  // The fourth random-walk stream (rw_[3] in the Osc) drives the MAIN voice
+  // level of EACH cluster note INDEPENDENTLY, so the notes slowly "breathe"
+  // in and out of prominence relative to each other — the heart of a drone.
+  // INDEPENDENT of RATE: breathing is gated ONLY by rw_lvl (Breath Depth);
+  // RATE = 0 no longer disables breathing (the other three wandering streams
+  // are still RATE-gated). Only the MAIN (A+B) voice is breathed; the sub-1
+  // (f/2) and sub-2 (f/4) voices stay static (the low-end anchor never
+  // "flutters"). The three knobs below are its three degrees of freedom:
   //   rw_lvl  — depth: per-voice level swing (RW_LVL, 0..100% -> 0..1). The
-  //             Osc scales each voice by (1 + rw_lvl * dev) so 0 = no
-  //             breathing (static levels, regression-safe) and 1 = a full
-  //             +/-100% swing.
-  //   rw_lsp  — period: how often new level targets are drawn (RW_LSP,
+  //             Osc scales each voice by (1 + rw_lvl * 2 * breath_dev) so 0 =
+  //             no breathing (static levels, regression-safe) and 1 = a full
+  //             +/-100% swing (dev=-1 -> lvl=0, voice disappears).
+  //   rw_lsp  — period: how often new per-voice targets are drawn (RW_LSP,
   //             0.1 s .. 10 s, log). Independent of the other three streams.
-  //   rw_lsm  — time constant: how quickly levels track their targets (RW_LSM,
-  //             10 ms .. 1.5 s, log).
-  // The shared RATE (rw_amount) is still the depth CEILING for this stream too,
-  // so RATE = 0 disables breathing just as it disables the other walks.
-  float rw_lvl;       // 0.f .. 1.f, edit: breath depth on voice levels (RW_LVL)
+  //   rw_lsm  — time constant: how quickly each voice's level tracks its
+  //             target (RW_LSM, 10 ms .. 1.5 s, log).
+  float rw_lvl;       // 0.f .. 1.f, edit: per-voice breath depth on MAIN voice (RW_LVL)
   float rw_lsp;       // 0.f .. 1.f, edit: breath stream period (RW_LSP, log)
   float rw_lsm;       // 0.f .. 1.f, edit: breath stream time constant (RW_LSM, log)
   // (chord_drive / chord_fold / chord2_cents / chord2_drive / chord2_fold were

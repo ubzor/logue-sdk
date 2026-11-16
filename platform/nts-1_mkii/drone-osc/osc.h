@@ -158,8 +158,8 @@ public:
     FCUT,           // internal SVF cutoff + dry/wet (log 80 Hz..12 kHz, 0% = raw, 100% = LPF)
     RES,            // internal SVF resonance Q (0..100% -> 0.5..2.5, default 0% = 0.5)
     RW_FC,          // random-walk depth on SVF cutoff (0..100%, default 0% = off)
-    RW_LVL,         // breath: random-walk depth on the four voice LEVELS (0..100%, default 0% = off)
-    RW_LSP,         // breath stream period (0..100% -> 0.1 s..10 s, log, default 50%)
+    RW_LVL,         // breath: per-voice level swing depth on the MAIN voice (0..100%, default 0% = off, INDEPENDENT of RATE)
+    RW_LSP,         // breath stream period (0..100% -> 0.1 s..10 s, log, default 50%) — how often each voice's breath target is redrawn
     RW_LSM,         // breath stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
     // ---- Enrichment: jitter, ring-mod, phase-FM ----
     // (CHSAT / CHFLD / CINT2 were removed — the chord/interval concept is gone.)
@@ -511,6 +511,8 @@ public:
     float   prev_wav_b = 0.f; // FM lookback cache (B)
     float   fm_smooth_a = 0.f; // phase-FM index LPF state (A)
     float   fm_smooth_b = 0.f; // phase-FM index LPF state (B)
+    float   breath_dev = 0.f;    // per-voice breath deviation [-1, +1] (tracks breath_target)
+    float   breath_target = 0.f; // per-voice breath target (redrawn on rw_[3] tick)
     Sub2Voice sub2;           // f/4 saturated / LPF'd / gated sub voice state
     AhEnvelope eg;            // per-voice A-H-R envelope
     uint8_t  note = 0;        // MIDI note this voice plays (for toggle-off)
@@ -547,6 +549,17 @@ public:
   // single note = no attenuation) and follows the cluster loudness so the
   // 2 s A-H-R attack/release and note count don't pump the makeup gain.
   float env_comp_ = 1.f;
+  // Cached value of rw_[3].getRedrawCount() from the previous process() call.
+  // Used to detect the "tick" sample (when the Breath stream's A/B targets are
+  // redrawn): on a tick, every active voice redraws its own breath_target.
+  // This lets the Breath stream drive PER-VOICE levels (each note breathes
+  // independently) instead of a single shared level for all voices.
+  uint32_t last_breath_redraw_ = 0;
+  // Index of the "focus" voice (the one currently highlighted by the rotating
+  // focus breath). Advances to the next active voice on each rw_[3] tick.
+  // The focus voice's level increases by rw_lvl; the others decrease by
+  // rw_lvl / (n_active - 1), preserving the sum of all levels.
+  uint8_t breath_focus_ = 0;
 
   // Recompute the shared static-detune factors from the DETU knob (K-rate).
   // Called from apply_edit_param(DETUNE). The per-voice w0_a / w0_b are then

@@ -54,7 +54,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       {
         const float x = param_10bit_to_f32(value);
         params_.rw_amount = x * x;       // quadratic: Tone / Timbre / Density (unchanged)
-        params_.rw_amount_lin = x;        // linear: Breath stream only (voice-level wander)
+        params_.rw_amount_lin = x;        // linear: (historically Breath; now unused — Breath is RATE-independent)
       }
       break;
 
@@ -166,12 +166,14 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.rw_fc = param_10bit_to_f32(value);
       break;
 
-    // ---- Breath stream (RW_LVL / RW_LSP / RW_LSM): voice-level wandering ----
-    // The 4th random-walk stream (rw_[3]) drives the four voice LEVELS
-    // (A / B / chord / sub) so they slowly "breathe". RW_LVL is the depth;
-    // RW_LSP / RW_LSM are the stream's own period / time constant (independent
-    // of the other three streams' SPDx/SMTx). At RW_LVL = 0 (default) the
-    // sound is unchanged (all level factors = 1.0).
+    // ---- Breath stream (RW_LVL / RW_LSP / RW_LSM): PER-VOICE level wandering ----
+    // The 4th random-walk stream (rw_[3]) drives the MAIN voice level of EACH
+    // cluster note independently, so the notes "breathe" in/out of prominence
+    // relative to each other. INDEPENDENT of RATE: RW_LVL > 0 enables breathing
+    // even at RATE = 0. RW_LVL is the depth; RW_LSP / RW_LSM are the stream's
+    // own period / time constant (independent of the other three streams'
+    // SPDx/SMTx). Only the MAIN (A+B) voice is breathed; SUB1/SUB2 stay static.
+    // At RW_LVL = 0 (default) the sound is unchanged (all level factors = 1.0).
     case RW_LVL:
       params_.rw_lvl = param_10bit_to_f32(value);
       break;

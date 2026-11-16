@@ -42,6 +42,8 @@ inline void Osc::init(float *)
       v.prev_wav_b = 0.f;
       v.fm_smooth_a = 0.f; // phase-FM index LPF state (no FM on the first sample)
       v.fm_smooth_b = 0.f;
+      v.breath_dev = 1.f;
+      v.breath_target = 1.f;
       v.sub2.lpf_state = 0.f;
       v.sub2.gate = 0.f;
       v.note = 0;
@@ -148,6 +150,8 @@ inline void Osc::reset()
       v.ph_sub2 = 0.f;
       v.sub2.lpf_state = 0.f;
       v.sub2.gate = 0.f;
+      v.breath_dev = 1.f;
+      v.breath_target = 1.f;
       v.active = false;
       v.eg.reset();
     }
@@ -157,6 +161,8 @@ inline void Osc::reset()
     last_note_ = -1;
     // (glide removed: no gl_want_)
     env_sum_ = 0.f; // cluster is silent -> no pending loudness compensation
+    last_breath_redraw_ = 0; // reset the breath tick cache
+    breath_focus_ = 0;       // reset the rotating focus to voice 0
   }
   // ---- note handling ---------------------------------------------------------
 
@@ -218,6 +224,8 @@ inline void Osc::reset()
     v.prev_wav_b = 0.f;
     v.fm_smooth_a = 0.f;
     v.fm_smooth_b = 0.f;
+    v.breath_dev = 1.f;     // per-voice breath: start at neutral level (1.0)
+    v.breath_target = 1.f;  // will be set by the rotating-focus on the first tick
     v.sub2.lpf_state = 0.f;
     v.sub2.gate = 0.f;
     v.eg.noteOn(); // 2 s A-H-R attack

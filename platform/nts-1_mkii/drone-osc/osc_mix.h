@@ -64,16 +64,12 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // (setup() is cheap and caches; the shared rw_amount ceiling is passed
     // but only used for max_dev, which does not affect the period/tracking).
     // The first three streams are addressed by p.rw_rate[i] / p.rw_smooth[i]
-    // (SPD1..3 / SMT1..3, 3-element arrays). The fourth stream (Breath, i=3)
-    // has its OWN knobs (RW_LSP / RW_LSM -> p.rw_lsp / p.rw_lsm), set at
-    // K-rate in apply_edit_param — so it is set up separately below, NOT in
-    // this loop (which would read out-of-bounds rw_rate[3] / rw_smooth[3]).
+    // (SPD1..3 / SMT1..3, 3-element arrays).
     for (uint8_t i = 0; i < 3; i++)
       rw_[i].setup(p.rw_rate[i], p.rw_amount, p.rw_smooth[i]);
-    rw_[3].setup(p.rw_lsp, p.rw_amount, p.rw_lsm); // Breath stream (RW_LSP/RW_LSM)
     // Initialize each stream's targets to its current deviations on first
     // activation (avoids a visible jump when the RATE knob crosses 0).
-    for (uint8_t i = 0; i < kRwStreamCount; i++)
+    for (uint8_t i = 0; i < 3; i++)
     {
       if (rw_[i].target_a == 0.f && rw_[i].dev_a != 0.f)
         rw_[i].target_a = rw_[i].dev_a;
@@ -81,6 +77,18 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         rw_[i].target_b = rw_[i].dev_b;
     }
   }
+  // Breath stream (rw_[3]): setup() is called UNCONDITIONALLY (not gated by
+  // rw_active / RATE) so that breathing works independently of the RATE knob.
+  // The breath stream has its OWN knobs (RW_LSP / RW_LSM -> p.rw_lsp / p.rw_lsm)
+  // and its own depth (RW_LVL -> p.rw_lvl); it does NOT use the shared RATE
+  // ceiling. The rw_amount parameter is passed for API compatibility (used
+  // only for max_dev, which does not affect period/tracking).
+  rw_[3].setup(p.rw_lsp, p.rw_amount, p.rw_lsm);
+  // Initialize the breath stream's targets on first activation.
+  if (rw_[3].target_a == 0.f && rw_[3].dev_a != 0.f)
+    rw_[3].target_a = rw_[3].dev_a;
+  if (rw_[3].target_b == 0.f && rw_[3].dev_b != 0.f)
+    rw_[3].target_b = rw_[3].dev_b;
 
   // Random-walk scaled values (computed per-sample inside the loop below).
   // Each stream's dev_a/b (rw_[i].dev_a/b) are normalized to [-1, +1] and
@@ -189,36 +197,125 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // When p.fold_depth = 0, eff_fold = 0 regardless (no fold).
     const float rw_fold_mod = rw_fld_active ? rw_[2].dev_b * p.rw_fld * rw_amt : 0.f;
 
-    // ---- Breath stream (rw_[3]): voice-level wandering -------------------
-    // The fourth stream drives the four voice LEVELS (A / B / chord / sub)
-    // so they slowly "breathe" in and out of prominence. Its four channels
-    // (dev_a/b/c/d) wander independently (each with its own period), so the
-    // four voices trade the floor at different times — the heart of a drone.
-    // The per-voice level factor is (1 + rw_lvl * rw_amount_lin * 2 * dev),
-    // clamped to [0, 1]: at RW_LVL = 0 (default) all factors are 1.0 (static
-    // levels, regression-safe: identical to the pre-breath sound). The linear
-    // rw_amount_lin (not the quadratic rw_amount) is used so that at
-    // RATE=50% the breath can still reach full depth (dev=-1 -> lvl=0) and
-    // a voice can FULLY disappear; the quadratic rw_amount would cap breath
-    // at 25% depth (lvl >= 0.75) at RATE=50%. The x2 factor means at
-    // RW_LVL=100% & RATE=100% the swing is 2.0, so dev=-1 gives lvl=0 and
-    // dev=+1 gives lvl=2 (clamped to 1).
-    // SUB2 (the f/4 low-end anchor) is intentionally NOT breathed: it stays
-    // static so the low end never "flutters".
-    float lvl_a = 1.f;
-    float lvl_b = 1.f;
-    float lvl_sub = 1.f;
-    // (lvl_c was removed — the chord/interval concept is gone.)
-    if (rw_active && p.rw_lvl > 0.f)
+    // ---- Breath stream (rw_[3]): ROTATING FOCUS ----------------------------
+    // The fourth stream drives the MAIN voice level of EACH cluster note,
+    // so the notes "breathe" in and out of prominence relative to each
+    // other — the heart of a drone (a cluster of notes trading the floor).
+    //
+    // INDEPENDENT of RATE: breathing is gated ONLY by RW_LVL (Breath Depth).
+    // Turning up Breath Depth with RATE=0 still breathes (the other three
+    // wandering streams are still RATE-gated, as before).
+    //
+    // MECHANISM — "Rotating Focus" (mechanical, predictable, sum-preserving):
+    //   On each tick (rw_[3] target-redraw event, period = RW_LSP), the
+    //   "focus" (the highlighted note) advances to the next active voice
+    //   in round-robin order. The focus voice's level increases by
+    //   rw_lvl (Breath Depth); the other voices' levels decrease by
+    //   rw_lvl * focus / (n_active - 1), so the SUM of all levels stays
+    //   constant (the overall loudness does not pump). The transition is
+    //   SMOOTH: each voice's breath_dev tracks its target with the RW_LSM
+    //   smoothing coefficient (exponential, non-linear).
+    //
+    //   Per-voice level factors:
+    //     focus voice:   1 + rw_lvl
+    //     other voices:  1 - rw_lvl * focus / (n_active - 1)
+    //   where focus = 1.0 for the highlighted note, 0.0 for the rest.
+    //   At RW_LVL=0 all factors are 1.0 (regression-safe).
+    //   At RW_LVL=100% & n=4: focus = 1 + 1.0 = 2.0 (clamped to 1.0),
+    //   others = 1 - 1.0 * 1.0 / 3 = 0.67 (clearly attenuated).
+    //   At RW_LVL=50% & n=4: focus = 1.5, others = 0.83 (subtle).
+    //
+    // Only the MAIN (A+B) voice is breathed. SUB1 (f/2) and SUB2 (f/4) are
+    // intentionally NOT breathed — the low end stays static so the drone's
+    // anchor never "flutters".
+    const bool breath_active = p.rw_lvl > 0.f;
+    if (breath_active)
     {
-      rw_[3].advance(p.rw_amount, osc_white); // ceiling for advance() stays quadratic (unchanged)
-      const float swing = p.rw_lvl * p.rw_amount_lin * 2.f; // 0..2 — full depth at RATE=100% & RVLL=100%
-      lvl_a   = 1.f + swing * rw_[3].dev_a;
-      lvl_b   = 1.f + swing * rw_[3].dev_b;
-      lvl_sub = 1.f + swing * rw_[3].dev_d;
-      if (lvl_a < 0.f) lvl_a = 0.f; else if (lvl_a > 1.f) lvl_a = 1.f;
-      if (lvl_b < 0.f) lvl_b = 0.f; else if (lvl_b > 1.f) lvl_b = 1.f;
-      if (lvl_sub < 0.f) lvl_sub = 0.f; else if (lvl_sub > 1.f) lvl_sub = 1.f;
+      // Advance the Breath stream's clock (amount=1.0 bypasses the RATE gate;
+      // the period / smooth are set by RW_LSP / RW_LSM via setup()).
+      rw_[3].advance(1.f, osc_white);
+      const float k = rw_[3].getK();
+      const uint32_t rc = rw_[3].getRedrawCount();
+      const bool tick = (rc != last_breath_redraw_);
+      last_breath_redraw_ = rc;
+
+      // Count active voices and advance the focus on a tick.
+      uint8_t n_active = 0;
+      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        if (voice_[vi].active)
+          ++n_active;
+
+      if (n_active >= 2 && tick)
+      {
+        // Advance the focus to the next active voice (round-robin).
+        // breath_focus_ is an index into the active-voice list; we find the
+        // current focus voice and move to the next active one.
+        uint8_t cur = 0;
+        bool found = false;
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        {
+          if (voice_[vi].active)
+          {
+            if (found) { cur = vi; break; }
+            if (vi == breath_focus_) found = true;
+          }
+        }
+        if (!found)
+        {
+          // Focus voice is no longer active: find the first active voice.
+          for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+            if (voice_[vi].active) { cur = vi; break; }
+        }
+        // Advance to the next active voice after cur.
+        for (uint8_t d = 1; d <= kVoiceCount; d++)
+        {
+          const uint8_t next = (cur + d) % kVoiceCount;
+          if (voice_[next].active) { breath_focus_ = next; break; }
+        }
+      }
+
+      // Compute per-voice targets and track them smoothly.
+      // The focus voice gets BOOSTED (up to 2x at RW_LVL=100%), the other
+      // voices get ATTENUATED (down to 0 at RW_LVL=100% & n=2). The total
+      // loudness DOES change (the drone "swells" toward the focus note and
+      // "recedes" from the others) — this is what makes the breath audible.
+      if (n_active < 2)
+      {
+        // With 0 or 1 notes, breathing is off: level stays at 1.0.
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+          if (voice_[vi].active)
+            voice_[vi].breath_dev = 1.f;
+      }
+      else
+      {
+        // Attenuation for the non-focus voices: at n=2 -> 1.0 (full mute),
+        // n=3 -> 0.5, n=4 -> 0.67, n=5 -> 0.8, n=6 -> 0.8. The (n-2)/(n-1)
+        // factor keeps the others clearly audible at higher note counts
+        // (a drone with 6 notes shouldn't have 5 of them nearly silent).
+        const float other_atten = ((float)n_active - 2.f) / (float)(n_active - 1);
+        for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        {
+          Voice &v = voice_[vi];
+          if (v.active)
+          {
+            const bool is_focus = (vi == breath_focus_);
+            // Focus: 1 + rw_lvl (up to 2.0); Others: 1 - rw_lvl * other_atten
+            // (down to 0 at n=2, 0.33 at n=4, 0.2 at n=6).
+            v.breath_target = is_focus
+              ? 1.f + p.rw_lvl
+              : 1.f - p.rw_lvl * other_atten;
+            // Smoothly track the target (RW_LSM time constant).
+            v.breath_dev += (v.breath_target - v.breath_dev) * k;
+          }
+        }
+      }
+    }
+    // When breath_active becomes false, reset all breath_dev to 1.0 (neutral
+    // level) so the next activation starts from a static state.
+    else
+    {
+      for (uint8_t vi = 0; vi < kVoiceCount; vi++)
+        voice_[vi].breath_dev = 1.f;
     }
 
     // ---- Simulator-only shape-LFO (shared, phase-coherent) ------------------
@@ -236,7 +333,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // the FM index, JIT, morph and walk are all SHARED (one drone); only the
     // phasors, FM-lookback, sub phasors, sub-2 state and A-H-R are per-voice.
     // Accumulators feed the single common post-stage below.
-    float sum_main = 0.f;   // sum over voices of (wav_a*lvl_a + wav_b*lvl_b)
+    float sum_main = 0.f;   // sum over voices of (wav_a*lvl + wav_b*lvl) — per-voice breath lvl
     float sum_sub  = 0.f;   // sum over voices of the sub-octave sine
     float sum_sub2 = 0.f;   // sum over voices of the f/4 sub-2 output
     float sum_ring = 0.f;   // sum over voices of (wav_a * wav_b)
@@ -366,11 +463,22 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // 2nd note, especially where the new note's envelope reset coincides
         // with the others. Per-voice gating removes that shared-dip.)
         const float eg = v.eg.env;
-        sum_main += (wav_a * lvl_a + wav_b * lvl_b) * eg;
+        // Per-voice Breath level: each note's MAIN (A+B) voice gets its OWN
+        // level factor (breath_dev, which tracks the rotating-focus target).
+        // At RW_LVL=0 (default) breath_active=false and breath_dev=0 ->
+        // lvl=1.0 (static, regression-safe). The sum of all per-voice levels
+        // is preserved (sum-preserving), so the overall loudness does not
+        // pump as the focus rotates from note to note.
+        // Per-voice Breath level: breath_dev tracks the absolute level target
+        // (focus: 1+rw_lvl, others: 1-rw_lvl*atten). At RW_LVL=0 breath_dev=0
+        // and lvl=1.0 (static, regression-safe).
+        const float lvl = breath_active ? v.breath_dev : 1.f;
+        const float lvl_c = (lvl < 0.f) ? 0.f : (lvl > 2.f) ? 2.f : lvl;
+        sum_main += (wav_a * lvl_c + wav_b * lvl_c) * eg;
+        // SUB1 (f/2) and SUB2 (f/4) are NOT breathed — the low-end anchor
+        // stays static so the drone never "flutters" in the bass.
         sum_sub  += osc_sinf(v.ph_sub) * eg;
         sum_ring += (wav_a * wav_b) * eg;
-        // Sub-2: per-voice Sub2Voice state (LPF + gate); level = this voice's
-        // envelope (the common post-stage scales by p.sub2_level * lvl_sub).
         sum_sub2 += v.sub2.process(v.ph_sub2, vw0, eg);
       }
     }
