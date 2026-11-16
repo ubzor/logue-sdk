@@ -37,7 +37,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "CUT", "RES", "WFC",
       "BRT", "BRR", "SMT",
       "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
-      "FMVT", "FLVL", "COMB", "SUBB"};
+      "FMVT", "FLVL", "COMB", "SUBB",
+      "WLFR", "WLFD"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -148,6 +149,57 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     else if (vi > 4) vi = 4;
     buf[0] = vowels[vi];
     buf[1] = '\0';
+    return buf;
+  }
+
+  // WAVE_LFO_RATE (internal wave-LFO frequency): show Hz on the same LOG
+  // scale the apply path uses (raw 0 = 0 Hz / OFF; else 10^(3*raw/1023 - 3),
+  // 0.001..1 Hz across 3 decades). raw 0 is displayed "0 H" (LFO off); raw
+  // 1023 is "1 H" (the max); below 0.1 Hz it is shown as millihertz "0.NNN H"
+  // (3 fixed frac digits, e.g. 0.01 Hz -> "0.010 H"); at/above 0.1 Hz it is
+  // shown as "0.N H" (1 fixed frac digit, e.g. 0.1 Hz -> "0.1 H"). buf[8] is
+  // large enough ("0.999H\0" = 6 chars).
+  if (k == WAVE_LFO_RATE)
+  {
+    if (raw == 0)
+    {
+      buf[0] = '0';
+      buf[1] = 'H';
+      buf[2] = '\0';
+      return buf;
+    }
+    const float hz = fasterpowf(10.f, 3.f * param_10bit_to_f32(raw) - 3.f); // 0.001..1
+    if (hz >= 0.1f)
+    {
+      // 0.1 Hz .. 1 Hz: one fixed frac digit.
+      int d = (int)(hz * 10.f + 0.5f); // 1..10
+      int n = 0;
+      if (d >= 10) // raw 1023 = 1 Hz (the max)
+      {
+        buf[n++] = '1';
+      }
+      else
+      {
+        buf[n++] = '0';
+        buf[n++] = '.';
+        buf[n++] = (char)('0' + d);
+      }
+      buf[n++] = 'H';
+      buf[n] = '\0';
+      return buf;
+    }
+    // 0.01 Hz .. 0.09 Hz: millihertz, 3 fixed frac digits.
+    int mhz = (int)(hz * 1000.f + 0.5f); // 10..99
+    if (mhz > 999) mhz = 999;
+    if (mhz < 1) mhz = 1;
+    int n = 0;
+    buf[n++] = '0';
+    buf[n++] = '.';
+    buf[n++] = (char)('0' + mhz / 100); // "0.N"
+    buf[n++] = (char)('0' + (mhz / 10) % 10); // "0.NN"
+    buf[n++] = (char)('0' + mhz % 10); // "0.NNN"
+    buf[n++] = 'H';
+    buf[n] = '\0';
     return buf;
   }
 

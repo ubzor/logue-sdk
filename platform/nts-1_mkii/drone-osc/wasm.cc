@@ -244,19 +244,9 @@ void noteOff(uint8_t note)
   // printf("Note Off: %d\n", note);
 }
 
-// Simulator-only: LFO settings (mirrors the hardware OSC-button A/B knobs).
-// The processor synthesizes the LFO at audio rate internally; these just set
-// its frequency (Hz) and depth (0..1). On hardware the platform delivers the
-// LFO via setShapeLfo() instead, so these are no-ops there (compiled out).
-void setLfoFreq(float freq)
-{
-  processor.setLfoFreq(freq);
-}
-
-void setLfoDepth(float depth)
-{
-  processor.setLfoDepth(depth);
-}
+// (The old setLfoFreq()/setLfoDepth() bindings are GONE. The internal wave-LFO
+//  is now driven by the WAVE_LFO_RATE / WAVE_LFO_DEPTH edit parameters through
+//  the standard setEditParam() path.)
 
 // bind unit parameters
 EMSCRIPTEN_BINDINGS(my_module)
@@ -282,10 +272,6 @@ EMSCRIPTEN_BINDINGS(my_module)
   function("noteOn", &noteOn);
 
   function("noteOff", &noteOff);
-
-  function("setLfoFreq", &setLfoFreq);
-
-  function("setLfoDepth", &setLfoDepth);
 }
 
 bool ProcessAudio(int numInputs, const AudioSampleFrame *inputs,

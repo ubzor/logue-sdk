@@ -230,7 +230,10 @@ static constexpr uint8_t  kRndOrbiFamilyW[kRndOrbiFamilyCount] = {50U, 20U, 20U,
 //  27=FM1, 28=FM2, 29=RFMA, 30=RFMB, 31=FORM, 32=FVOL, 33=COMB.)
 static const uint8_t kRndOrbiFamCore[7]    = {1, 8, 9, 13, 14, 15, 26};
 static const uint8_t kRndOrbiFamTimbre[6]  = {10, 11, 12, 19, 20, 33};
-static const uint8_t kRndOrbiFamMotion[12] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22};
+// WAVE_LFO_RATE (35) / WAVE_LFO_DEPTH (36) are MOTION (the internal wave-LFO
+// that drives the WAVE-bank intra-bank morph): a re-roll varies how fast / how
+// far the wavetable drifts, so they belong in the motion family.
+static const uint8_t kRndOrbiFamMotion[14] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22, 35, 36};
 static const uint8_t kRndOrbiFamExtra[3]   = {9, 29, 31};
 
 // The family's parameter list + length for an Orbit fire (family 0..3).

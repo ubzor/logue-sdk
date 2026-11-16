@@ -25,7 +25,12 @@
 inline void Osc::init(float *) 
   {
     params_.reset();
-    lfo_ = 0.f;
+    // (The old `lfo_ = 0.f;` is GONE -- the platform shape-LFO member was
+    //  removed; the internal wave-LFO's phase is owned by lfo_sim_ and its
+    //  freq/depth are owned by the WAVE_LFO_RATE / WAVE_LFO_DEPTH edit
+    //  parameters, which params_.reset() does NOT touch (they live in
+    //  lfo_sim_, not params_). The LFO's freq/depth are re-applied from
+    //  edit_value_ on the first setParameter / setEditParam after init.)
     // ---- Polyphonic voice cluster: zero every voice --------------------------
     // Each cluster voice is independent state (phasors, A-H-R, w0). All start
     // silent (w0 = 0, idle envelope) so an all-off cluster produces exactly

@@ -78,12 +78,19 @@ const __unit_header unit_header_t unit_header = {
         //     follows the LOUDEST (breath-focus) voice's envelope. 0% = the old
         //     static low end (regression-safe); default 307 (~30% -> ~+/-18% swing,
         //     the low end gently follows the breathing note).
+        //   35: WLFR - internal wave-LFO frequency (LOG 0.001..1 Hz, finer near
+        //     0; default 341 = 0.1 Hz). Drives the WAVE-bank intra-bank morph.
+        //   36: WLFD - internal wave-LFO morph depth (LINEAR 0..100%; default
+        //     512 = 50%, a half-bank sweep). 0 = static wave (LFO off).
         // NOTE: WA3/CHRD/INT (chord wavetable / chord level / chord interval),
         // CH2D/CFLD/INT2 (second chord), and FLD2 (second cascaded wavefolder)
         // were REMOVED — the chord/interval concept is gone; DCK (sidechain-duck
         // amount) was also removed and is now a CONSTANT (kDuckConstant, see
         // osc_constants.h). (Duck is always on at 50%, floored at 0.7.)
-        {0, 34, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // NOTE: the hardware's OSC-button RATE/SHAPE knobs (the platform
+        // shape-LFO) are NO-OPs (setShapeLfo() is a stub); the wavetable morph
+        // is driven by the INTERNAL wave-LFO (WLFR / WLFD) above instead.
+        {0, 36, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -102,8 +109,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..34. Identical to slot 0.
-        {0, 34, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..36. Identical to slot 0.
+        {0, 36, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

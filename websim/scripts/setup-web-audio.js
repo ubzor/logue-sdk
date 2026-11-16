@@ -29,13 +29,13 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      // 35 editable parameters total (edit indices 0..34); see EDIT_PARAM_NAMES
+      // 37 editable parameters total (edit indices 0..36); see EDIT_PARAM_NAMES
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 35; // 35 = RATE..SUBB
+      const EDIT_PARAM_COUNT = 37; // 37 = RATE..WAVE_LFO_DEPTH
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -63,6 +63,12 @@
       //    sub bass itself is ONE shared pair for the whole polyphonic cluster
       //    (env-weighted ANCHOR note) — see the "Shared sub bass" block in
       //    osc_mix.h / the SUBB comment in osc_params.h.)
+      // 35 WAVE LFO RATE (internal wave-LFO frequency, LOG scale 0.001..1 Hz
+      // across 3 decades; raw 0 = 0 Hz / LFO OFF, default 0) and 36 WAVE LFO
+      // DEPTH (internal wave-LFO morph depth, LINEAR 0..100%, default 100%).
+      // These drive the WAVE-bank intra-bank
+      //    morph via the INTERNAL LFO (lfo_sim_ in osc.h), NOT the platform
+      //    shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are NO-OPs).
       const EDIT_PARAM_NAMES = [
         "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
@@ -75,6 +81,7 @@
         "Formant Vowel", "Formant Level",
         "Comb Res",
         "Sub Bass Bre",
+        "Wave LFO Rate", "Wave LFO Depth",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -95,7 +102,11 @@
       //   CLUSTER     COMB (comb resonator)
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [15, 13, 10, 11, 12, 27, 28, 25, 26, 0] },
+        // Wave LFO Rate (35) / Wave LFO Depth (36) sit right after Wave (13):
+        // they control the INTERNAL wave-LFO that drives the WAVE-bank
+        // intra-bank morph (the hardware's OSC-button RATE/SHAPE knobs are
+        // NO-OPs now; the LFO is fully internal, see osc_lfo_sim.h).
+        { title: "MAIN",       col: 0, items: [15, 13, 35, 36, 10, 11, 12, 27, 28, 25, 26, 0] },
         { title: "BREATH",   col: 0, items: [22, 23, 24] },
         { title: "FORMANT",  col: 0, items: [31, 32] },
         // ---- Column 1 ----
@@ -201,11 +212,29 @@
           const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
           return "AEIOU".charAt(vi);
         }
+        if (idx === 35) {
+          // WAVE LFO RATE (edit 35): internal wave-LFO frequency, LOG scale
+          // (a LINEAR knob mapped to an EXPONENTIAL frequency, 3 decades):
+          // raw 0 = 0 Hz (LFO OFF), else freq = 10^(3*raw/1023 - 3) Hz
+          // (0.001..1, the same log convention as the SPDx/SMTx knobs).
+          // Mirrors the DSP (osc_param_apply.h, case WAVE_LFO_RATE). Show
+          // "0 H" at raw 0, "1 H" at raw 1023; below 0.1 Hz show millihertz
+          // "0.NNN H", at/above 0.1 Hz show "0.N H".
+          if (raw === 0) return "0 H";
+          const hz = Math.pow(10, 3 * (raw / 1023) - 3); // 0.001..1 (log)
+          if (hz >= 0.1) {
+            const d = Math.round(hz * 10); // 1..10
+            return d >= 10 ? "1 H" : "0." + d + " H";
+          }
+          const mhz = Math.min(999, Math.max(1, Math.round(hz * 1000)));
+          return "0." + String(mhz).padStart(3, "0") + " H";
+        }
         // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN, default 100%),
         // 16..18 (RWAV/RDRV/RFLD), 21 (RWFC), 22..24 (Breath),
         // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB),
-        // 34 (SUBB — sub-bass breath depth, 0..100% -> 0..0.6 swing).
+        // 34 (SUBB — sub-bass breath depth, 0..100% -> 0..0.6 swing),
+        // 36 (WAVE LFO DEPTH — internal wave-LFO morph depth, 0..100%).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -385,8 +414,17 @@
 
         // Initialize from the main-thread processor state (wasm.cc
         // getEditParamValue) — the value the DSP is currently using for this
-        // parameter.
+        // parameter. The slider is positioned at that value BEFORE apply():
+        // the range input otherwise renders at the range midpoint / 0 (the
+        // HTML has no value attribute for generated sliders), so the UI would
+        // show 0% for every parameter while the DSP sounds at its factory
+        // defaults (the sound is unaffected — init() applies edit_value_ on
+        // the worklet thread; only the readouts are wrong). Setting
+        // input.value first makes the slider + badge match the DSP, and
+        // apply(initRaw) additionally re-syncs the worklet processor to the
+        // main-thread state through the paced direct channel.
         const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
+        input.value = initRaw;
         apply(initRaw);
 
         (targetEl || document.getElementById("Parameters")).appendChild(container);
@@ -792,12 +830,13 @@
       // Factory defaults = the edit_value_ initializers in osc.h (kEditParamFirst
       // order, RATE-first): RATE 0, DETU 511, SPD1 511, SMT1 511, SPD2 511, SMT2 511,
       // SPD3 511, SMT3 511, SUB1 511, SUB2 410 (~40%), SATU 341, ASYM 511, FOLD 0,
-      // WAV1 0, WAV2 128, WAV3 0, CHRD 205, CINT 377, MAIN 1023 (full),
+      // WAV1 0, WAV2 128 (deprecated), MAIN 1023 (full),
       // RWAV 0, RDRV 0, RFLD 0, FCUT 921, RES 0, RWFC 0,
-      // RVLL 0, RVLS 511, RVLSM 511, CHSAT 341 (chord drive = SATU default),
-      // CHFLD 0 (chord fold off, = FOLD default), ..., FMVT 511, FLVL 0, COMB 0.
-      // (FOLD2 / DCK removed — 44 params total.)
-      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 0];
+      // BRT 0, BRR 511, SMT 511, JIT 0, RMOD 0, FM1 0, FM2 0, RFMA 0, RFMB 0,
+      // FORM 511, FVOL 0, COMB 0, SUBB 307 (~30%),
+      // WLFR 0 (wave-LFO OFF, static wave), WLFD 1023 (full-bank sweep).
+      // (FOLD2 / DCK removed — 37 params total.)
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 0, 307, 0, 1023];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -831,15 +870,21 @@
         // Full range — they only scale the wander, never the base sound.
         for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
           set(n, r1023());
-        // WAVE (WAV1): the selected WAVETABLE BANK (A..F, 0..5). The LFO then
-        // morphs within the bank (intra-bank position centered on the bank,
-        // see osc_waves.h), so each of the 6 banks is a valid, clearly
-        // different timbre family — randomize uniformly over them. (WAV2 is
-        // deprecated: both A/B read the same wave.)
+        // WAVE (WAV1): the selected WAVETABLE BANK (A..F, 0..5). The internal
+        // wave-LFO then morphs within the bank (intra-bank position centered
+        // on the bank, see osc_waves.h / osc_lfo_sim.h), so each of the 6
+        // banks is a valid, clearly different timbre family — randomize
+        // uniformly over them. (WAV2 is deprecated: both A/B read the same
+        // wave.)
         {
           const bank = Math.floor(Math.random() * 6); // 0..5
           set("Wave", rawFromWaveBank(bank));
         }
+        // WAVE LFO RATE / DEPTH: the internal wave-LFO's frequency (log
+        // 0.001..1 Hz) and morph depth (0..100%). Full range is safe (0 =
+        // static wave, max = 1 Hz / full-bank sweep). Randomize uniformly.
+        for (const n of ["Wave LFO Rate", "Wave LFO Depth"])
+          set(n, r1023());
 
         // --- Constrained (critical) parameters -------------------------------
         // DETU: static A/B detune, +/-kDetuneMaxCents (10 c) centered on 511.
@@ -1225,29 +1270,10 @@
         presetGrid.appendChild(b);
       }
 
-      // LFO (Shape) controls — simulator-only, mirrors the hardware OSC knobs
-      const lfoFreq = document.getElementById("LfoFreq");
-      const lfoDepth = document.getElementById("LfoDepth");
-      const lfoFreqLabel = document.getElementById("LfoFreqLabel");
-      const lfoDepthLabel = document.getElementById("LfoDepthLabel");
-
-      function updateLfoFreq() {
-        const v = parseFloat(lfoFreq.value);
-        lfoFreqLabel.textContent = v.toFixed(2);
-        Module.setLfoFreq(v);
-      }
-      function updateLfoDepth() {
-        const v = parseInt(lfoDepth.value, 10);
-        lfoDepthLabel.textContent = v + "%";
-        Module.setLfoDepth(v / 100.0);
-      }
-
-      lfoFreq.addEventListener("input", updateLfoFreq);
-      lfoDepth.addEventListener("input", updateLfoDepth);
-
-      // initialize (defaults: F=1 Hz, S=0% = LFO off)
-      updateLfoFreq();
-      updateLfoDepth();
+      // (The old LFO F / LFO S top-bar sliders are GONE. The internal wave-LFO
+      //  is now driven by the WAVE LFO RATE / WAVE LFO DEPTH edit parameters
+      //  (idx 35 / 36) in the MAIN group, via the standard setEditParam()
+      //  path -- the same channel every other edit parameter uses.)
 
       // ---- HW FILTER (web-sim only, between OSC and MOD) -------------------
       // Emulates the physical NTS-1 filter between the OSC module and the MOD

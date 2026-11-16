@@ -239,10 +239,10 @@ public:
   void noteOn(uint8_t note, uint8_t velo) { osc_.noteOn(note, velo); }
   void noteOff(uint8_t note) { osc_.noteOff(note); }
   void allNoteOff() { osc_.allNoteOff(); }
-  // Simulator-only LFO (mirrors the hardware OSC-button A/B knobs; the OSC
-  // synthesizes it internally). Forwarded so the chain's UI can drive it.
-  void oscLfoFreq(float freq) { osc_.setLfoFreq(freq); }
-  void oscLfoDepth(float depth) { osc_.setLfoDepth(depth); }
+  // (The old oscLfoFreq()/oscLfoDepth() forwarders are GONE. The internal
+  //  wave-LFO is now driven by the WAVE_LFO_RATE / WAVE_LFO_DEPTH edit
+  //  parameters through the standard setEditParam() path, so the chain UI
+  //  writes them like every other edit parameter.)
   void setTempo(float bpm) override
   {
     osc_.setTempo(bpm);

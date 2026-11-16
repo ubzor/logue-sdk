@@ -54,13 +54,20 @@
           <span id="BpmLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"></span>
         </label>
 
-        <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO frequency (Hz).">
+        <!-- LFO F / LFO S: VESTIGIAL controls. The platform's OSC-button
+             RATE/SHAPE knobs (the shape-LFO) are NO-OPs now — the wavetable
+             intra-bank morph is driven by the INTERNAL wave-LFO (the
+             "Wave LFO Rate" / "Wave LFO Depth" edit parameters in the MAIN
+             group). These sliders are kept as a NO-OP placeholder (they
+             send nothing to the DSP; the old setLfoFreq / setLfoDepth
+             bindings were removed from wasm.cc). -->
+        <label class="flex items-center gap-3" title="Vestigial — no-op. The LFO is now the internal Wave LFO (see MAIN group).">
           <span class="w-20 text-xs font-medium shrink-0">LFO F (Hz)</span>
           <input type="range" min="0" max="30" value="0" step="0.01" id="LfoFreq" class="range range-primary range-sm flex-1">
           <span id="LfoFreqLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right">0.00</span>
         </label>
 
-        <label class="flex items-center gap-3" title="Simulates the hardware OSC-button A/B knobs: LFO depth (%)">
+        <label class="flex items-center gap-3" title="Vestigial — no-op. The LFO is now the internal Wave LFO (see MAIN group).">
           <span class="w-20 text-xs font-medium shrink-0">LFO S (%)</span>
           <input type="range" min="0" max="100" value="0" step="1" id="LfoDepth" class="range range-primary range-sm flex-1">
           <span id="LfoDepthLabel" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right">0%</span>

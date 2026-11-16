@@ -187,6 +187,8 @@ DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/../drone-osc/osc_detune.h \
                $(PROJECT_ROOT)/../drone-osc/osc_sub2.h \
                $(PROJECT_ROOT)/../drone-osc/osc_random_walk.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_randomize.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_rnd.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx.h \
                $(PROJECT_ROOT)/../drone-modfx/modfx_constants.h \
                $(PROJECT_ROOT)/../drone-delfx/delay.h \

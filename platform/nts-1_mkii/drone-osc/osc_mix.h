@@ -337,17 +337,20 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         voice_[vi].breath_dev = 1.f;
     }
 
-    // ---- Simulator-only shape-LFO (shared, phase-coherent) ------------------
-    // On hardware lfo_ is delivered by the platform via setShapeLfo(); in the
-    // web sim we synthesize it here. All voices share this one LFO.
-#ifdef EMSCRIPTEN
-    lfo_ = lfo_sim_.process();
-#endif
+    // ---- Internal wave-LFO (shared, phase-coherent) --------------------------
+    // The wavetable intra-bank morph is driven by the INTERNAL LFO
+    // (lfo_sim_, see osc_lfo_sim.h), NOT the platform shape-LFO (the
+    // hardware's OSC-button RATE/SHAPE knobs are NO-OPs -- setShapeLfo() is a
+    // stub). The LFO's frequency / depth are set by the WAVE_LFO_RATE /
+    // WAVE_LFO_DEPTH edit parameters (apply_edit_param). All voices share this
+    // one LFO. The LFO value (sin * morph_amt) is in [-1, +1]; at morph_amt=0
+    // it is 0 (the wave stays at the bank center, static).
+    const float lfo_ = lfo_sim_.process();
     // Intra-bank LFO morph: the LFO drives the position within the selected
     // bank, centered on the bank (see WaveTable::resolve_wave / bank_center).
     // The base position is the bank center; the LFO adds +/-half the (size-1)
-    // span, so at 100% LFO the morph sweeps from the first to the last table
-    // of the bank (clamped to [0, bank_size-1] inside resolve_wave).
+    // span, so at 100% depth the morph sweeps from the first to the last
+    // table of the bank (clamped to [0, bank_size-1] inside resolve_wave).
     const float lfo_morph =
         WaveTable::bank_center(wave_bank) + lfo_ * WaveTable::lfo_morph_depth(wave_bank);
 
@@ -576,13 +579,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       sub_breath_gain += (subb_target - sub_breath_gain) * sub_breath_alpha;
       if (sub_breath_gain < kSubBreathFloor) sub_breath_gain = kSubBreathFloor;
       if (sub_breath_gain > 1.f + kSubBreathMax) sub_breath_gain = 1.f + kSubBreathMax;
-      // SUB1 (f/2) phasor: anchor rate, shared LFO-FM detune (the low end's
-      // slow organic "swell"). kSubW0Scale includes the -4 c fixed detune.
-      {
-        const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-        sub_ph += sub_anchor_w0 * kSubW0Scale * Detune::factor(lfo_fm_cents);
-        sub_ph -= fast_floorf(sub_ph);
-      }
+      // SUB1 (f/2) phasor: anchor rate, -4 c fixed detune (kSubW0Scale
+      // includes the -4 c). The platform shape-LFO's FM on the sub phasor is
+      // DISABLED (the lfo_ member is no longer fed by setShapeLfo -- that
+      // callback is a stub now), so the sub runs at a constant rate (no
+      // "swell"). kSubLfoFmCents / Detune::factor(lfo_fm_cents) are gone with
+      // the LFO-FM.
+      sub_ph += sub_anchor_w0 * kSubW0Scale;
+      sub_ph -= fast_floorf(sub_ph);
       // SUB2 (f/4) phasor: stable low-end anchor, no LFO-FM.
       sub_ph2 += sub_anchor_w0 * 0.25f;
       sub_ph2 -= fast_floorf(sub_ph2);

@@ -31,9 +31,17 @@ env-weighted ANCHOR note — see below), then (3) applies the SINGLE common
 post-stage (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
+INTERNAL WAVE-LFO (ONE shared sine, phase-coherent; see osc_lfo_sim.h):
+  lfo_ = lfo_sim_.process()   (sin(phase) * WLFD; phase advances by WLFR Hz)
+  lfo_morph = bank_center(WAVE) + lfo_ * lfo_morph_depth(WAVE)
+     -> the intra-bank wavetable morph position (clamped to [0, bank_size-1])
+  NOTE: the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs)
+        is a NO-OP (setShapeLfo() is a stub); the morph is driven ENTIRELY by
+        this internal LFO (WLFR / WLFD edit parameters).
+
 PER VOICE (x kVoiceCount = 6):
-  phasor A  ->  wavetable (WAVE bank, LFO morph)   [ DETU, FM1, FMAB, JIT, + walk detune ]
-  phasor B  ->  wavetable (WAVE bank, LFO morph)   [ DETU, FM2, FMBB, JIT, + walk detune ]
+  phasor A  ->  wavetable (WAVE bank, internal wave-LFO morph)   [ DETU, FM1, FMAB, JIT, + walk detune ]
+  phasor B  ->  wavetable (WAVE bank, internal wave-LFO morph)   [ DETU, FM2, FMBB, JIT, + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
   -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
@@ -46,7 +54,7 @@ SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
   sub_anchor_w0 = one-pole relax (kSubAnchorAlpha, ~250 ms) of anchor_target
      -> note on/off MORPHS the sub pitch smoothly (no click); 0 notes -> 0
      (the sub fades out with the cluster).
-  SUB1: phasor advances at sub_anchor_w0 * kSubW0Scale (f/2, -4 c, LFO-FM)
+  SUB1: phasor advances at sub_anchor_w0 * kSubW0Scale (f/2, -4 c, NO LFO-FM)
         -> sub = sin(phasor) * sub_breath_gain
   SUB2: phasor advances at sub_anchor_w0 * 0.25 (f/4)
         -> sub2_out = Sub2Voice::process(phasor, sub_anchor_w0, sub_breath_gain)
@@ -355,6 +363,19 @@ device) next to **All Random** / **Partial Random** / **Reset** (UI-thread
 conveniences via `applyPresetRaw`, which call `Module.stableSync()` after the
 apply so the C++ Orbit reference matches what the sim is showing).
 
+**UI initialization** (web simulator only): at startup `createEditableParam`
+(websim/scripts/setup-web-audio.js) positions each generated slider at
+`Module.getEditParamValue(i)` (the main-thread processor state, the factory
+default at first boot) BEFORE calling `apply(initRaw)` — without the
+`input.value = initRaw` step the range inputs render at their HTML default
+(no `value` attribute), so every readout would show 0% while the DSP sounds at
+factory defaults (the sound is unaffected: `init()` on the worklet thread
+already applied `edit_value_`; only the UI was out of sync). The WAVE bank
+(index 13, rendered as an A..F radio group, not a slider) sets its checked
+radio the same way (`setWaveBankChecked(waveBankFromRaw(initRaw))`) and,
+deliberately, does NOT call `apply` — the radio group is the readout and a
+write during startup would race the paced direct channel.
+
 **Manual slider edits update the Orbit stable state** (web simulator only):
 each slider's `apply()` (the `oninput` handler in `createEditableParam`,
 `websim/index.html`) calls `Module.stableSync()` after writing the value -- a
@@ -427,6 +448,8 @@ default and effect:
 | 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
 | 34 | SUBB | % | 0..100% -> 0..0.6 swing | ~30% | **Sub-bass breath**: the ONE shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note) follows the LOUDEST (breath-focus) voice's A-H-R envelope. 0% = the old static low end (regression-safe); ~30% (default) = a gentle +/-18% swing — the drone's low end "breathes in" with the note that is currently loudest. The anchor (pitch) is ALWAYS the env-weighted mean (one stable fundamental under the cluster, note on/off morphs the sub pitch smoothly); only the LEVEL breathes, and only by the SUBB depth. The randomizer window is 0..60%. |
+| 35 | WLFR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG: linear knob -> exponential freq; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Internal wave-LFO frequency**: the sine that drives the WAVE-bank intra-bank morph (see `osc_lfo_sim.h`). LOG scale (raw 0 = 0 Hz / LFO OFF; else 10^(3*raw/1023 - 3) = 0.001..1 Hz across 3 decades, the same convention as the SPDx/SMTx knobs), so each equal knob step is a constant multiplier of the previous frequency — fine control near 0. 0 = static wave (the factory default). This REPLACES the hardware's OSC-button RATE knob (which is now a NO-OP, `setShapeLfo()` is a stub). |
+| 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO morph depth**: 0 = static wave (LFO off, the wave stays at the bank center), 100% = the morph sweeps the full bank (first to last table, and back). The factory default is 100%, so any non-zero WLFR drives the morph across the whole bank. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -477,7 +500,7 @@ gently follows the loudest (breath-focus) voice's A-H-R.
 | Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
 | Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
-| Shape-LFO | +/-10 tables (morph), +/-5 c (sub FM) | On hardware: platform OSC-B shape-LFO; in the web sim: synthesized. |
+| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The wavetable intra-bank morph is driven ENTIRELY by the INTERNAL wave-LFO (edit params WLFR / WLFD, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
@@ -527,7 +550,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
-| osc_lfo_sim.h | Web-simulator-only shape-LFO synthesizer. |
+| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (drives the WAVE-bank intra-bank morph; frequency / depth set by the WLFR / WLFD edit parameters). |
 | osc_constants.h | All static tuning constants (max depths, scales, envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |

@@ -291,6 +291,40 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.subb_depth = param_10bit_to_f32(value);
       break;
 
+    // ---- Internal wave-LFO frequency (WAVE_LFO_RATE) -------------------------
+    // LOG scale (a LINEAR knob mapped to an EXPONENTIAL frequency, 3 decades):
+    // raw 0..1023 -> x = raw/1023 (0..1); freq = 10^(3x - 3) Hz, so each
+    // equal knob step is a constant MULTIPLIER of the previous frequency
+    // (0.001 -> 0.01 -> 0.1 -> 1 Hz). This is the same log convention as the
+    // SPDx/SMTx knobs. raw 0 is SPECIAL-CASED to 0 Hz (LFO OFF, the phase
+    // does not advance):
+    //   raw = 0    -> 0 Hz (LFO OFF, static wave -- the factory default)
+    //   raw = 1    -> 10^(-2.997) ~ 0.001 Hz (start of the log scale)
+    //   raw = 341  -> 10^(3*0.333-3) = 10^-2 = 0.01 Hz
+    //   raw = 683  -> 10^(3*0.667-3) = 10^-1 = 0.1 Hz
+    //   raw = 1023 -> 10^(3*1-3)     = 10^0  = 1 Hz (the max)
+    // Written to lfo_sim_.freq_hz (the internal LFO, see osc_lfo_sim.h).
+    // fasterpowf(10.f, x) is the platform's fast powf (no libm).
+    case WAVE_LFO_RATE:
+      {
+        if (value == 0)
+          lfo_sim_.freq_hz = 0.f; // raw 0 = LFO OFF (0 Hz)
+        else
+        {
+          const float x = param_10bit_to_f32(value); // 0..1
+          lfo_sim_.freq_hz = fasterpowf(10.f, 3.f * x - 3.f); // 0.001..1 (log)
+        }
+      }
+      break;
+
+    // ---- Internal wave-LFO morph depth (WAVE_LFO_DEPTH) ----------------------
+    // LINEAR scale, 0..100% (raw 0..1023 -> 0..1). At 0 the LFO is off (the
+    // wave stays at the bank center, static); at 100% the morph sweeps the
+    // full bank (first to last table). Written to lfo_sim_.morph_amt.
+    case WAVE_LFO_DEPTH:
+      lfo_sim_.morph_amt = param_10bit_to_f32(value); // 0..1
+      break;
+
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
     // were removed from the editable parameter set. FOLD2 was judged
     // unnecessary; DCK is now a CONSTANT (kDuckConstant, osc_constants.h) and

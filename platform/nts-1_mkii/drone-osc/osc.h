@@ -183,12 +183,30 @@ public:
     FVOL,           // formant stage dry/wet (0..1, 0 = dry / transparent)
     COMB,           // comb resonator feedback (0..1 -> 0..kCombFbMax)
     SUBB,           // sub-bass "breath" depth (0..100% -> 0..kSubBreathMax): the SHARED sub bass (SUB1/SUB2) level follows the loudest (breath-focus) voice. 0% = static low end (regression-safe).
+    // ---- Internal WAVE LFO (independent of the platform shape-LFO) ----------
+    // The WAVETABLE intra-bank morph is driven by an INTERNAL LFO, not the
+    // platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are now
+    // NO-OPs -- setShapeLfo() is a stub; see below). The LFO synthesizes a
+    // phase-coherent sine at audio rate (ShapeLfoSim, osc_lfo_sim.h) and drives
+    // the morph position within the selected WAVE bank. These two knobs give it
+    // its own frequency / depth, decoupled from the platform so future LFO
+    // sources can be bound here without touching the hardware knobs:
+    //   WAVE_LFO_RATE  -- LFO frequency (LOG scale: a LINEAR knob mapped to an
+    //                     EXPONENTIAL frequency; raw 0 = 0 Hz / LFO OFF, else
+    //                     10^(3*raw/1023 - 3) = 0.001..1 Hz, 3 decades;
+    //                     default 0 = OFF). The hardware's RATE
+    //                     knob stepped in 0.1 Hz, too coarse for slow organic
+    //                     morphs.
+    //   WAVE_LFO_DEPTH -- LFO morph depth (LINEAR 0..100%, default 100%). At
+    //                     100% the morph sweeps the full bank; 0 = static wave.
+    WAVE_LFO_RATE,  // internal wave-LFO frequency (log 0..1 Hz, default 0 = off)
+    WAVE_LFO_DEPTH, // internal wave-LFO morph depth (0..100%, default 100%)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..SUBB).
-  static constexpr uint8_t kEditParamCount = 35; // RATE_AMT..SUBB
+  // Number of editable DSP parameters (RATE_AMT..WAVE_LFO_DEPTH).
+  static constexpr uint8_t kEditParamCount = 37; // RATE_AMT..WAVE_LFO_DEPTH
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -212,8 +230,11 @@ public:
   //   31 FMVT (formant vowel position)  32 FLVL (formant dry/wet)
   //   33 COMB (comb resonator)
   //   34 SUBB (shared sub-bass breath depth, follows the breath-focus voice)
+  //   35 WLFO R (WAVE_LFO_RATE: internal wave-LFO frequency, log 0..1 Hz)
+  //   36 WLFO D (WAVE_LFO_DEPTH: internal wave-LFO morph depth, 0..100%)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 35 = (SUBB - RATE_AMT + 1); select_ 0..34 -> RATE_AMT..SUBB.
+  // kEditParamCount = 37 = (WAVE_LFO_DEPTH - RATE_AMT + 1);
+  // select_ 0..36 -> RATE_AMT..WAVE_LFO_DEPTH.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -231,9 +252,14 @@ public:
   // SUBB (index 34) defaults to 307 (~30%): the shared sub bass breathes
   // gently (depth 0.18) by default — the low end follows the breath-focus
   // note subtly instead of staying fully static.
+  // WAVE_LFO_RATE (index 35) defaults to 0: raw 0 = 0 Hz (LFO OFF -- the wave
+  // stays at the bank center, static). Turning the knob up sweeps 0.001..1 Hz
+  // on a LOG scale (10^(3*raw/1023 - 3), 3 decades, finer near 0). WAVE_LFO_DEPTH
+  // (index 36) defaults to 1023 (100%): a full-bank sweep, so any non-zero
+  // frequency drives the morph across the whole bank.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -244,7 +270,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -668,10 +694,17 @@ public:
   // and the hardware's per-block pitch callback.
   void setPitch(float w0);
 
-  // lfo in (-1.0f, 1.0f)
-  void setShapeLfo(float lfo)
+  // lfo in (-1.0f, 1.0f) -- PLATFORM SHAPE-LFO DELIVERY (HARDWARE ONLY).
+  // The platform used to synthesize a shape-LFO from the OSC-button RATE/SHAPE
+  // knobs and deliver it here (L-rate) to drive the wavetable intra-bank morph
+  // and the sub-octave FM. Both targets are now OFF (the wavetable morph is
+  // driven by the INTERNAL wave-LFO below; the sub FM is fully disabled), so
+  // this callback is a NO-OP stub: the platform's shape_lfo is ignored and the
+  // hardware's RATE/SHAPE knobs no longer do anything audible. The signature
+  // (and the unit.cc call site) is kept so the platform's render hook
+  // unchanged; the lfo_ member is not written by this path.
+  void setShapeLfo(float /*lfo*/)
   {
-    lfo_ = lfo;
   }
 
   // Tempo callback (K-rate). The platform (unit.cc) and the web simulator
@@ -688,19 +721,11 @@ public:
   }
 
 #ifdef EMSCRIPTEN
-  // Simulator-only LFO settings (set from the JS UI, K-rate). On hardware
-  // these are the physical OSC-button knobs and are delivered via the
-  // platform's shape_lfo; here they drive the internal sine generator
-  // (ShapeLfoSim, see osc_lfo_sim.h).
-  void setLfoFreq(float freq)
-  {
-    lfo_sim_.freq = (freq < 0.f) ? 0.f : (freq > 30.f) ? 30.f : freq;
-  }
-
-  void setLfoDepth(float depth)
-  {
-    lfo_sim_.depth = (depth < 0.f) ? 0.f : (depth > 1.f) ? 1.f : depth;
-  }
+  // (The old simulator-only setLfoFreq()/setLfoDepth() are GONE. The internal
+  //  wave-LFO is now driven by the two editable parameters WAVE_LFO_RATE /
+  //  WAVE_LFO_DEPTH through the standard apply_edit_param() path -- both the
+  //  hardware PARAM/VALUE multiplexer and the web-sim's per-parameter sliders
+  //  write it, so there is no separate UI-only channel anymore.)
 #endif
   // Per-block K-rate prepass (web-sim edit/Rnd request consumption, rndTick,
   // rndMorphTick). Body lives in osc_mix.h (before the per-sample loop,
@@ -863,22 +888,25 @@ private:
   }
 
   Params params_;
-  float lfo_;
+  // (The old `lfo_` member -- the platform shape-LFO value -- is GONE. The
+  //  platform's OSC-button RATE/SHAPE knobs are now NO-OPs (setShapeLfo() is a
+  //  stub), so no external LFO feeds the audio path. The wavetable intra-bank
+  //  morph is driven by the INTERNAL wave-LFO below (lfo_sim_).)
   // Current tempo in BPM, delivered via setTempo() (K-rate). Default 120
   // (the web-simulator slider default). Read from the audio path for
   // BPM-synced modulation (planned SYNC mode); today it is stored but not
   // yet consumed, so the stock sound is unaffected.
   float tempo_bpm_ = 120.f;
 
-#ifdef EMSCRIPTEN
-  // Host-side (web simulator) shape-LFO synthesizer. On hardware the platform
-  // generates the LFO from the OSC-button A/B knobs and delivers it through
-  // setShapeLfo(); in the simulator there is no platform, so we synthesize a
-  // phase-coherent sine at audio rate here (see osc_lfo_sim.h). The UI sets
-  // frequency (F knob, 0..30 Hz) and depth (S knob, 0..1) via
-  // setLfoFreq()/setLfoDepth().
+  // INTERNAL wave-LFO synthesizer (see osc_lfo_sim.h). Drives the wavetable
+  // intra-bank morph (osc_mix.h: lfo_morph = bank_center + lfo_sim_.process()
+  // * lfo_morph_depth). The frequency (WAVE_LFO_RATE) and depth
+  // (WAVE_LFO_DEPTH) are set by the standard apply_edit_param() path, so both
+  // the hardware PARAM/VALUE multiplexer and the web-sim's per-parameter
+  // sliders drive it identically. On ARM the platform's shape_lfo no longer
+  // feeds the audio path (setShapeLfo() is a stub), so the internal LFO is
+  // the single source of the wavetable morph on both hardware and sim.
   ShapeLfoSim lfo_sim_;
-#endif
 
   // local variables related to audio processing
   // (The per-voice phasors, FM lookback caches, FM index LPF states, sub-2
