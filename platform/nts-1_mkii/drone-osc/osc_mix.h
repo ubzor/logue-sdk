@@ -64,16 +64,22 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 
   const bool rw_active = p.rw_amount > 0.f;
 
-  // Wavetable: the WAVE knob selects a BANK (0..5, A..F). The LFO drives the
-  // intra-bank morph position centered on the bank (see WaveTable::resolve_wave
-  // / bank_center): at LFO=0 the position is the bank center, and at LFO=+/-100%
-  // it sweeps from the first to the last table of the bank, covering every wave.
-  // Both A/B oscillators read the SAME wave (the intra-bank LFO morph); the
-  // A/B DETUNE (det_f_a_/det_f_b_) provides the width, the LFO provides the
-  // timbre movement. The bank boundary is hard: the morph never crosses into
-  // the next bank.
+  // Wavetable (2D morph): the WAVE knob selects a BANK for STREAM 1 (0..5, A..F)
+  // and the WAV2 knob selects a BANK for STREAM 2. Each stream's internal LFO
+  // (lfo_sim_ / lfo_sim2_) drives the intra-bank morph position centered on its
+  // bank (see WaveTable::resolve_wave / bank_center): at LFO=0 the position is
+  // the bank center, and at LFO=+/-100% it sweeps from the first to the last
+  // table of the bank, covering every wave. The two LFOs run INDEPENDENTLY
+  // (independent phases), so with two incommensurate frequencies the (stream 1,
+  // stream 2) trajectory in the 2D texture space never repeats. The FINAL wave
+  // fed to the A/B oscillators is a CROSSFADE of the two resolved streams
+  // (weight x from WAVE_MIX, computed below at the LFO block); the A/B DETUNE
+  // (det_f_a_/det_f_b_) still provides the width. The bank boundary is hard:
+  // each stream's morph never crosses into its next bank.
   uint32_t wave_bank = (uint32_t)p.wave_pos;
   if (wave_bank > 5U) wave_bank = 5U;
+  uint32_t wave_bank2 = (uint32_t)p.wave_pos2;
+  if (wave_bank2 > 5U) wave_bank2 = 5U;
   if (rw_active)
   {
     // Recompute each stream's interval / tracking from its own SPDx/SMTx
@@ -337,22 +343,35 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         voice_[vi].breath_dev = 1.f;
     }
 
-    // ---- Internal wave-LFO (shared, phase-coherent) --------------------------
-    // The wavetable intra-bank morph is driven by the INTERNAL LFO
-    // (lfo_sim_, see osc_lfo_sim.h), NOT the platform shape-LFO (the
-    // hardware's OSC-button RATE/SHAPE knobs are NO-OPs -- setShapeLfo() is a
-    // stub). The LFO's frequency / depth are set by the WAVE_LFO_RATE /
-    // WAVE_LFO_DEPTH edit parameters (apply_edit_param). All voices share this
-    // one LFO. The LFO value (sin * morph_amt) is in [-1, +1]; at morph_amt=0
-    // it is 0 (the wave stays at the bank center, static).
+    // ---- 2D wave morph: two independent internal LFOs + crossfade -------------
+    // The wavetable intra-bank morph is driven by TWO INTERNAL LFOs
+    // (lfo_sim_ for stream 1, lfo_sim2_ for stream 2, see osc_lfo_sim.h), NOT
+    // the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are
+    // NO-OPs -- setShapeLfo() is a stub). Each LFO's frequency / depth are set
+    // by its own edit parameters (WAVE_LFO_RATE / WAVE_LFO_DEPTH for stream 1,
+    // WAVE2_LFO_RATE / WAVE2_LFO_DEPTH for stream 2, via apply_edit_param). All
+    // voices share both LFOs. Each LFO value (sin * morph_amt) is in [-1, +1];
+    // at morph_amt=0 it is 0 (that stream's wave stays at its bank center,
+    // static). The two LFOs advance their OWN phases, so they are never
+    // phase-locked.
     const float lfo_ = lfo_sim_.process();
-    // Intra-bank LFO morph: the LFO drives the position within the selected
-    // bank, centered on the bank (see WaveTable::resolve_wave / bank_center).
-    // The base position is the bank center; the LFO adds +/-half the (size-1)
-    // span, so at 100% depth the morph sweeps from the first to the last
-    // table of the bank (clamped to [0, bank_size-1] inside resolve_wave).
+    const float lfo2_ = lfo_sim2_.process();
+    // Per-stream intra-bank LFO morph: each LFO drives the position within its
+    // selected bank, centered on the bank (see WaveTable::resolve_wave /
+    // bank_center). The base position is the bank center; the LFO adds +/-half
+    // the (size-1) span, so at 100% depth the morph sweeps from the first to
+    // the last table of the bank (clamped to [0, bank_size-1] inside
+    // resolve_wave).
     const float lfo_morph =
         WaveTable::bank_center(wave_bank) + lfo_ * WaveTable::lfo_morph_depth(wave_bank);
+    const float lfo_morph2 =
+        WaveTable::bank_center(wave_bank2) + lfo2_ * WaveTable::lfo_morph_depth(wave_bank2);
+    // Crossfade weight between stream 1 and stream 2 (from WAVE_MIX, -1..+1):
+    // x = 0.5*(1+mix) -> 0 (stream 1 only) .. 0.5 (50/50) .. 1 (stream 2 only).
+    // At the factory preset stream 2 == stream 1 (bank A, LFO 2 off), so any x
+    // blends two identical waves -> bit-identical to the old single-stream
+    // sound.
+    const float wave_mix_x = 0.5f * (1.f + p.wave_mix);
 
     // ---- Per-voice loop: phasors, wavetables, ring-mod -----------------------
     // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its
@@ -466,14 +485,23 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // that spread the 7 saws across one cycle (like GRIMM's random phase
         // initialization). This gives a static spread that de-correlates the
         // harmonics without per-sample detune computation.
-        // ---- Wavetable samples (intra-bank LFO morph) ------------------------
-        // Both A/B read the SAME wave: the LFO drives the position within the
-        // selected bank, centered on the bank (see WaveTable::resolve_wave).
+        // ---- Wavetable samples (2D morph: two streams, crossfaded) -----------
+        // Each A/B phasor samples BOTH streams at its own phase; the FINAL wave
+        // is the WAVE_MIX crossfade of the two resolved streams (wave_mix_x):
+        //   stream 1 = resolve_wave(wave_bank,  lfo_morph,  ph)  (WAV1 bank + LFO 1)
+        //   stream 2 = resolve_wave(wave_bank2, lfo_morph2, ph)  (WAV2 bank + LFO 2)
+        //   wav      = stream1 * (1 - x) + stream2 * x
         // The A/B detune (w0_a/w0_b, computed above) provides the width; the
-        // LFO provides the timbre movement. The bank boundary is hard: the
-        // morph never crosses into the next bank.
-        const float wav_a = WaveTable::resolve_wave(wave_bank, lfo_morph, v.ph_a);
-        const float wav_b = WaveTable::resolve_wave(wave_bank, lfo_morph, v.ph_b);
+        // two independent LFOs provide the 2D timbre movement. Each stream's
+        // bank boundary is hard: its morph never crosses into the next bank.
+        // At the factory preset (stream 2 == stream 1) the crossfade is of two
+        // identical waves -> bit-identical to the old single-stream sound.
+        const float s1a = WaveTable::resolve_wave(wave_bank,  lfo_morph,  v.ph_a);
+        const float s1b = WaveTable::resolve_wave(wave_bank,  lfo_morph,  v.ph_b);
+        const float s2a = WaveTable::resolve_wave(wave_bank2, lfo_morph2, v.ph_a);
+        const float s2b = WaveTable::resolve_wave(wave_bank2, lfo_morph2, v.ph_b);
+        const float wav_a = s1a * (1.f - wave_mix_x) + s2a * wave_mix_x;
+        const float wav_b = s1b * (1.f - wave_mix_x) + s2b * wave_mix_x;
         v.prev_wav_a = wav_a; // FM lookback cache (next sample's modulator)
         v.prev_wav_b = wav_b;
 

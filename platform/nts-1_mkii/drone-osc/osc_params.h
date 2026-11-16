@@ -57,6 +57,17 @@ struct OscParamsData
   float wave_pos;     // 0.f .. 5.f, edit WAVE: bank index (A=0..F=5)
                       // The LFO drives the intra-bank morph position centered
                       // on the bank (see WaveTable::resolve_wave / bank_center).
+  float wave_pos2;    // 0.f .. 5.f, edit WAV2: second wave stream's bank index
+                      // (A=0..F=5). Wave-LFO 2 (lfo_sim2_) drives the intra-bank
+                      // morph position centered on this bank, INDEPENDENTLY of
+                      // stream 1. The audio path crossfades stream 1 and stream
+                      // 2 by wave_mix (see WaveTable::resolve_wave / the
+                      // "2D wave crossfade" block in osc_mix.h).
+  float wave_mix;     // -1.f .. +1.f, edit WAVE_MIX: the wave 1 <-> wave 2
+                      // crossfade weight. The audio path computes
+                      // x = 0.5 * (1 + wave_mix): x = 0 (mix = -1) -> stream 1
+                      // only, x = 0.5 (mix = 0) -> equal 50/50 blend, x = 1
+                      // (mix = +1) -> stream 2 only. default 0 = 50/50.
   // ---- MAIN: level of the "main" voice (the A+B mixed output) --------------
   // The "main" voice is the result of mixing oscillators A and B (WAV1 + WAV2)
   // and running them through the folder/saturator/SVF chain — i.e. the
@@ -168,6 +179,10 @@ struct OscParamsData
     fold_depth = 0.f;   // default: wavefolder off
     asym = 0.f;         // default: symmetric saturator
     wave_pos = 0.f;     // default: bank A (LFO sweeps within bank A)
+    wave_pos2 = 0.f;    // default: stream-2 bank A (SAME as stream 1 at factory)
+    wave_mix = 0.f;     // default: 50/50 crossfade; with stream 2 = bank A and
+                        // its LFO off, the blend of two identical waves is
+                        // bit-identical to the old single-stream sound
     main_level = 1.0f;  // default: main (A+B) voice at full level (stock sound)
     rw_wav = 0.f;       // default: walk off for wavetable morph
     rw_drv = 0.f;       // default: walk off for drive

@@ -114,10 +114,19 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       break;
     }
     case WAV2:
-      // Deprecated: both A/B oscillators now read the same wave (intra-bank
-      // LFO morph). This case is a no-op for backward compatibility with
-      // saved presets / the multiplexer.
+      // Second wave stream's bank (A..F, 0..5). Same quantization as WAV1:
+      // raw 0..1023 -> bank 0..5. Was deprecated (A/B shared one wave);
+      // revived as the 2D-morph stream-2 bank (the audio path crossfades
+      // stream 1 and stream 2 by WAVE_MIX, see the "2D wave crossfade"
+      // block in osc_mix.h).
+    {
+      float raw = param_10bit_to_f32(value);
+      int32_t bank = (int32_t)(raw * 5.999f);
+      if (bank < 0) bank = 0;
+      if (bank > 5) bank = 5;
+      params_.wave_pos2 = (float)bank;
       break;
+    }
 
     // ---- Chord voice (CHORD level, CINT interval) ----
 
@@ -323,6 +332,48 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // full bank (first to last table). Written to lfo_sim_.morph_amt.
     case WAVE_LFO_DEPTH:
       lfo_sim_.morph_amt = param_10bit_to_f32(value); // 0..1
+      break;
+
+    // ---- Second wave stream: internal wave-LFO 2 frequency (WAVE2_LFO_RATE) --
+    // Identical LOG scale to WAVE_LFO_RATE (stream 1), but written to the
+    // SECOND LFO (lfo_sim2_, see osc_lfo_sim.h): raw 0 = 0 Hz (LFO OFF, the
+    // stream-2 wave stays at its bank center, static); raw 1..1023 ->
+    // 10^(3*raw/1023 - 3) = 0.001..1 Hz (3 decades). The two LFOs run with
+    // INDEPENDENT phases (each ShapeLfoSim owns its own phase), so with two
+    // incommensurate frequencies (e.g. 13 s and 19 s) the (stream 1, stream 2)
+    // morph trajectory never repeats.
+    case WAVE2_LFO_RATE:
+      {
+        if (value == 0)
+          lfo_sim2_.freq_hz = 0.f; // raw 0 = LFO 2 OFF (0 Hz)
+        else
+        {
+          const float x = param_10bit_to_f32(value); // 0..1
+          lfo_sim2_.freq_hz = fasterpowf(10.f, 3.f * x - 3.f); // 0.001..1 (log)
+        }
+      }
+      break;
+
+    // ---- Second wave stream: internal wave-LFO 2 morph depth (WAVE2_LFO_DEPTH)
+    // LINEAR scale, 0..100% (raw 0..1023 -> 0..1), same as WAVE_LFO_DEPTH but
+    // for lfo_sim2_. At 0 the stream-2 wave stays at its bank center (static);
+    // at 100% the LFO sweeps the full stream-2 bank. Written to
+    // lfo_sim2_.morph_amt.
+    case WAVE2_LFO_DEPTH:
+      lfo_sim2_.morph_amt = param_10bit_to_f32(value); // 0..1
+      break;
+
+    // ---- Wave 1 <-> Wave 2 crossfade (WAVE_MIX) ------------------------------
+    // SYMMETRIC -100%..+100% (raw 0..1023 -> -1..+1, 511 = 0 = 50/50). The
+    // audio path (osc_mix.h) computes the crossfade weight x = 0.5*(1+mix):
+    //   raw 0    -> mix = -1 -> x = 0   (stream 1 only, stream 2 silent)
+    //   raw 511  -> mix =  0 -> x = 0.5 (equal 50/50 blend, the default)
+    //   raw 1023 -> mix = +1 -> x = 1   (stream 2 only, stream 1 silent)
+    // Written to params_.wave_mix (-1..+1). At the factory preset (stream 2 =
+    // bank A, LFO 2 off) stream 2 == stream 1, so any mix value is bit-identical
+    // to the old single-stream sound.
+    case WAVE_MIX:
+      params_.wave_mix = param_10bit_to_f32(value) * 2.f - 1.f; // -1..+1
       break;
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)

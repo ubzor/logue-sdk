@@ -38,7 +38,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "BRT", "BRR", "SMT",
       "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
       "FMVT", "FLVL", "COMB", "SUBB",
-      "WLFR", "WLFD"};
+      "WLFR", "WLFD",
+      "W2LR", "W2LD", "WMIX"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -159,7 +160,9 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // (3 fixed frac digits, e.g. 0.01 Hz -> "0.010 H"); at/above 0.1 Hz it is
   // shown as "0.N H" (1 fixed frac digit, e.g. 0.1 Hz -> "0.1 H"). buf[8] is
   // large enough ("0.999H\0" = 6 chars).
-  if (k == WAVE_LFO_RATE)
+  // WAVE2_LFO_RATE (stream-2 wave-LFO frequency) shares the EXACT same LOG Hz
+  // formatting as WAVE_LFO_RATE (stream 1) — the two LFOs use identical scales.
+  if (k == WAVE_LFO_RATE || k == WAVE2_LFO_RATE)
   {
     if (raw == 0)
     {
@@ -204,9 +207,11 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   }
 
   int v;
-  if (k == WAV1)
+  if (k == WAV1 || k == WAV2)
   {
-    // WAVE shows the bank letter (A..F). raw 0..1023 -> bank 0..5.
+    // WAVE (WAV1) / WAVE 2 (WAV2) each show their stream's bank letter (A..F).
+    // raw 0..1023 -> bank 0..5 (WAV2 was deprecated when A/B shared one wave;
+    // it is now the 2D-morph stream-2 bank, see WAVE_MIX).
     int bank = (int)(param_10bit_to_f32(raw) * 5.999f);
     if (bank < 0) bank = 0;
     if (bank > 5) bank = 5;
@@ -214,8 +219,11 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[1] = '\0';
     return buf;
   }
-  else if (k == WAV2)
-    v = 0; // deprecated, display only (shows "0")
+  else if (k == WAVE_MIX)
+    // WAVE_MIX: symmetric -100..+100% (raw 0..1023 -> -100..+100, 511 = 0).
+    // Same signed-percent convention as ASYM: shows the crossfade weight
+    // (0% = 50/50, -100% = stream 1 only, +100% = stream 2 only).
+    v = (int)((raw * 200) / kRawMax) - 100;
   else if (k == ASYM)
     v = (int)((raw * 200) / kRawMax) - 100;
   else if (k == DETUNE)

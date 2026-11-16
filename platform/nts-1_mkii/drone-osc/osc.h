@@ -147,8 +147,8 @@ public:
     SATU,           // saturator drive (0..3.0, default 2.0 = moderate)
     ASYM,           // asymmetric saturator (−100%..+100%, default 0% = symmetric)
     FOLD,           // pre-drive wavefolder depth (0..100%, default 0% = off)
-    WAV1,           // oscillator A wavetable (0..90 across banks A-F)
-    WAV2,           // oscillator B wavetable (0..90 across banks A-F)
+    WAV1,           // oscillator A wavetable BANK (raw 0..1023 -> bank A..F, 0..5; the internal wave-LFO 1 morphs within the bank)
+    WAV2,           // oscillator B wavetable BANK (raw 0..1023 -> bank A..F, 0..5; the internal wave-LFO 2 morphs within the bank). Was deprecated (A/B shared one wave); revived as the second wave stream for the 2D crossfade (see WAVE_MIX).
     // (WAV3 / CHORD / CHRD_INT were removed — the chord/interval concept is
     //  gone; the main A+B voice + SUB1/SUB2 remain.)
     MAIN,           // main (A+B mixed) voice level (0..100%, default 100% = full)
@@ -201,12 +201,33 @@ public:
     //                     100% the morph sweeps the full bank; 0 = static wave.
     WAVE_LFO_RATE,  // internal wave-LFO frequency (log 0..1 Hz, default 0 = off)
     WAVE_LFO_DEPTH, // internal wave-LFO morph depth (0..100%, default 100%)
+    // ---- Second wave stream (2D morph) -------------------------------------
+    // The audio path now runs TWO independent wave streams and crossfades them
+    // (see the "2D wave crossfade" block in osc_mix.h): stream 1 is the original
+    // WAV1 bank + WAVE_LFO_RATE/DEPH; stream 2 is the WAV2 bank + the two
+    // parameters below. Each stream morphs within its own bank under its own
+    // LFO (independent phase), so with two LFOs at incommensurate periods
+    // (e.g. 13 s and 19 s) the (x, y) trajectory in the 2D texture space never
+    // repeats while the sound stays perfectly smooth (interpolation happens
+    // both inside the banks and between the two streams via the crossfade).
+    //   WAVE2_LFO_RATE  -- stream-2 LFO frequency (same LOG scale as
+    //                      WAVE_LFO_RATE; raw 0 = 0 Hz / LFO OFF, default OFF)
+    //   WAVE2_LFO_DEPTH -- stream-2 LFO morph depth (LINEAR 0..100%, default
+    //                      100%: full-bank sweep, same as stream 1)
+    //   WAVE_MIX -- the stream-1 <-> stream-2 crossfade weight, SYMMETRIC
+    //               -100%..+100% (raw 511 = 50/50, default). x = 0.5*(1+mix):
+    //               raw 0   -> x = 0   (stream 1 only, stream 2 silent)
+    //               raw 511 -> x = 0.5 (equal 50/50 blend)
+    //               raw 1023-> x = 1   (stream 2 only, stream 1 silent)
+    WAVE2_LFO_RATE,  // stream-2 wave-LFO frequency (log 0..1 Hz, default 0 = off)
+    WAVE2_LFO_DEPTH, // stream-2 wave-LFO morph depth (0..100%, default 100%)
+    WAVE_MIX,        // wave 1 <-> wave 2 crossfade (-100%..+100%, default 50/50)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..WAVE_LFO_DEPTH).
-  static constexpr uint8_t kEditParamCount = 37; // RATE_AMT..WAVE_LFO_DEPTH
+  // Number of editable DSP parameters (RATE_AMT..WAVE_MIX).
+  static constexpr uint8_t kEditParamCount = 40; // RATE_AMT..WAVE_MIX
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -230,11 +251,14 @@ public:
   //   31 FMVT (formant vowel position)  32 FLVL (formant dry/wet)
   //   33 COMB (comb resonator)
   //   34 SUBB (shared sub-bass breath depth, follows the breath-focus voice)
-  //   35 WLFO R (WAVE_LFO_RATE: internal wave-LFO frequency, log 0..1 Hz)
-  //   36 WLFO D (WAVE_LFO_DEPTH: internal wave-LFO morph depth, 0..100%)
+  //   35 WLFO R (WAVE_LFO_RATE: internal wave-LFO 1 frequency, log 0..1 Hz)
+  //   36 WLFO D (WAVE_LFO_DEPTH: internal wave-LFO 1 morph depth, 0..100%)
+  //   37 W2LFO R (WAVE2_LFO_RATE: wave-LFO 2 frequency, log 0..1 Hz)
+  //   38 W2LFO D (WAVE2_LFO_DEPTH: wave-LFO 2 morph depth, 0..100%)
+  //   39 WMIX (WAVE_MIX: wave 1 <-> wave 2 crossfade, -100%..+100%, 50/50 def)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 37 = (WAVE_LFO_DEPTH - RATE_AMT + 1);
-  // select_ 0..36 -> RATE_AMT..WAVE_LFO_DEPTH.
+  // kEditParamCount = 40 = (WAVE_MIX - RATE_AMT + 1);
+  // select_ 0..39 -> RATE_AMT..WAVE_MIX.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -256,10 +280,21 @@ public:
   // stays at the bank center, static). Turning the knob up sweeps 0.001..1 Hz
   // on a LOG scale (10^(3*raw/1023 - 3), 3 decades, finer near 0). WAVE_LFO_DEPTH
   // (index 36) defaults to 1023 (100%): a full-bank sweep, so any non-zero
-  // frequency drives the morph across the whole bank.
+  // frequency drives the morph across the whole bank. WAVE2_LFO_RATE (index 37)
+  // defaults to 0 (stream-2 LFO OFF) and WAVE2_LFO_DEPTH (index 38) to 1023
+  // (100%), mirroring stream 1. WAV2 (index 14) defaults to 0 (bank A, same as
+  // WAV1) and WAVE_MIX (index 39) to 511 (50/50): at the factory preset stream 2
+  // is the SAME bank A with its LFO off, so the 50/50 crossfade of two
+  // identical waves is bit-identical to the old single-stream sound.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023};
+  // 40 values (kEditParamCount = 40, RATE_AMT..WAVE_MIX): indices 0..36 keep
+  // the old values (13 (WAV1) = 0 bank A, 14 (WAV2) = 128 bank A, 35 (WLFR)
+  // = 0, 36 (WLFD) = 1023); 37 (W2LFR) = 0 (stream-2 LFO off); 38 (W2LFD) =
+  // 1023 (100%); 39 (WMIX) = 511 (50/50). At the factory preset stream 2 is
+  // the SAME bank A as stream 1 with its LFO off, so the 50/50 crossfade of
+  // two identical waves is bit-identical to the old single-stream sound.
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -270,7 +305,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -907,6 +942,14 @@ private:
   // feeds the audio path (setShapeLfo() is a stub), so the internal LFO is
   // the single source of the wavetable morph on both hardware and sim.
   ShapeLfoSim lfo_sim_;
+  // Second internal wave-LFO for the 2D morph (see osc_lfo_sim.h): drives the
+  // intra-bank morph of stream 2 (WAV2 bank) INDEPENDENTLY of lfo_sim_ (its
+  // own phase, so the two streams are never phase-locked). Its frequency /
+  // depth are set by WAVE2_LFO_RATE / WAVE2_LFO_DEPTH through the standard
+  // apply_edit_param() path (osc_param_apply.h), exactly like lfo_sim_. The
+  // osc_mix.h audio path calls process() on both LFOs once per sample and
+  // crossfades the two resolved waves by WAVE_MIX (params_.wave_mix).
+  ShapeLfoSim lfo_sim2_;
 
   // local variables related to audio processing
   // (The per-voice phasors, FM lookback caches, FM index LPF states, sub-2

@@ -31,23 +31,37 @@ env-weighted ANCHOR note — see below), then (3) applies the SINGLE common
 post-stage (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
-INTERNAL WAVE-LFO (ONE shared sine, phase-coherent; see osc_lfo_sim.h):
-  lfo_ = lfo_sim_.process()   (sin(phase) * WLFD; phase advances by WLFR Hz)
-  lfo_morph = bank_center(WAVE) + lfo_ * lfo_morph_depth(WAVE)
-     -> the intra-bank wavetable morph position (clamped to [0, bank_size-1])
+2D WAVE MORPH (TWO independent internal LFOs + crossfade; see osc_lfo_sim.h):
+  Stream 1 (WAVE bank, WLFR/WLFD):
+    lfo_       = lfo_sim_.process()   (sin(phase) * WLFD; phase advances by WLFR Hz)
+    lfo_morph  = bank_center(WAVE) + lfo_ * lfo_morph_depth(WAVE)
+  Stream 2 (WA2 bank, W2LR/W2LD):
+    lfo2_      = lfo_sim2_.process()  (sin(phase) * W2LD; phase advances by W2LR Hz)
+    lfo_morph2 = bank_center(WA2) + lfo2_ * lfo_morph_depth(WA2)
+  x = 0.5 * (1 + WMIX)     (WMIX -100..+100% -> x 0..1; 50/50 at WMIX = 0)
+     -> each stream's intra-bank morph position (clamped to [0, bank_size-1])
+  NOTE: the two LFOs run INDEPENDENT phases (each ShapeLfoSim owns its own),
+        so the (stream 1, stream 2) trajectory in the 2D texture space never
+        repeats for incommensurate frequencies (e.g. ~13 s / ~19 s) while the
+        sound stays perfectly smooth (interpolation happens both inside the
+        banks and between the streams via the crossfade).
   NOTE: the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs)
         is a NO-OP (setShapeLfo() is a stub); the morph is driven ENTIRELY by
-        this internal LFO (WLFR / WLFD edit parameters).
+        these two internal LFOs (WLFR / WLFD / W2LR / W2LD edit parameters).
 
 PER VOICE (x kVoiceCount = 6):
-  phasor A  ->  wavetable (WAVE bank, internal wave-LFO morph)   [ DETU, FM1, FMAB, JIT, + walk detune ]
-  phasor B  ->  wavetable (WAVE bank, internal wave-LFO morph)   [ DETU, FM2, FMBB, JIT, + walk detune ]
+  phasor A  ->  wavA = stream1*(1-x) + stream2*x
+                  (stream1 = WAVE bank @ lfo_morph, stream2 = WA2 bank @ lfo_morph2)
+  phasor B  ->  wavB = stream1b*(1-x) + stream2b*x   (same 2D crossfade at ph_b)
+               [ DETU, FM1, FMAB, JIT, + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
   -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
   -> sub_env_focus = max(sub_env_focus, env)  (loudest voice = SUBB breath focus)
      (shared per-sample: the random walks, FM index, JIT are ONE drone;
-      the sub phasors / sub-2 voice are NO LONGER per-voice — see below)
+      the sub phasors / sub-2 voice are NO LONGER per-voice — see below;
+      at the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0), so the
+      crossfade of two identical waves is bit-identical to the old sound)
 
 SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
   anchor_target = sum(env*w0) / sum(env)   (the env-weighted mean base rate)
@@ -427,7 +441,7 @@ default and effect:
 | 11 | ASYM | +/-% | -100..+100% | 0% | Saturator asymmetry (even harmonics; >0 = positive half harder). |
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
 | 13 | WAVE | letter | A..F | A | Wavetable **bank** (LFO morphs within the bank). |
-| 14 | WA2 | — | — | — | *Deprecated* (no-op; both A/B read the same wave). |
+| 14 | WA2 | letter | A..F | A | **Wave 2 bank**: the second wave stream's wavetable bank (the 2D-morph y-axis). Wave-LFO 2 (W2LR / W2LD) morphs within this bank INDEPENDENTLY of stream 1 (independent LFO phase). The audio path crossfades stream 1 (WAVE) and stream 2 (WA2) by WAVE_MIX — see "2D wave morph" in the Sound path. At the factory preset WA2 = A (same bank as WAVE) and W2LR = 0 (LFO off), so stream 2 == stream 1 and the 50/50 crossfade is bit-identical to the old single-stream sound. (Was deprecated when A/B shared one wave; revived for the 2D morph.) |
 | 15 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). |
 | 16 | TWDR | % | 0..100% | 0% (off) | *Deprecated* (no-op; LFO drives the intra-bank morph). |
 | 17 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
@@ -450,6 +464,9 @@ default and effect:
 | 34 | SUBB | % | 0..100% -> 0..0.6 swing | ~30% | **Sub-bass breath**: the ONE shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note) follows the LOUDEST (breath-focus) voice's A-H-R envelope. 0% = the old static low end (regression-safe); ~30% (default) = a gentle +/-18% swing — the drone's low end "breathes in" with the note that is currently loudest. The anchor (pitch) is ALWAYS the env-weighted mean (one stable fundamental under the cluster, note on/off morphs the sub pitch smoothly); only the LEVEL breathes, and only by the SUBB depth. The randomizer window is 0..60%. |
 | 35 | WLFR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG: linear knob -> exponential freq; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Internal wave-LFO frequency**: the sine that drives the WAVE-bank intra-bank morph (see `osc_lfo_sim.h`). LOG scale (raw 0 = 0 Hz / LFO OFF; else 10^(3*raw/1023 - 3) = 0.001..1 Hz across 3 decades, the same convention as the SPDx/SMTx knobs), so each equal knob step is a constant multiplier of the previous frequency — fine control near 0. 0 = static wave (the factory default). This REPLACES the hardware's OSC-button RATE knob (which is now a NO-OP, `setShapeLfo()` is a stub). |
 | 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO morph depth**: 0 = static wave (LFO off, the wave stays at the bank center), 100% = the morph sweeps the full bank (first to last table, and back). The factory default is 100%, so any non-zero WLFR drives the morph across the whole bank. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
+| 37 | W2LR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG, same scale as WLFR; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Wave-LFO 2 frequency**: the sine that drives the WAVE-2-bank (stream 2) intra-bank morph (see `osc_lfo_sim.h`, the second `ShapeLfoSim`). Runs with an INDEPENDENT phase from WLFR, so the two streams are never phase-locked: with two incommensurate frequencies (e.g. ~13 s and ~19 s) the (stream 1, stream 2) trajectory in the 2D texture space never repeats. |
+| 38 | W2LD | % | 0..100% (linear) | 100% | **Wave-LFO 2 morph depth**: 0 = stream-2 wave static (at its bank center), 100% = the morph sweeps the full stream-2 bank. Same convention as WLFD, for the second LFO. |
+| 39 | WMIX | +/-% | -100..+100% (symmetric; 50/50 at 0%) | 0% (50/50) | **Wave Mix**: the stream 1 (WAVE) <-> stream 2 (WA2) crossfade weight. The audio path computes x = 0.5*(1+mix): -100% (raw 0) = stream 1 only, 0% (raw 511) = equal 50/50 blend, +100% (raw 1023) = stream 2 only. At the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0), so any mix value is bit-identical to the old single-stream sound. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -500,7 +517,7 @@ gently follows the loudest (breath-focus) voice's A-H-R.
 | Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
 | Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
-| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The wavetable intra-bank morph is driven ENTIRELY by the INTERNAL wave-LFO (edit params WLFR / WLFD, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
+| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The 2D wave morph is driven ENTIRELY by the TWO INTERNAL wave-LFOs (edit params WLFR / WLFD for stream 1, W2LR / W2LD for stream 2; the crossfade weight is WMIX, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
@@ -550,7 +567,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
-| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (drives the WAVE-bank intra-bank morph; frequency / depth set by the WLFR / WLFD edit parameters). |
+| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the Osc owns TWO independent instances, `lfo_sim_` / `lfo_sim2_`, driving the stream 1 / stream 2 intra-bank morphs; frequency / depth set by the WLFR / WLFD and W2LR / W2LD edit parameters). |
 | osc_constants.h | All static tuning constants (max depths, scales, envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |

@@ -29,13 +29,13 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      // 37 editable parameters total (edit indices 0..36); see EDIT_PARAM_NAMES
+      // 40 editable parameters total (edit indices 0..39); see EDIT_PARAM_NAMES
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 37; // 37 = RATE..WAVE_LFO_DEPTH
+      const EDIT_PARAM_COUNT = 40; // 40 = RATE..WAVE_MIX
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -63,16 +63,22 @@
       //    sub bass itself is ONE shared pair for the whole polyphonic cluster
       //    (env-weighted ANCHOR note) — see the "Shared sub bass" block in
       //    osc_mix.h / the SUBB comment in osc_params.h.)
-      // 35 WAVE LFO RATE (internal wave-LFO frequency, LOG scale 0.001..1 Hz
+      // 35 WAVE LFO RATE (internal wave-LFO 1 frequency, LOG scale 0.001..1 Hz
       // across 3 decades; raw 0 = 0 Hz / LFO OFF, default 0) and 36 WAVE LFO
-      // DEPTH (internal wave-LFO morph depth, LINEAR 0..100%, default 100%).
-      // These drive the WAVE-bank intra-bank
+      // DEPTH (internal wave-LFO 1 morph depth, LINEAR 0..100%, default 100%).
+      // These drive the WAVE-bank (stream 1) intra-bank
       //    morph via the INTERNAL LFO (lfo_sim_ in osc.h), NOT the platform
       //    shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are NO-OPs).
+      // 37 WAVE 2 LFO RATE / 38 WAVE 2 LFO DEPTH drive stream 2 (WAV2 bank) via
+      //    the SECOND internal LFO (lfo_sim2_ in osc.h), INDEPENDENTLY of
+      //    stream 1. 39 WAVE MIX is the symmetric -100%..+100% crossfade
+      //    between the two streams (raw 511 = 50/50; raw 0 = stream 1 only;
+      //    raw 1023 = stream 2 only). 14 is WAVE 2 (the stream-2 bank, the
+      //    same A..F bank selector as WAVE).
       const EDIT_PARAM_NAMES = [
         "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
-        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave", "Wave B (deprecated)",
+        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave", "Wave 2",
         "Main",
         "Morph Wander", "Drive Wander", "Fold Wander",
         "Cutoff", "Resonance", "Cutoff Wander",
@@ -82,6 +88,7 @@
         "Comb Res",
         "Sub Bass Bre",
         "Wave LFO Rate", "Wave LFO Depth",
+        "Wave 2 LFO Rate", "Wave 2 LFO Depth", "Wave Mix",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -106,7 +113,7 @@
         // they control the INTERNAL wave-LFO that drives the WAVE-bank
         // intra-bank morph (the hardware's OSC-button RATE/SHAPE knobs are
         // NO-OPs now; the LFO is fully internal, see osc_lfo_sim.h).
-        { title: "MAIN",       col: 0, items: [15, 13, 35, 36, 10, 11, 12, 27, 28, 25, 26, 0] },
+        { title: "MAIN",       col: 0, items: [15, 13, 35, 36, 14, 37, 38, 39, 10, 11, 12, 27, 28, 25, 26, 0] },
         { title: "BREATH",   col: 0, items: [22, 23, 24] },
         { title: "FORMANT",  col: 0, items: [31, 32] },
         // ---- Column 1 ----
@@ -169,11 +176,16 @@
         //   FM1/FM2   -> 0..0.1c (quadratic curve)
         //   others    -> 0..100%
         if (idx === 13 || idx === 14) {
-          // WAVE selects the bank A..F (raw 0..1023 -> bank 0..5)
+          // WAVE (edit 13) / WAVE 2 (edit 14) each select their stream's bank
+          // A..F (raw 0..1023 -> bank 0..5, mirrors the DSP quantization in
+          // osc_param_apply.h, cases WAV1 / WAV2)
           const bank = Math.round((raw / 1023) * 5.999);
           return "ABCDEF".charAt(Math.max(0, Math.min(5, bank)));
         }
-        if (idx === 11) {
+        if (idx === 11 || idx === 39) {
+          // ASYM (edit 11) / WAVE MIX (edit 39): symmetric -100..+100%
+          // (raw 0..1023 -> -100..+100, 511 = 0). WAVE MIX shows the crossfade
+          // weight: 0% = 50/50, -100% = stream 1 only, +100% = stream 2 only.
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
         }
@@ -212,12 +224,14 @@
           const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
           return "AEIOU".charAt(vi);
         }
-        if (idx === 35) {
-          // WAVE LFO RATE (edit 35): internal wave-LFO frequency, LOG scale
+        if (idx === 35 || idx === 37) {
+          // WAVE LFO RATE (edit 35) / WAVE 2 LFO RATE (edit 37): internal
+          // wave-LFO 1 / wave-LFO 2 frequency, LOG scale
           // (a LINEAR knob mapped to an EXPONENTIAL frequency, 3 decades):
           // raw 0 = 0 Hz (LFO OFF), else freq = 10^(3*raw/1023 - 3) Hz
           // (0.001..1, the same log convention as the SPDx/SMTx knobs).
-          // Mirrors the DSP (osc_param_apply.h, case WAVE_LFO_RATE). Show
+          // Mirrors the DSP (osc_param_apply.h, cases WAVE_LFO_RATE /
+          // WAVE2_LFO_RATE). Show
           // "0 H" at raw 0, "1 H" at raw 1023; below 0.1 Hz show millihertz
           // "0.NNN H", at/above 0.1 Hz show "0.N H".
           if (raw === 0) return "0 H";
@@ -234,7 +248,8 @@
         // 16..18 (RWAV/RDRV/RFLD), 21 (RWFC), 22..24 (Breath),
         // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB),
         // 34 (SUBB — sub-bass breath depth, 0..100% -> 0..0.6 swing),
-        // 36 (WAVE LFO DEPTH — internal wave-LFO morph depth, 0..100%).
+        // 36 (WAVE LFO DEPTH — internal wave-LFO 1 morph depth, 0..100%),
+        // 38 (WAVE 2 LFO DEPTH — internal wave-LFO 2 morph depth, 0..100%).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -251,7 +266,8 @@
       // as the HW Filter type / Octave groups. No hidden slider is created,
       // so applyPresetRaw / fireRandom special-case index 13 (they walk
       // #editparam_<i> by index).
-      const WAVE_PARAM_IDX = 13;
+      const WAVE_PARAM_IDX = 13; // WAV1: stream-1 bank (A..F radio group)
+      const WAVE2_PARAM_IDX = 14; // WAV2: stream-2 bank (A..F radio group)
       const WAVE_BANKS = ["A", "B", "C", "D", "E", "F"];
       function waveBankFromRaw(raw) {
         let b = Math.floor((raw / 1023) * 5.999);
@@ -261,11 +277,14 @@
       function rawFromWaveBank(b) {
         return Math.round(b * 1023 / 5);
       }
-      // Checked state of the WAVE radio group. Set by the row builder in
-      // createEditableParam once the group exists; the Rnd-morph poll calls
-      // it to re-check the radio whose bank the morphing raw quantizes to
-      // (no setEditParam — the morph owns the write stream).
+      // Checked state of the WAVE / WAVE 2 radio groups. Set by the row
+      // builder in createEditableParam once a group exists; the Rnd-morph
+      // poll calls it to re-check the radio whose bank the morphing raw
+      // quantizes to (no setEditParam — the morph owns the write stream).
+      // setWaveBankChecked is the stream-1 group (edit 13),
+      // setWaveBank2Checked the stream-2 group (edit 14).
       let setWaveBankChecked = null;
+      let setWaveBank2Checked = null;
 
       // Format the raw 10-bit value (0..1023) of a DRONE-MOD FX parameter.
       // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
@@ -364,14 +383,19 @@
         // fireRandom special-case index 13 (they walk #editparam_<i> by
         // index). The radios are created AFTER apply (above) so the change
         // handlers close over it safely.
-        if (index === WAVE_PARAM_IDX) {
+        if (index === WAVE_PARAM_IDX || index === WAVE2_PARAM_IDX) {
+          // WAVE (edit 13) / WAVE 2 (edit 14): each stream's bank, rendered as
+          // an A..F radio group (NOT a range slider). The two groups use
+          // separate radio names (WaveBank / WaveBank2) so they are
+          // independent selectors. Same FlyonUI "join radio with btn" pattern
+          // as the HW Filter type group.
           const group = document.createElement("div");
           group.className = "octave-join drop-shadow flex-1 min-w-0";
           const radios = [];
           WAVE_BANKS.forEach((bank, b) => {
             const radio = document.createElement("input");
             radio.type = "radio";
-            radio.name = "WaveBank";
+            radio.name = (index === WAVE_PARAM_IDX) ? "WaveBank" : "WaveBank2";
             radio.value = String(b);
             radio.className = "octave-join-item btn btn-soft btn-primary btn-xs flex-1 min-w-0";
             radio.setAttribute("aria-label", bank);
@@ -384,15 +408,17 @@
           // paced preset apply can re-check the radio whose bank the raw
           // quantizes to (they must NOT call apply — that would re-write the
           // value the morph/preset is already driving).
-          setWaveBankChecked = (bank) => {
+          const setChecked = (bank) => {
             const b = Math.max(0, Math.min(5, bank | 0));
             for (let i = 0; i < radios.length; i++) radios[i].checked = (i === b);
           };
-          // No value_string for WAVE: the radio group IS the readout (the
-          // checked button shows the selected bank letter). value_string is
-          // created above but deliberately NOT appended here.
+          if (index === WAVE_PARAM_IDX) setWaveBankChecked = setChecked;
+          else setWaveBank2Checked = setChecked;
+          // No value_string for WAVE / WAVE 2: the radio group IS the readout
+          // (the checked button shows the selected bank letter). value_string
+          // is created above but deliberately NOT appended here.
           const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
-          setWaveBankChecked(waveBankFromRaw(initRaw));
+          setChecked(waveBankFromRaw(initRaw));
           (targetEl || document.getElementById("Parameters")).appendChild(container);
           return;
         }
@@ -870,20 +896,26 @@
         // Full range — they only scale the wander, never the base sound.
         for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
           set(n, r1023());
-        // WAVE (WAV1): the selected WAVETABLE BANK (A..F, 0..5). The internal
-        // wave-LFO then morphs within the bank (intra-bank position centered
-        // on the bank, see osc_waves.h / osc_lfo_sim.h), so each of the 6
-        // banks is a valid, clearly different timbre family — randomize
-        // uniformly over them. (WAV2 is deprecated: both A/B read the same
-        // wave.)
+        // WAVE (WAV1) / WAVE 2 (WAV2): each stream's selected WAVETABLE BANK
+        // (A..F, 0..5). The internal wave-LFO then morphs within the bank
+        // (intra-bank position centered on the bank, see osc_waves.h /
+        // osc_lfo_sim.h), so each of the 6 banks is a valid, clearly different
+        // timbre family — randomize both streams independently, uniformly.
+        // (WAV2 was deprecated when A/B shared one wave; it is now the 2D-morph
+        // stream-2 bank, crossfaded with stream 1 by WAVE_MIX.)
         {
           const bank = Math.floor(Math.random() * 6); // 0..5
+          const bank2 = Math.floor(Math.random() * 6); // 0..5 (independent)
           set("Wave", rawFromWaveBank(bank));
+          set("Wave 2", rawFromWaveBank(bank2));
         }
-        // WAVE LFO RATE / DEPTH: the internal wave-LFO's frequency (log
-        // 0.001..1 Hz) and morph depth (0..100%). Full range is safe (0 =
-        // static wave, max = 1 Hz / full-bank sweep). Randomize uniformly.
-        for (const n of ["Wave LFO Rate", "Wave LFO Depth"])
+        // WAVE LFO RATE / DEPTH (stream 1) and WAVE 2 LFO RATE / DEPTH
+        // (stream 2): the two independent internal wave-LFOs' frequencies
+        // (log 0.001..1 Hz) and morph depths (0..100%). Full range is safe
+        // (0 = static wave, max = 1 Hz / full-bank sweep). Randomize uniformly.
+        // WAVE MIX: the stream 1 <-> stream 2 crossfade (-100%..+100%, 511 =
+        // 50/50). Full range is safe. Randomize uniformly.
+        for (const n of ["Wave LFO Rate", "Wave LFO Depth", "Wave 2 LFO Rate", "Wave 2 LFO Depth", "Wave Mix"])
           set(n, r1023());
 
         // --- Constrained (critical) parameters -------------------------------
@@ -1063,6 +1095,10 @@
               // radio group) — re-check the radio for the bank this raw
               // quantizes to; the setEditParam below still applies the raw.
               if (setWaveBankChecked) setWaveBankChecked(waveBankFromRaw(raws[i]));
+            } else if (i === WAVE2_PARAM_IDX) {
+              // WAVE 2 bank: no #editparam_14 slider exists (it is the A..F
+              // radio group) — re-check the stream-2 radio the same way.
+              if (setWaveBank2Checked) setWaveBank2Checked(waveBankFromRaw(raws[i]));
             } else if (el) {
               el.value = raws[i];
               const span = el.parentElement.querySelector("span");
@@ -1121,9 +1157,9 @@
         morphingSliders.clear();
       }
       function highlightSlider(i) {
-        // The WAVE radio group has no slider to recolor (index 13 is rendered
-        // as A..F radios, not a range input) — skip the highlight.
-        if (i === WAVE_PARAM_IDX) return;
+        // The WAVE / WAVE 2 radio groups have no slider to recolor (indices
+        // 13 / 14 are rendered as A..F radios, not range inputs) — skip.
+        if (i === WAVE_PARAM_IDX || i === WAVE2_PARAM_IDX) return;
         const el = document.getElementById("editparam_" + i);
         if (el && !morphingSliders.has(el)) {
           el.classList.remove("range-primary");
@@ -1139,23 +1175,27 @@
         fireSyncTimer = setInterval(() => {
           let dirty = false;
           let lastWaveBank = -1; // WAVE group: bank last seen by the poll
+          let lastWave2Bank = -1; // WAVE 2 group: bank last seen by the poll
           for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
             const v = Module.getEditParamValue(i);
             const el = document.getElementById("editparam_" + i);
-            if (i === WAVE_PARAM_IDX) {
-              // WAVE bank: no #editparam_13 slider exists (it is the A..F
-              // radio group). Re-check the radio whose bank the morphing raw
-              // currently quantizes to, so the group follows the morph the
-              // same way the sliders do (checked flips as the raw crosses
-              // the bank boundaries). No setEditParam — the morph owns the
-              // write stream. dirty=true only on an actual bank change, so
-              // the poll's "nothing changed this tick" stop condition still
-              // works.
-              if (setWaveBankChecked) {
+            if (i === WAVE_PARAM_IDX || i === WAVE2_PARAM_IDX) {
+              // WAVE / WAVE 2 banks: no #editparam_13/#editparam_14 slider
+              // exists (they are the A..F radio groups). Re-check the radio
+              // whose bank the morphing raw currently quantizes to, so the
+              // group follows the morph the same way the sliders do (checked
+              // flips as the raw crosses the bank boundaries). No
+              // setEditParam — the morph owns the write stream. dirty=true
+              // only on an actual bank change, so the poll's "nothing changed
+              // this tick" stop condition still works.
+              const isWave1 = (i === WAVE_PARAM_IDX);
+              const lastBank = isWave1 ? lastWaveBank : lastWave2Bank;
+              const setter = isWave1 ? setWaveBankChecked : setWaveBank2Checked;
+              if (setter) {
                 const bank = waveBankFromRaw(v);
-                if (lastWaveBank !== bank) {
-                  lastWaveBank = bank;
-                  setWaveBankChecked(bank);
+                if (lastBank !== bank) {
+                  if (isWave1) lastWaveBank = bank; else lastWave2Bank = bank;
+                  setter(bank);
                   dirty = true;
                 }
               }
