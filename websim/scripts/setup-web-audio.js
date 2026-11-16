@@ -145,7 +145,8 @@
       //  36: RFMB  - random-walk depth on FM B (0..100%, RATE-gated)
       function formatParamValue(idx, raw) {
         // Mirrors Osc::getParameterStrValue in osc.h (single source of truth):
-        //   WAV1/WAV2/WAV3 -> 0..kWavesTotal-1 (kWavesTotal = 91, so max index 90)
+        //   WAV1 (WAVE) -> bank letter A..F (raw 0..1023 -> bank 0..5; the LFO
+        //                  morphs within the selected bank, see osc_waves.h)
         //   ASYM      -> -100..+100% (raw*200/1023 - 100)
         //   DETU      -> +/-10 cents, centered on the raw MIDPOINT (511),
         //                 NOT 1023: (raw-511)*10/511. Full knob (1023) reads +10.
@@ -208,6 +209,35 @@
         return Math.round((raw * 100) / 1023) + "%";
       }
 
+      // ---- WAVE bank (edit index 13, WAV1) -----------------------------------
+      // The WAVE knob selects a BANK (0..5, A..F); the LFO morphs WITHIN the
+      // selected bank (intra-bank position centered on the bank, see
+      // osc_waves.h). The DSP (osc_param_apply.h, case WAV1) quantizes the
+      // raw to a bank: bank = int((raw/1023) * 5.999), clamped 0..5, and
+      // stores wave_pos = bank. The reverse mapping for the UI:
+      // raw = round(bank * 1023 / 5). Both directions are exact round-trips:
+      //   b -> round(b*204.6) -> floor(raw*5.999/1023) = b  (b = 0..5)
+      // The simulator renders WAVE as a radio group (A..F) instead of the
+      // usual range slider — the same FlyonUI "join radio with btn" pattern
+      // as the HW Filter type / Octave groups. No hidden slider is created,
+      // so applyPresetRaw / fireRandom special-case index 13 (they walk
+      // #editparam_<i> by index).
+      const WAVE_PARAM_IDX = 13;
+      const WAVE_BANKS = ["A", "B", "C", "D", "E", "F"];
+      function waveBankFromRaw(raw) {
+        let b = Math.floor((raw / 1023) * 5.999);
+        if (b < 0) b = 0; else if (b > 5) b = 5;
+        return b;
+      }
+      function rawFromWaveBank(b) {
+        return Math.round(b * 1023 / 5);
+      }
+      // Checked state of the WAVE radio group. Set by the row builder in
+      // createEditableParam once the group exists; the Rnd-morph poll calls
+      // it to re-check the radio whose bank the morphing raw quantizes to
+      // (no setEditParam — the morph owns the write stream).
+      let setWaveBankChecked = null;
+
       // Format the raw 10-bit value (0..1023) of a DRONE-MOD FX parameter.
       // `stage` is the FX stage (0=MOD, 1=DEL, 2=REV); `which` is the param
       // index within that stage (0=TIME, 1=DEPTH; DEL adds 2=MIX as a drywet
@@ -264,21 +294,15 @@
         label.className = "w-32 text-sm font-medium shrink-0 truncate";
         container.appendChild(label);
 
-        let input = document.createElement("input");
-        input.type = "range";
-        input.min = 0;
-        input.max = 1023;
-        input.step = 1;
-        input.id = "editparam_" + index;
-        input.className = "range range-primary range-sm flex-1 min-w-0";
-        container.appendChild(input);
-
         let value_string = document.createElement("span");
         value_string.className = "badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right";
-        container.appendChild(value_string);
+        // NOTE: value_string is appended to `container` at the END (after the
+        // control) by each branch below -- the order is label, control, value
+        // so the badge sits to the RIGHT of the slider / radio group. Do NOT
+        // append it here: an earlier revision did, which moved every value
+        // readout to the left of its control.
 
         const apply = (raw) => {
-          input.value = raw;
           value_string.textContent = formatParamValue(index, raw);
           // Direct channel: bypasses WebAudioParam smoothing. The worklet
           // thread applies (select_ = index, PARAM_VAL = raw) atomically on
@@ -298,6 +322,64 @@
           if (Module.stableSync && Module.getMorphActive && Module.getMorphActive() === 0)
             Module.stableSync();
         };
+
+        // ---- WAVE bank (index 13): radio group A..F, not a range slider ------
+        // Same FlyonUI "join radio with btn" pattern as the HW Filter type
+        // group: <div class="octave-join drop-shadow"> with one
+        // <input type="radio" class="octave-join-item btn btn-soft
+        // btn-primary btn-xs"> per bank; the visible text is the aria-label
+        // (the flyonui .btn rule paints input[type=radio]:after). Clicking a
+        // bank writes the raw through the SAME direct edit channel as the
+        // sliders (apply -> setEditParam(13, raw)) — the DSP quantizes raw ->
+        // bank. No #editparam_13 slider is created, so applyPresetRaw /
+        // fireRandom special-case index 13 (they walk #editparam_<i> by
+        // index). The radios are created AFTER apply (above) so the change
+        // handlers close over it safely.
+        if (index === WAVE_PARAM_IDX) {
+          const group = document.createElement("div");
+          group.className = "octave-join drop-shadow flex-1 min-w-0";
+          const radios = [];
+          WAVE_BANKS.forEach((bank, b) => {
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "WaveBank";
+            radio.value = String(b);
+            radio.className = "octave-join-item btn btn-soft btn-primary btn-xs flex-1 min-w-0";
+            radio.setAttribute("aria-label", bank);
+            radio.onchange = () => apply(rawFromWaveBank(b));
+            group.appendChild(radio);
+            radios.push(radio);
+          });
+          container.appendChild(group);
+          // Remember the checked-state setter so the Rnd-morph poll and the
+          // paced preset apply can re-check the radio whose bank the raw
+          // quantizes to (they must NOT call apply — that would re-write the
+          // value the morph/preset is already driving).
+          setWaveBankChecked = (bank) => {
+            const b = Math.max(0, Math.min(5, bank | 0));
+            for (let i = 0; i < radios.length; i++) radios[i].checked = (i === b);
+          };
+          // No value_string for WAVE: the radio group IS the readout (the
+          // checked button shows the selected bank letter). value_string is
+          // created above but deliberately NOT appended here.
+          const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
+          setWaveBankChecked(waveBankFromRaw(initRaw));
+          (targetEl || document.getElementById("Parameters")).appendChild(container);
+          return;
+        }
+
+        // ---- Default: one range slider per edit parameter --------------------
+        const input = document.createElement("input");
+        input.type = "range";
+        input.min = 0;
+        input.max = 1023;
+        input.step = 1;
+        input.id = "editparam_" + index;
+        input.className = "range range-primary range-sm flex-1 min-w-0";
+        container.appendChild(input);
+        // value_string goes AFTER the slider so the badge sits to the RIGHT
+        // of the range control (the original order: label, slider, value).
+        container.appendChild(value_string);
 
         input.oninput = () => apply(parseInt(input.value, 10));
 
@@ -749,19 +831,14 @@
         // Full range — they only scale the wander, never the base sound.
         for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
           set(n, r1023());
-        // WAV1 / WAV2 / WAV3: wavetable index (0..kWavesTotal-1 = 0..90). Any
-        // table is a valid (if different) timbre; the full 91-table span is
-        // safe. The DSP (osc.h) does  param_10bit_to_f32(raw) * (kWavesTotal-1)
-        // i.e. raw/1023 * 90, so the raw value must be in 0..1023, NOT 0..90.
-        // Generate the target table index (0..90) then map to raw 0..1023 so
-        // the slider (range 0..1023) actually moves across its full span and
-        // formatParamValue(13/14/15, raw) recovers the original index.
-        // WAV3 (the chord voice) is randomized independently so Random can
-        // produce a genuinely different chord timbre, not a copy of WAV1.
+        // WAVE (WAV1): the selected WAVETABLE BANK (A..F, 0..5). The LFO then
+        // morphs within the bank (intra-bank position centered on the bank,
+        // see osc_waves.h), so each of the 6 banks is a valid, clearly
+        // different timbre family — randomize uniformly over them. (WAV2 is
+        // deprecated: both A/B read the same wave.)
         {
-          const wavIndex = Math.floor(Math.random() * 91);
-          set("Wave", Math.round(wavIndex * (1023 / 90)));
-          // (Wave B is deprecated — both A/B read the same wave.)
+          const bank = Math.floor(Math.random() * 6); // 0..5
+          set("Wave", rawFromWaveBank(bank));
         }
 
         // --- Constrained (critical) parameters -------------------------------
@@ -936,7 +1013,12 @@
           if (i < raws.length) {
             const id = "editparam_" + i;
             const el = document.getElementById(id);
-            if (el) {
+            if (i === WAVE_PARAM_IDX) {
+              // WAVE bank: no #editparam_13 slider exists (it is the A..F
+              // radio group) — re-check the radio for the bank this raw
+              // quantizes to; the setEditParam below still applies the raw.
+              if (setWaveBankChecked) setWaveBankChecked(waveBankFromRaw(raws[i]));
+            } else if (el) {
               el.value = raws[i];
               const span = el.parentElement.querySelector("span");
               if (span) span.textContent = formatParamValue(i, raws[i]);
@@ -994,6 +1076,9 @@
         morphingSliders.clear();
       }
       function highlightSlider(i) {
+        // The WAVE radio group has no slider to recolor (index 13 is rendered
+        // as A..F radios, not a range input) — skip the highlight.
+        if (i === WAVE_PARAM_IDX) return;
         const el = document.getElementById("editparam_" + i);
         if (el && !morphingSliders.has(el)) {
           el.classList.remove("range-primary");
@@ -1008,9 +1093,29 @@
         const MORPH_SYNC_MS = 5000; // 1-bar morph (2 s @120) + max stagger (~2 s) + 1 s margin
         fireSyncTimer = setInterval(() => {
           let dirty = false;
+          let lastWaveBank = -1; // WAVE group: bank last seen by the poll
           for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
             const v = Module.getEditParamValue(i);
             const el = document.getElementById("editparam_" + i);
+            if (i === WAVE_PARAM_IDX) {
+              // WAVE bank: no #editparam_13 slider exists (it is the A..F
+              // radio group). Re-check the radio whose bank the morphing raw
+              // currently quantizes to, so the group follows the morph the
+              // same way the sliders do (checked flips as the raw crosses
+              // the bank boundaries). No setEditParam — the morph owns the
+              // write stream. dirty=true only on an actual bank change, so
+              // the poll's "nothing changed this tick" stop condition still
+              // works.
+              if (setWaveBankChecked) {
+                const bank = waveBankFromRaw(v);
+                if (lastWaveBank !== bank) {
+                  lastWaveBank = bank;
+                  setWaveBankChecked(bank);
+                  dirty = true;
+                }
+              }
+              continue;
+            }
             if (el && parseInt(el.value, 10) !== v) {
               el.value = v;
               const span = el.parentElement.querySelector("span");
