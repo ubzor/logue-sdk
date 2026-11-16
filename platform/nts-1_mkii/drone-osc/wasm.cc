@@ -431,7 +431,7 @@ extern "C" int getEditParamValue(int idx)
 // the stagger window (before any parameter has started moving), because the
 // morph is still in progress -- it must wait until rndMorphTick disarms
 // morph_active_ (all parameters have reached their targets). Without this
-// check the poll stopped after the very first tick (all 44 parameters were
+// check the poll stopped after the very first tick (all 35 parameters were
 // in their stagger delay, so edit_value_ had not changed yet), and the
 // sliders never moved even though the worklet's morph was still running.
 extern "C" int getMorphActive()

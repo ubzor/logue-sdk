@@ -54,10 +54,9 @@ struct OscParamsData
   float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
   float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
   float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
-  float wave_a;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc A wavetable index
-  float wave_b;       // 0.f .. WaveTable::kWavesTotal-1, edit: osc B wavetable index
-  // (wave_c / chord_level / chord_cents were removed — the chord/interval
-  //  concept is gone; the main A+B voice + SUB1/SUB2 remain.)
+  float wave_pos;     // 0.f .. 5.f, edit WAVE: bank index (A=0..F=5)
+                      // The LFO drives the intra-bank morph position centered
+                      // on the bank (see WaveTable::resolve_wave / bank_center).
   // ---- MAIN: level of the "main" voice (the A+B mixed output) --------------
   // The "main" voice is the result of mixing oscillators A and B (WAV1 + WAV2)
   // and running them through the folder/saturator/SVF chain — i.e. the
@@ -135,6 +134,18 @@ struct OscParamsData
   float formant_pos;  // 0.f .. 1.f, edit FORM: vowel morph position (A=0 .. U=1)
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
+  // ---- SUBB: sub-bass "breath" depth (the shared sub bass follows the
+  // breath-focus voice) ----
+  // The SHARED sub bass (SUB1/SUB2, one pair for the whole polyphonic cluster)
+  // can BREATHE: its level tracks the loudest (breath-focus) voice's envelope
+  // with a one-pole follower (kSubBreathTauSec), swinging in [1-d, 1+d] where
+  // d = subb_depth * kSubBreathMax. At 0 (would be regression-safe) the gain
+  // is constant 1.0 (the old static low end); the DEFAULT is 0.3 (~30% ->
+  // d ~= 0.18, a gentle "the low end follows the breathing note"). Gated
+  // INDEPENDENTLY of the BRT (RW_LVL) knob: SUBB > 0 makes the sub bass follow
+  // the loudest voice even with per-voice breathing off (the envelope max is
+  // used, so a single note = constant gain, no flutter).
+  float subb_depth;   // 0.f .. 1.f, edit SUBB (sub-bass breath depth)
 
   // (GLIDE removed: no glide_raw field)
 
@@ -156,9 +167,7 @@ struct OscParamsData
     sub2_level = 0.4f;  // default: ~40% f/4 sub (a clearly audible low-end anchor)
     fold_depth = 0.f;   // default: wavefolder off
     asym = 0.f;         // default: symmetric saturator
-    wave_a = 0.f;       // default: first wave of bank A
-    wave_b = 11.f;      // default: a different (still airy) wave from bank A
-    // (wave_c / chord_level / chord_cents were removed — chord concept gone.)
+    wave_pos = 0.f;     // default: bank A (LFO sweeps within bank A)
     main_level = 1.0f;  // default: main (A+B) voice at full level (stock sound)
     rw_wav = 0.f;       // default: walk off for wavetable morph
     rw_drv = 0.f;       // default: walk off for drive
@@ -195,6 +204,8 @@ struct OscParamsData
       formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
+      subb_depth   = 0.3f;  // default: ~30% (d ~= 0.18) — the shared sub bass gently
+                            // follows the breath-focus note (see the SUBB comment)
   }
 
   OscParamsData() { reset(); }

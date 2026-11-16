@@ -175,6 +175,7 @@ DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/../drone-osc/osc.h \
                $(PROJECT_ROOT)/../drone-osc/osc_mix.h \
                $(PROJECT_ROOT)/../drone-osc/osc_lifecycle.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_lfo_sim.h \
                $(PROJECT_ROOT)/../drone-osc/osc_params.h \
                $(PROJECT_ROOT)/../drone-osc/osc_param_apply.h \
                $(PROJECT_ROOT)/../drone-osc/osc_param_display.h \

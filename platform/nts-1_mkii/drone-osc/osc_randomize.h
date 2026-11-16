@@ -158,7 +158,8 @@ static RndWindow rnd_window_for(uint8_t idx)
     // (CH2D2/CH2F were removed — the chord/interval concept is gone.)
     case 32: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
     case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
-    // (GLIDE (edit 34) removed: the portamento knob is gone.)
+    case 34: w.kind=0; w.lo=0;    w.hi=614;  w.div=0; break; // SUBB  0..60% sub breath
+    // (GLIDE removed: the portamento knob is gone.)
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, etc.)
   }

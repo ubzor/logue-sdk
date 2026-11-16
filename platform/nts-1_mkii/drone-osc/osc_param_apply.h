@@ -98,18 +98,25 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.fold_depth = param_10bit_to_f32(value);
       break;
 
-    // ---- Wavetable selection (WAV1 / WAV2 / WAV3) ----
-    // The raw value maps 0..1023 -> 0..(kWavesTotal-1) across the six banks
-    // (91 tables). The morph position is resolved through the interpolating
-    // resolve_wave() in the audio path, so a continuous raw value glides
-    // between adjacent tables.
+    // ---- Wavetable selection (WAVE / WAV2-deprecated) ----
+    // WAVE (WAV1) selects the BANK (0..5, A..F). The LFO drives the
+    // intra-bank morph position centered on the bank (see
+    // WaveTable::resolve_wave / bank_center). The bank boundary is hard: the
+    // morph never crosses into the next bank.
+    // WAV2 is deprecated (both A/B now read the same wave) — no-op.
     case WAV1:
-      params_.wave_a = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
-      // (recalc_pitch_derived removed: the per-voice morph shift is now
-      //  computed per-sample in the audio path from each voice's own w0.)
+    {
+      float raw = param_10bit_to_f32(value);
+      int32_t bank = (int32_t)(raw * 5.999f);
+      if (bank < 0) bank = 0;
+      if (bank > 5) bank = 5;
+      params_.wave_pos = (float)bank;
       break;
+    }
     case WAV2:
-      params_.wave_b = param_10bit_to_f32(value) * (WaveTable::kWavesTotal - 1);
+      // Deprecated: both A/B oscillators now read the same wave (intra-bank
+      // LFO morph). This case is a no-op for backward compatibility with
+      // saved presets / the multiplexer.
       break;
 
     // ---- Chord voice (CHORD level, CINT interval) ----
@@ -272,6 +279,17 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
       break;
 
+    // ---- SUBB: sub-bass "breath" depth (shared sub follows the focus voice) ----
+    // The knob maps 0..1023 -> 0..1 (linear). The audio path (osc_mix.h)
+    // converts it to a swing depth d = subb_depth * kSubBreathMax and a
+    // one-pole follower (kSubBreathTauSec) drives sub_breath_gain toward
+    // (1 + (sub_env_focus - 0.5) * 2 * d) so the low end swells with the
+    // loudest (breath-focus) voice. At 0 the gain is constant 1.0 (static
+    // low end, the old behaviour). No K-rate recompute needed (the follower
+    // state is audio-path state, relaxed per sample).
+    case SUBB:
+      params_.subb_depth = param_10bit_to_f32(value);
+      break;
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
     // were removed from the editable parameter set. FOLD2 was judged

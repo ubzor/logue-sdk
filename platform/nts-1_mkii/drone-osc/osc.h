@@ -182,12 +182,13 @@ public:
     FORM,           // formant vowel position (0..1, morph across A-E-I-O-U)
     FVOL,           // formant stage dry/wet (0..1, 0 = dry / transparent)
     COMB,           // comb resonator feedback (0..1 -> 0..kCombFbMax)
+    SUBB,           // sub-bass "breath" depth (0..100% -> 0..kSubBreathMax): the SHARED sub bass (SUB1/SUB2) level follows the loudest (breath-focus) voice. 0% = static low end (regression-safe).
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..COMB).
-  static constexpr uint8_t kEditParamCount = 34; // RATE_AMT..COMB
+  // Number of editable DSP parameters (RATE_AMT..SUBB).
+  static constexpr uint8_t kEditParamCount = 35; // RATE_AMT..SUBB
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -210,8 +211,9 @@ public:
   //   30 FMBB (RFM_B: random-walk depth on FM B, RATE-gated)
   //   31 FMVT (formant vowel position)  32 FLVL (formant dry/wet)
   //   33 COMB (comb resonator)
+  //   34 SUBB (shared sub-bass breath depth, follows the breath-focus voice)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 34 = (COMB - RATE_AMT + 1); select_ 0..33 -> RATE_AMT..COMB.
+  // kEditParamCount = 35 = (SUBB - RATE_AMT + 1); select_ 0..34 -> RATE_AMT..SUBB.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -226,9 +228,12 @@ public:
   // Enrichment-2 defaults (indices 31..33): FORM 511 (middle vowel, but the
   // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
   // COMB 0 (all off, regression-safe). SUB2 (index 9) defaults to 410 (~40%).
+  // SUBB (index 34) defaults to 307 (~30%): the shared sub bass breathes
+  // gently (depth 0.18) by default — the low end follows the breath-focus
+  // note subtly instead of staying fully static.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -239,7 +244,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -464,8 +469,8 @@ public:
   // can't reach (it only sees the whole unit, not the internal sub voice).
   static constexpr float kSubLfoFmCents = 5.f;
 
-  // (The LFO -> wavetable morph depth lives in WaveTable::kLfoMorphDepth,
-  // see osc_waves.h.)
+  // (The LFO -> intra-bank wavetable morph depth lives in
+  //  WaveTable::lfo_morph_depth / kLfoMorphDepthHalfSpan, see osc_waves.h.)
 
   // ---- Static symmetric detune (DETU knob, ±kDetuneMaxCents = ±10 c) ----
   // The DETU knob detunes A and B in OPPOSITE directions around the base
@@ -505,20 +510,32 @@ public:
     float   w0 = 0.f;         // current base phase increment (glide removed: always fixed per note)
     float   ph_a = 0.f;       // main osc A phasor
     float   ph_b = 0.f;       // main osc B phasor
-    float   ph_sub = 0.f;     // sub-octave (f/2) phasor
-    float   ph_sub2 = 0.f;    // sub-2 (f/4) phasor
     float   prev_wav_a = 0.f; // FM lookback cache (A)
     float   prev_wav_b = 0.f; // FM lookback cache (B)
     float   fm_smooth_a = 0.f; // phase-FM index LPF state (A)
     float   fm_smooth_b = 0.f; // phase-FM index LPF state (B)
     float   breath_dev = 0.f;    // per-voice breath deviation [-1, +1] (tracks breath_target)
     float   breath_target = 0.f; // per-voice breath target (redrawn on rw_[3] tick)
-    Sub2Voice sub2;           // f/4 saturated / LPF'd / gated sub voice state
     AhEnvelope eg;            // per-voice A-H-R envelope
     uint8_t  note = 0;        // MIDI note this voice plays (for toggle-off)
     bool     active = false;  // a note is latched on this voice
     uint32_t gen = 0;         // monotonically increasing: used for "oldest" steal
   };
+
+  // ---- Shared sub bass (ONE sub pair for the whole cluster) -----------------
+  // Since the polyphonic build, SUB1 (f/2) and SUB2 (f/4) are no longer
+  // per-voice: the cluster's N notes feed ONE shared sub pair whose pitch is
+  // the ENV-WEIGHTED ANCHOR of the sounding voices (see sub_anchor_w0_). This
+  // makes the low end one stable "fundamental under the drone" instead of N
+  // incoherent sub voices, and note on/off morphs the sub pitch smoothly
+  // (one-pole relax) instead of clicking. The sub bass LEVEL breathes with the
+  // loudest (breath-focus) voice at a depth set by the SUBB knob
+  // (sub_breath_gain_, see the kSubBreath* constants in osc_constants.h).
+  float      sub_ph   = 0.f;   // shared sub-octave (f/2) phasor (0..1)
+  float      sub_ph2  = 0.f;   // shared sub-2 (f/4) phasor (0..1)
+  Sub2Voice  sub2;             // shared f/4 saturated / LPF'd / gated sub voice
+  float      sub_anchor_w0 = 0.f; // one-pole relaxed anchor rate (0..w0) — the pitch the sub phasors advance at
+  float      sub_breath_gain = 1.f;  // one-pole relaxed SUBB breath gain (1.0 = static)
   Voice voice_[kVoiceCount];
   // Shared K-rate static-detune FACTORS (the DETU knob, applied per-voice in
   // the audio path as w0_a = v.w0 * det_f_a_). These are pure factors
@@ -535,19 +552,24 @@ public:
   uint32_t gen_counter_ = 0U; // monotonic voice-start counter (steal ordering)
   // Sum of the per-voice A-H-R envelope levels (0..kVoiceCount). Recomputed
   // once per sample in process() and used for POLYPHONIC LOUDNESS
-  // COMPENSATION: the cluster's summed voice signals (sum_main/sub/sub2/ring)
-  // are divided by sqrt(env_sum) (one-pole smoothed, below) and the common
-  // output envelope is the per-voice MAX (not the sum). Net effect: 1 note =
-  // the original mono level (sqrt(1)=1, env=1), N simultaneous notes stay at
-  // roughly the same loudness instead of adding coherently and clipping.
-  // env_sum_ is the raw per-sample sum (for the one-pole); the SMOOTHED value
-  // lives in kClusterCompEnv (env_comp_), which is what the gain uses so the
+  // COMPENSATION: the cluster's summed PER-VOICE voice signals (sum_main /
+  // sum_ring — the A+B sum and the ring-mod sum; the subs are ONE shared pair,
+  // not per-voice, so they are NOT env-compensated) are scaled by env_comp_
+  // (one-pole smoothed, below) and the common output envelope is the per-voice
+  // A-H-R (not the sum). Net effect: 1 note = the original mono level (comp=1,
+  // env=1), N simultaneous notes stay at roughly the same loudness instead of
+  // adding coherently and clipping. env_sum_ is the raw per-sample sum (for the
+  // one-pole and for the shared sub bass's env-weighted ANCHOR mean); the
+  // SMOOTHED value lives in env_comp_, which is what the gain uses so the
   // 2 s attack/release doesn't pump the makeup gain.
   float env_sum_ = 0.f;
-  // Smoothed 1/sqrt(env_sum) (one-pole, kClusterCompAlpha) — the actual gain
-  // applied to the summed voice signals (osc_mix.h). Starts at 1 (silent /
-  // single note = no attenuation) and follows the cluster loudness so the
-  // 2 s A-H-R attack/release and note count don't pump the makeup gain.
+  // Smoothed 1/env_sum (one-pole, kClusterCompAlpha) — the actual gain applied
+  // to the summed PER-VOICE voice signals (sum_main / sum_ring; osc_mix.h).
+  // Starts at 1 (silent / single note = no attenuation) and follows the
+  // cluster loudness so the 2 s A-H-R attack/release and note count don't pump
+  // the makeup gain. (The shared sub bass does NOT use env_comp_ — it is ONE
+  // pair, not a per-voice sum; it uses env_sum_ as the denominator of its
+  // env-weighted ANCHOR mean. See the "Shared sub bass" block in osc_mix.h.)
   float env_comp_ = 1.f;
   // Cached value of rw_[3].getRedrawCount() from the previous process() call.
   // Used to detect the "tick" sample (when the Breath stream's A/B targets are
@@ -692,9 +714,11 @@ private:
   // cached derived coefficients, recomputed only when inputs change
   // (setPitch / setParameter(DETUNE)) to keep the audio path lightweight.
   // (The static symmetric-detune FACTORS det_f_a_ / det_f_b_ are declared in
-  //  the public voice-cluster block above. The per-voice w0_a / w0_b, sub and
-  //  sub-2 phase increments, the sub-2 voice state and the A-H-R envelope are
-  //  now per-voice members of Voice (voice_[]) — see the cluster block.)
+  //  the public voice-cluster block above. The per-voice w0_a / w0_b and the
+  //  A-H-R envelope are per-voice members of Voice (voice_[]) — see the
+  //  cluster block. The sub phasors, the sub-2 voice state and the anchor
+  //  rate are SHARED by the whole cluster (sub_ph / sub_ph2 / sub2 /
+  //  sub_anchor_w0 / sub_breath_gain — see the "Shared sub bass" block).)
 
   // Four independent random-walk streams (dual channel each). See
   // osc_random_walk.h. Index 0 = Tone (detune + cross-FM), 1 = Timbre
@@ -773,10 +797,12 @@ private:
   // (update_w0_det / update_w0_sub / update_w0_sub2 were removed in the
   //  polyphonic build. The static detune is now the SHARED factor pair
   //  det_f_a_ / det_f_b_ (see update_det_factors, called from
-  //  apply_edit_param(DETUNE)); the per-voice w0_a / w0_b, the sub (f/2) and
-  //  sub-2 (f/4) phase increments, and the sub-2 voice state are all per-voice
-  //  members of Voice (voice_[]) and are computed per sample in the audio
-  //  path (osc_mix.h) from each voice's own (possibly gliding) w0.)
+  //  apply_edit_param(DETUNE)); the per-voice w0_a / w0_b are computed per
+  //  sample in the audio path (osc_mix.h) from each voice's own (possibly
+  //  gliding) w0. The sub (f/2) and sub-2 (f/4) phase increments and the
+  //  sub-2 voice state are now SHARED by the whole cluster (sub_ph / sub_ph2
+  //  / sub2 / sub_anchor_w0) and are computed per sample in osc_mix.h from
+  //  the env-weighted ANCHOR rate (see the "Shared sub bass" block there).)
 
   // ---- Enrichment-2: formant biquad coefficient setup (K-rate) --------------
   // Recompute the 10 formant biquad coefficients (5 vowels x 2 formants, each a
@@ -858,15 +884,17 @@ private:
   // (The per-voice phasors, FM lookback caches, FM index LPF states, sub-2
   //  voice states and A-H-R envelopes are now per-voice members of Voice
   //  (voice_[]) — see the polyphonic voice-cluster block above. The
-  //  wavetable morph position (waves_.wave_shift_) is per-voice in the audio
-  //  path: each voice computes its own shift from its own (possibly gliding)
-  //  w0, so there is no single cached wave_shift_ anymore.)
+  //  wavetable morph is now INTRA-BANK: the LFO drives the position within
+  //  the selected bank (see WaveTable::resolve_wave in osc_waves.h), so
+  //  there is no per-voice wave_shift_ anymore.)
   // ---- Wavetable scanning (see osc_waves.h) ----------------------------------
-  // The six-bank Korg wavetable scanner + the pitch-shifted morph state live in
-  // WaveTable (osc_waves.h). The Osc owns a WaveTable member and reads its
-  // cached morph position (waves_.wave_shift_) in the audio path; resolve_wave
-  // is called as WaveTable::resolve_wave(...). The LFO->morph depth constant is
-  // WaveTable::kLfoMorphDepth.
+  // The six-bank Korg wavetable scanner + the intra-bank LFO morph live in
+  // WaveTable (osc_waves.h). The WAVE knob selects a bank (A..F, 0..5); the
+  // LFO drives the position within that bank, centered on the bank (clamped to
+  // [0, bank_size-1]). resolve_wave is called as
+  // WaveTable::resolve_wave(wave_bank, lfo_morph, ph), where lfo_morph =
+  // bank_center + lfo_ * lfo_morph_depth. The LFO->morph depth constant is
+  // WaveTable::kLfoMorphDepthHalfSpan.
   WaveTable waves_;
 };
 

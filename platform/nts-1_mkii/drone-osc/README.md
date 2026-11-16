@@ -25,21 +25,39 @@ fixed random phase to de-correlate the inter-voice detune beats, which is what
 keeps 2-6 held notes from summing into a low-frequency "howl".)
 
 Per sample the path (1) runs each voice's
-lightweight source (A/B phasors + wavetables + sub/sub-2 + ring-mod), summing
-them into shared accumulators, then (2) applies the SINGLE common post-stage to
-the sums (so 6 notes read as one blended drone, not 6 instruments):
+lightweight source (A/B phasors + wavetables + ring-mod), summing them into
+shared accumulators, then (2) computes the ONE shared sub bass (the cluster's
+env-weighted ANCHOR note — see below), then (3) applies the SINGLE common
+post-stage (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
 PER VOICE (x kVoiceCount = 6):
-  phasor A  ->  wavetable A (WA1)   [ DETU, FM1, FMAB, JIT, + walk detune ]
-  phasor B  ->  wavetable B (WA2)   [ DETU, FM2, FMBB, JIT, + walk detune ]
-  phasor sub->  sub-octave sine (SUB1)            [ f/2, LFO-FM ]
-  phasor s2 ->  sub-2 voice (SUB2)                [ f/4, saturated/LPF/gated ]
-  -> sum_main += (wavA*lvlA + wavB*lvlB)
-  -> sum_sub  += sub
-  -> sum_sub2 += sub2
+  phasor A  ->  wavetable (WAVE bank, LFO morph)   [ DETU, FM1, FMAB, JIT, + walk detune ]
+  phasor B  ->  wavetable (WAVE bank, LFO morph)   [ DETU, FM2, FMBB, JIT, + walk detune ]
+  -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
-     (shared per-sample: the random walks, FM index, JIT are ONE drone)
+  -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
+  -> sub_env_focus = max(sub_env_focus, env)  (loudest voice = SUBB breath focus)
+     (shared per-sample: the random walks, FM index, JIT are ONE drone;
+      the sub phasors / sub-2 voice are NO LONGER per-voice — see below)
+
+SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
+  anchor_target = sum(env*w0) / sum(env)   (the env-weighted mean base rate)
+  sub_anchor_w0 = one-pole relax (kSubAnchorAlpha, ~250 ms) of anchor_target
+     -> note on/off MORPHS the sub pitch smoothly (no click); 0 notes -> 0
+     (the sub fades out with the cluster).
+  SUB1: phasor advances at sub_anchor_w0 * kSubW0Scale (f/2, -4 c, LFO-FM)
+        -> sub = sin(phasor) * sub_breath_gain
+  SUB2: phasor advances at sub_anchor_w0 * 0.25 (f/4)
+        -> sub2_out = Sub2Voice::process(phasor, sub_anchor_w0, sub_breath_gain)
+  SUBB (sub-bass "breath"): sub_breath_gain = one-pole follower
+     (kSubBreathTauSec, ~0.75 s) of (1 + (sub_env_focus - 0.5)*2 * (SUBB*kSubBreathMax)),
+     floored at kSubBreathFloor (0.2), capped at 1 + kSubBreathMax (1.6).
+     SUBB = 0 -> gain constant 1.0 (the OLD static low end — regression-safe);
+     default ~30% -> the low end gently follows the LOUDEST (breath-focus)
+     voice's envelope (the drone's low end "breathes in" with the note that
+     is currently loudest). At 1 note sub_env_focus = that note's A-H-R, so
+     the low end swells with the attack and sinks on the release.
 
 PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
   Each of the 6 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
@@ -50,13 +68,17 @@ PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
   bug. Per-voice gating removes that shared-dip.)
   env_sum  = sum over the 6 voices of its A-H-R envelope (0..kVoiceCount)
   env_comp = one-pole smoothed (tau ~5 ms, kClusterCompAlpha) of
-             1 / sqrt(env_sum)   (floored at 1 -> a single note is never
-             attenuated; N=1 -> 1 exactly, N=6 -> ~0.41)
-  The SUMMED voice signals (sum_main / sum_sub / sum_sub2 / sum_ring) are
-  each multiplied by env_comp BEFORE the shared post-stage, so N notes read
-  at ~one note's loudness instead of N times louder (the kMix* budget is
-  designed for one note; without this, a full cluster feeds fold/saturate at
-  ~x4 and the fastertanh2f soft-clip pegs -> "shouting / clipping").
+             1 / env_sum   (floored at 1 -> a single note is never
+             attenuated; N=1 -> 1 exactly, N=6 -> ~0.167)
+  The SUMMED PER-VOICE signals (sum_main / sum_ring) are each multiplied by
+  env_comp BEFORE the shared post-stage, so N notes read at ~one note's
+  loudness instead of N times louder (the kMix* budget is designed for one
+  note; without this, a full cluster feeds fold/saturate at ~x4 and the
+  fastertanh2f soft-clip pegs -> "shouting / clipping").
+  NOTE: the sub voices are ONE SHARED pair (not N per-voice voices), so they
+  are NOT env_comp scaled — a single note -> exactly the old single-note
+  sub level; N notes -> one stable fundamental under the cluster (no N-fold
+  low-end growth, no "muddy" N incoherent subs).
 
 COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   mix  = kMixOsc * (sum_main * env_comp)
@@ -68,26 +90,33 @@ COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   = y_main
 
 out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK
-            + (sum_sub*env_comp)*SUB1 + (sum_sub2*env_comp)*SUB2
+            + sub*SUB1 + sub2_out*SUB2
             + (sum_ring*env_comp)*RMOD*MAIN*DUCK ) )
   where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
         and the per-voice envelopes are already folded into the sums
-        (each sum_main/sub/sub2/ring term was multiplied by that voice's
-        v.eg.env in the loop). There is NO common output envelope: N notes
-        each fade in/out on their own, the cluster reads as one blended
-        drone whose level is the sum of the individually-enveloped voices.
+        (each sum_main/ring term was multiplied by that voice's v.eg.env in
+        the loop); the shared sub bass is ONE pair (no per-voice gating —
+        the anchor + SUBB gain handle the cluster-level breathing). There is
+        NO common output envelope: N notes each fade in/out on their own,
+        the cluster reads as one blended drone whose level is the sum of the
+        individually-enveloped voices.
 
-Mono-exactness: with 1 note, that voice's env gates its own contribution and
-env_comp = 1/sqrt(1) = 1, so the single-note path is numerically identical to
-the pre-cluster mono unit. Per-voice envelope + 1/sqrt(N) loudness are what
-make the polyphonic cluster both level-independent of note count AND free of
-the 1->2 note boundary dip.
+Mono-exactness: with 1 note, that voice's env gates its own contribution,
+env_comp = 1/1 = 1, and the shared sub bass anchor = that note's w0 (exactly
+the old per-voice sub pitch), so the single-note path is numerically
+identical to the pre-cluster mono unit EXCEPT the SUBB knob (default ~30%)
+now gently breathes the low end with the note's A-H-R (the "the low end
+follows the breathing note" behaviour). Per-voice envelope + 1/N loudness +
+the shared anchor are what make the polyphonic cluster both level-independent
+of note count AND free of the 1->2 note boundary dip.
 ```
 
 The CPU cost scales ~linearly with the number of ACTIVE notes, not with
 kVoiceCount: the heavy SVF/formant/comb/duck saturator run only ONCE on the
 summed signal (shared post-stage); each active note adds only its lightweight
-source (2 wavetable scans + sub/sub-2 + FM-smooth + envelope + accumulators).
+source (2 wavetable scans + FM-smooth + envelope + accumulators). The ONE
+shared sub bass (SUB1/SUB2 pair + anchor + SUBB gain) runs once, outside the
+per-voice loop, at a constant cost independent of note count.
 Measured (web-sim, `Osc::process` only, no FX, median of 5 runs): the shared
 floor (post-stage + 6 idle-voice envelope passes) is ~95 ns/sample, and each
 ADDED active note costs ~77 ns/sample. So: 1 note ≈ 172 ns/smp, 4 notes ≈ 410
@@ -104,16 +133,33 @@ comparison, which is what matters for the voice-count trade-off.)
 
 
 
-SUB1 voice : sine at f/2 (one octave down, -4 c detune) -> * SUB1 * lvl_sub   <-- new
-SUB2 voice : sine at f/4 -> soft tanh -> 200 Hz LPF -> pitch gate -> * SUB2   <-- new
+SUB1 (shared)  : sine at ANCHOR/2 (one octave below the cluster's env-weighted
+                 mean base rate, -4 c detune, LFO-FM) -> * SUBB-breath-gain    <-- SHARED (not per-voice)
+SUB2 (shared)  : sine at ANCHOR/4 -> soft tanh -> 200 Hz LPF -> pitch gate
+                 -> * SUBB-breath-gain                                         <-- SHARED (not per-voice)
+ANCHOR         : one-pole relaxed (kSubAnchorAlpha, ~250 ms) env-weighted mean
+                 of the sounding voices' base rates: sum(env*w0)/sum(env).
+                 0 notes -> ANCHOR relaxes to 0 (the sub fades out with the
+                 cluster). Note on/off -> the sub pitch MORPHS smoothly.
+SUBB-breath    : one-pole follower (kSubBreathTauSec, ~0.75 s) of
+                 (1 + (sub_env_focus - 0.5)*2 * (SUBB * kSubBreathMax)),
+                 floored at kSubBreathFloor (0.2), capped at 1 + kSubBreathMax
+                 (1.6). SUBB = 0 -> gain constant 1.0 (the OLD static low
+                 end). Default ~30% -> the low end gently follows the LOUDEST
+                 (breath-focus) voice's A-H-R (the drone's low end "breathes
+                 in" with the note that is currently loudest).
 RING voice : (wavA * wavB) * RMOD * MAIN   (A*B ring-mod, ducked by MAIN)
 
 DUCK: CONSTANT sidechain — envelope follower of |SUB1 + SUB2| (one-pole
       abs-peak) ducks y_main + y_ring by a fixed kDuckConstant (0.5), floored
-      at 0.7 (~-3 dB), ~75 ms tau: the low end is the constant anchor of the
-      drone, the main tone "sinks" out of the way of the low end. Always on.
+      at 0.7 (~-3 dB), ~75 ms tau: the low end is the anchor of the drone, the
+      main tone "sinks" out of the way of the low end. Always on. (The
+      follower now tracks the SHARED sub pair — one |sub+sub2|, not the sum of
+      N per-voice subs.)
 
-The A-H-R envelope (2 s / 2 s) multiplies the whole sum (note attack/release).
+The A-H-R envelope (2 s / 2 s) gates each voice in the accumulation loop
+(note attack/release); the shared sub bass is NOT per-voice gated (the anchor
++ SUBB gain handle the cluster-level breathing).
 ```
 
 Key facts about the path:
@@ -122,7 +168,9 @@ Key facts about the path:
   A stays exactly at the note (factor 1.0), B is shifted UP by the full DET
   cents (B = f * 2^(DET/1200)). The beat is |f_B - f_A| ~ f * DET * ln2/1200
   per voice, and it is applied BEFORE the A/B sum so every note keeps its own
-  beating pair. The sub voices stay on the base note (stable "anchors").
+  beating pair. The sub bass stays on the cluster's env-weighted ANCHOR
+  (one stable fundamental under the whole drone — see the "SHARED SUB BASS"
+  block in the Sound path above).
 * **Phase-FM** (FM_A / FM_B) modulates the carrier *phasors* (classic Bessel
   sidebands). The modulator is the *other* voice's wavetable output, one sample
   delayed. The static index is **not** gated by RATE; RFM_A / RFM_B add a
@@ -327,10 +375,10 @@ device's "develop from the last confirmed preset" behaviour intact.
 
 ## Parameters
 
-The unit exposes its **44** DSP knobs through a PARAM/VALUE multiplexer on the
-two physical knobs:
+The unit exposes its **35** editable DSP parameters through a PARAM/VALUE
+multiplexer on the two physical knobs:
 
-* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..43; the display
+* **Slot 0 PARAM** (fixed knob A) -- parameter selector, 0..34; the display
   shows the name of the selected parameter.
 * **Slot 1 VALUE** (fixed knob B) -- raw 10-bit value (0..1023) of the selected
   parameter. Each parameter maps 0..1023 onto its own range; the raw value is
@@ -339,7 +387,7 @@ two physical knobs:
 * **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 36 editable DSP parameters (select_ index -> name), with range, factory
+All 35 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
@@ -357,10 +405,10 @@ default and effect:
 | 10 | SAT | 0..300 | 0..3.0 drive | 100 (1.0x) | Main A+B saturator drive. |
 | 11 | ASYM | +/-% | -100..+100% | 0% | Saturator asymmetry (even harmonics; >0 = positive half harder). |
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
-| 13 | WA1 | index | 0..90 (banks A-F) | 0 | Osc A wavetable. |
-| 14 | WA2 | index | 0..90 (banks A-F) | ~11 | Osc B wavetable. |
+| 13 | WAVE | letter | A..F | A | Wavetable **bank** (LFO morphs within the bank). |
+| 14 | WA2 | — | — | — | *Deprecated* (no-op; both A/B read the same wave). |
 | 15 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). |
-| 16 | TWDR | % | 0..100% | 0% (off) | Walk depth on wavetable morph (+/-10 tables). |
+| 16 | TWDR | % | 0..100% | 0% (off) | *Deprecated* (no-op; LFO drives the intra-bank morph). |
 | 17 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
 | 18 | FWDR | % | 0..100% | 0% (off) | Walk depth on wavefolder depth (+/-0.5). |
 | 19 | CUT | Hz / kHz | 80 Hz..12 kHz (log) | ~9 kHz | SVF cutoff **and** dry/wet blend (0% = raw, 100% = full LPF). |
@@ -378,6 +426,7 @@ default and effect:
 | 31 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
 | 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
+| 34 | SUBB | % | 0..100% -> 0..0.6 swing | ~30% | **Sub-bass breath**: the ONE shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note) follows the LOUDEST (breath-focus) voice's A-H-R envelope. 0% = the old static low end (regression-safe); ~30% (default) = a gentle +/-18% swing — the drone's low end "breathes in" with the note that is currently loudest. The anchor (pitch) is ALWAYS the env-weighted mean (one stable fundamental under the cluster, note on/off morphs the sub pitch smoothly); only the LEVEL breathes, and only by the SUBB depth. The randomizer window is 0..60%. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -410,16 +459,23 @@ focus voice's level increases by BRT (Breath Depth); the other voices' levels
 decrease by BRT / (n_active - 1), so the SUM of all levels stays constant (the
 overall loudness does not pump). The transition is SMOOTH: each voice's level
 tracks its target with the SMT time constant (exponential, non-linear). With
-only 1 note, breathing is off (level stays at 1.0). SUB1 (f/2) and SUB2 (f/4)
-are intentionally NOT breathed — the low-end anchor stays static.
+only 1 note, breathing is off (level stays at 1.0). The per-voice BREATH
+(BRT) breathes only the MAIN (A+B) voice level; the SHARED sub bass
+(SUB1/SUB2, ONE pair for the whole cluster) breathes independently via the
+**SUBB** knob (sub-bass breath depth) — see the SUBB row in the parameter
+table and the "SHARED SUB BASS" block in the Sound path. At SUBB = 0 the low
+end stays fully static (the old behaviour); at the default ~30% the low end
+gently follows the loudest (breath-focus) voice's A-H-R.
 
 ### Non-editable (fixed) behaviour
 
 | Behaviour | Value | Notes |
 |-----------|-------|-------|
 | Attack / release | 2 s / 2 s | Exponential A-H-R, own envelope (platform EG open). |
-| Sub-1 detune | -4 c | One octave below the base, fixed. |
-| Sub-2 pitch gate | base < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. |
+| Sub-1 detune | -4 c | One octave below the ANCHOR, fixed. |
+| Sub anchor relax | kSubAnchorAlpha (~250 ms) | One-pole relax of the env-weighted mean w0 (sum(env*w0)/sum(env)): note on/off MORPHS the shared sub pitch smoothly (no click). 0 notes -> anchor relaxes to 0 (the sub fades out with the cluster). |
+| Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
+| Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
 | Shape-LFO | +/-10 tables (morph), +/-5 c (sub FM) | On hardware: platform OSC-B shape-LFO; in the web sim: synthesized. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |

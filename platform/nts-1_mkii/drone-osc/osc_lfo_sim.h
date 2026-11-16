@@ -25,9 +25,6 @@
 
 struct ShapeLfoSim
 {
-  // Two pi (phase increment helper).
-  static constexpr float kTwoPi = 6.283185307179586f;
-
   // Audio sample rate (constant across all logue products).
   static constexpr float kSampleRate = 48000.f;
 
@@ -41,11 +38,19 @@ struct ShapeLfoSim
 
   // Advance the LFO by one sample and return the LFO value in (-1, 1).
   // If depth is 0, the LFO is off and 0 is returned.
+  //
+  // Phase convention: phase is in CYCLES (0..1). We advance it by
+  // freq * (1/sampleRate) cycles per sample, and osc_sinf(phase) computes
+  // sin(2*pi*phase) — the 2*pi lives INSIDE osc_sinf. Advancing by
+  // 2*pi*freq/sr instead (the old code) double-applied 2*pi: setting
+  // freq = 0.1 Hz produced a 0.628 Hz LFO (~1.6 s period) and a broken
+  // (truncated) waveform, because the `phase >= 1.f` wrap then triggered
+  // in the middle of the sine.
   float process()
   {
     if (depth > 0.f)
     {
-      phase += kTwoPi * freq * (1.f / kSampleRate);
+      phase += freq * (1.f / kSampleRate);
       if (phase >= 1.f)
         phase -= 1.f;
       return osc_sinf(phase) * depth;

@@ -29,11 +29,13 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..41. The display
+        // A knob (PARAM, slot 0): parameter selector, 0..34. The display
         // shows the name of the selected parameter via unit_get_param_str_value().
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
-        // Selectable parameters (A knob value -> name -> default raw value):
+        // Selectable parameters (A knob value = select_ index -> name -> default
+        // raw value; see the OscParams enum in osc.h, where RATE_AMT = 2 and the
+        // select_ index = enum value - kEditParamFirst = enum value - 2):
         //   0: RATE - shared random-walk depth ceiling (quadratic, 0..100%), default 0 (off)
         //   1: DET  - static symmetric detune of A/B (-10..+10 c, A=+c/2, B=-c/2), default 511 (0 c)
         //   2: SPD1 - Tone stream period (0..100% -> 0.1 s..10 s, log), default 511
@@ -42,45 +44,46 @@ const __unit_header unit_header_t unit_header = {
         //   5: SM2  - Timbre stream time constant (log), default 511
         //   6: SPD3 - Density stream period (log), default 511
         //   7: SM3  - Density stream time constant (log), default 511
-        //   8: SUB1 - sub-octave (f/2) sine level (0..100%), default 511 (50%)
-        //   9: SUB2 - second sub (f/4) saturated level (0..100%), default 410 (~40%)
+        //   8: SUB1 - SHARED sub-octave (f/2) sine level (0..100%), default 511 (50%)
+        //   9: SUB2 - SHARED second sub (f/4) saturated level (0..100%), default 410 (~40%)
+        //     (SUB1/SUB2 are ONE shared pair for the whole polyphonic cluster —
+        //      the cluster's env-weighted ANCHOR note; see the "Shared sub
+        //      bass" block in osc_mix.h and the README Sound path.)
         //   10: SAT  - saturator drive (0..300), default 341 (100 = 1.0x, gentle)
         //   11: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
         //   12: FLD  - pre-drive wavefolder depth (0..100%), default 0 (off)
         //   13: WA1  - osc A wavetable (0..90 across banks A-F), default 0
         //   14: WA2  - osc B wavetable (0..90 across banks A-F), default 128 (~11)
-        //   15: WA3  - osc C (chord) wavetable (0..90 across banks A-F), default 0
-        //   16: CHRD - chord-voice level (0..100%), default 205 (~20%)
-        //   17: INT  - chord interval (0..1900 cents, continuous), default 377 (~700c, fifth)
-        //   18: MAIN - main (A+B) voice level (0..100%), default 1023 (100%)
-        //   19: TWDR - random-walk depth on wavetable morph (0..100%), default 0 (off)
-        //   20: DWDR - random-walk depth on saturator drive (0..100%), default 0 (off)
-        //   21: FWDR - random-walk depth on wavefolder depth (0..100%), default 0 (off)
-        //   22: CUT  - internal SVF cutoff + dry/wet (80 Hz..12 kHz, 0% = raw), default 921
-        //   23: RES  - internal SVF resonance Q (0.5..2.5), default 0 (0.5)
-        //   24: WFC  - random-walk depth on SVF cutoff (0..100%), default 0 (off)
-        //   25: BRT  - breath (voice-level wander) depth (0..100%), default 0 (off)
-        //   26: BRR  - breath stream period (log), default 511
-        //   27: SMT  - breath stream time constant (log), default 511
-        //   28: CH2D - chord-voice saturator drive (0..300), default 341
-        //   29: CFLD - chord-voice wavefolder depth (0..100%), default 0 (off)
-        //   30: INT2 - second chord interval (0..1900 c, continuous), default 511 (~950 c, M6)
-        //   31: JIT  - random phase jitter on A/B (0..100% -> 0..0.5% cycle peak), default 0 (off)
-        //   32: RMOD - A*B ring-mod parallel voice (0..100%), default 0 (off)
-        //   33: FM1  - STATIC phase-FM on osc A by B (0..100% -> 0..0.2 c peak), default 0 (off)
-        //   34: FM2  - STATIC phase-FM on osc B by A (0..100% -> 0..0.2 c peak), default 0 (off)
-        //   35: FMAB - random-walk depth on FM A index (0..100%, RATE-gated), default 0 (pure static)
-        //   36: FMBB - random-walk depth on FM B index (0..100%, RATE-gated), default 0 (pure static)
-        //   37: CH2D - INT2's own saturator drive (0..300), default = CH2D(28)
-        //   38: CH2F - INT2's own wavefolder depth (0..100%), default = CFLD (off)
-        //   39: FMVT - formant vowel position (A-E-I-O-U morph), default 511 (mid, but stage OFF until FLVL>0)
-        //   40: FLVL - formant stage dry/wet (0..100%), default 0 (off / transparent)
-        //   41: COMB - comb resonator feedback (0..100% -> 0..0.9 fb), default 0 (off)
-        // NOTE: FLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
-        //   were REMOVED -- DCK is now a CONSTANT (kDuckConstant, see
-        //   osc_constants.h) and FLD2 was judged unnecessary. (Duck is always
-        //   on at 50%, floored at 0.7.)
-        {0, 41, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        //   15: MAIN - main (A+B) voice level (0..100%), default 1023 (100%)
+        //   16: TWDR - random-walk depth on wavetable morph (0..100%), default 0 (off)
+        //   17: DWDR - random-walk depth on saturator drive (0..100%), default 0 (off)
+        //   18: FWDR - random-walk depth on wavefolder depth (0..100%), default 0 (off)
+        //   19: CUT  - internal SVF cutoff + dry/wet (80 Hz..12 kHz, 0% = raw), default 921
+        //   20: RES  - internal SVF resonance Q (0.5..2.5), default 0 (0.5)
+        //   21: WFC  - random-walk depth on SVF cutoff (0..100%), default 0 (off)
+        //   22: BRT  - breath (voice-level wander) depth on the MAIN (A+B) voice (0..100%), default 0 (off)
+        //   23: BRR  - breath stream period (log), default 511
+        //   24: SMT  - breath stream time constant (log), default 511
+        //   25: JIT  - random phase jitter on A/B (0..100% -> 0..0.5% cycle peak), default 0 (off)
+        //   26: RMOD - A*B ring-mod parallel voice (0..100%), default 0 (off)
+        //   27: FM1  - STATIC phase-FM on osc A by B (0..100% -> 0..0.2 c peak), default 0 (off)
+        //   28: FM2  - STATIC phase-FM on osc B by A (0..100% -> 0..0.2 c peak), default 0 (off)
+        //   29: FMAB - random-walk depth on FM A index (0..100%, RATE-gated), default 0 (pure static)
+        //   30: FMBB - random-walk depth on FM B index (0..100%, RATE-gated), default 0 (pure static)
+        //   31: FMVT - formant vowel position (A-E-I-O-U morph), default 511 (mid, but stage OFF until FLVL>0)
+        //   32: FLVL - formant stage dry/wet (0..100%), default 0 (off / transparent)
+        //   33: COMB - comb resonator feedback (0..100% -> 0..0.9 fb), default 0 (off)
+        //   34: SUBB - SHARED sub-bass "breath" depth (0..100% -> 0..0.6 swing): the
+        //     one shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note)
+        //     follows the LOUDEST (breath-focus) voice's envelope. 0% = the old
+        //     static low end (regression-safe); default 307 (~30% -> ~+/-18% swing,
+        //     the low end gently follows the breathing note).
+        // NOTE: WA3/CHRD/INT (chord wavetable / chord level / chord interval),
+        // CH2D/CFLD/INT2 (second chord), and FLD2 (second cascaded wavefolder)
+        // were REMOVED — the chord/interval concept is gone; DCK (sidechain-duck
+        // amount) was also removed and is now a CONSTANT (kDuckConstant, see
+        // osc_constants.h). (Duck is always on at 50%, floored at 0.7.)
+        {0, 34, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -99,8 +102,8 @@ const __unit_header unit_header_t unit_header = {
         // visible, and lets the web simulator render the PARAM/VALUE pair
         // through the standard edit-parameter UI.
         //
-        // Slot 2 (PARAM): parameter selector, 0..41. Identical to slot 0.
-        {0, 41, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        // Slot 2 (PARAM): parameter selector, 0..34. Identical to slot 0.
+        {0, 34, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.

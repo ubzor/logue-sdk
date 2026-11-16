@@ -37,7 +37,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "CUT", "RES", "WFC",
       "BRT", "BRR", "SMT",
       "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
-      "FMVT", "FLVL", "COMB"};
+      "FMVT", "FLVL", "COMB", "SUBB"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -152,8 +152,18 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   }
 
   int v;
-  if (k == WAV1 || k == WAV2)
-    v = (int)(param_10bit_to_f32(raw) * (WaveTable::kWavesTotal - 1));
+  if (k == WAV1)
+  {
+    // WAVE shows the bank letter (A..F). raw 0..1023 -> bank 0..5.
+    int bank = (int)(param_10bit_to_f32(raw) * 5.999f);
+    if (bank < 0) bank = 0;
+    if (bank > 5) bank = 5;
+    buf[0] = (char)('A' + bank);
+    buf[1] = '\0';
+    return buf;
+  }
+  else if (k == WAV2)
+    v = 0; // deprecated, display only (shows "0")
   else if (k == ASYM)
     v = (int)((raw * 200) / kRawMax) - 100;
   else if (k == DETUNE)

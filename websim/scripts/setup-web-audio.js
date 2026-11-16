@@ -29,13 +29,13 @@
       // through intermediate values (0 -> 1 -> 2 -> ... -> target), each of
       // which re-applied a different edit parameter to the DSP, producing
       // audible glitches that looked like a phantom LFO.
-      // 44 editable parameters total (edit indices 0..43); see EDIT_PARAM_NAMES
+      // 35 editable parameters total (edit indices 0..34); see EDIT_PARAM_NAMES
       // below for the full index->name map. This value only sizes the scratch
       // array in randomRaw() — the actual sliders are created from
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 34; // 34 = RATE..COMB
+      const EDIT_PARAM_COUNT = 35; // 35 = RATE..SUBB
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -43,7 +43,7 @@
       // 2 SPD1, 3 SMT1 (Tone stream period / smooth),
       // 4 SPD2, 5 SMT2 (Timbre stream period / smooth),
       // 6 SPD3, 7 SMT3 (Density stream period / smooth),
-      // 8 SUB1, 9 SUB2, 10 SATU, 11 ASYM, 12 FOLD, 13 WAV1, 14 WAV2,
+      // 8 SUB1, 9 SUB2, 10 SATU, 11 ASYM, 12 FOLD, 13 WAVE (bank A..F, LFO morphs within bank),
       // 15 MAIN (main A+B mixed voice level, 0..100%, default 100%),
       // 16 RWAV, 17 RDRV, 18 RFLD,
       // 19 FCUT, 20 RES, 21 RWFC,
@@ -57,10 +57,16 @@
       // 30 RFMB (random-walk depth on FM B, 0..100%, RATE-gated),
       // 31 FORM (formant vowel position), 32 FVOL (formant dry/wet),
       // 33 COMB (comb resonator feedback),
+      // 34 SUBB (SHARED sub-bass "breath" depth: the one shared SUB1/SUB2 pair
+      //    follows the LOUDEST (breath-focus) voice's envelope. 0% = static
+      //    low end (old behaviour), default ~30% -> gentle +/-18% swing. The
+      //    sub bass itself is ONE shared pair for the whole polyphonic cluster
+      //    (env-weighted ANCHOR note) — see the "Shared sub bass" block in
+      //    osc_mix.h / the SUBB comment in osc_params.h.)
       const EDIT_PARAM_NAMES = [
         "Rate", "Detune",
         "Tone Rate", "Tone Smooth", "Timbre Rate", "Timbre Smooth", "Density Rate", "Density Smooth",
-        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave A", "Wave B",
+        "Sub 1", "Sub 2", "Drive", "Asym", "Fold", "Wave", "Wave B (deprecated)",
         "Main",
         "Morph Wander", "Drive Wander", "Fold Wander",
         "Cutoff", "Resonance", "Cutoff Wander",
@@ -68,6 +74,7 @@
         "Jitter", "Ring Mod", "FM A", "FM B", "FM A Bre", "FM B Bre",
         "Formant Vowel", "Formant Level",
         "Comb Res",
+        "Sub Bass Bre",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -78,24 +85,24 @@
       //   col 0: MAIN + BREATH + FORMANT — A+B voice (static params) + wander
       //   col 1: WANDER (global) + WANDER TGT (targets)
       //   col 2: SUBS + FILTER + CLUSTER (polyphonic 6-voice: COMB)
-      //   MAIN        MAIN WAV1 WAV2 DETU SATU ASYM FOLD FM1 FM2 JIT RMOD
+      //   MAIN        MAIN WAVE DETU SATU ASYM FOLD FM1 FM2 JIT RMOD
       //   BREATH      RVLL RVLS RVLSM (voice-level wander, 4th stream)
       //   FORMANT     FMVT FLVL
       //   WANDER      RATE SPD1 SMT1 SPD2 SMT2 SPD3 SMT3
       //   WANDER TGT  RWAV RWFC RDRV RFLD RFMA RFMB
-      //   SUBS        SUB1 SUB2
+      //   SUBS        SUB1 SUB2 SUBB (sub-bass breath depth)
       //   FILTER      FCUT RES
       //   CLUSTER     COMB (comb resonator)
       const PARAM_GROUPS = [
         // ---- Column 0 ----
-        { title: "MAIN",       col: 0, items: [15, 13, 14, 10, 11, 12, 27, 28, 25, 26, 0] },
+        { title: "MAIN",       col: 0, items: [15, 13, 10, 11, 12, 27, 28, 25, 26, 0] },
         { title: "BREATH",   col: 0, items: [22, 23, 24] },
         { title: "FORMANT",  col: 0, items: [31, 32] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, items: [16, 21, 17, 18, 29, 30] },
         // ---- Column 2 ----
-        { title: "SUBS",       col: 2, items: [8, 9] },
+        { title: "SUBS",       col: 2, items: [8, 9, 34] },
         { title: "FILTER",     col: 2, items: [19, 20] },
         { title: "CLUSTER",    col: 2, items: [33] },
       ];
@@ -149,8 +156,11 @@
         //   RES       -> Q (0.5 .. 2.5)
         //   FM1/FM2   -> 0..0.1c (quadratic curve)
         //   others    -> 0..100%
-        if (idx === 13 || idx === 14)
-          return String(Math.round((raw / 1023) * 90)); // 90 = kWavesTotal-1
+        if (idx === 13 || idx === 14) {
+          // WAVE selects the bank A..F (raw 0..1023 -> bank 0..5)
+          const bank = Math.round((raw / 1023) * 5.999);
+          return "ABCDEF".charAt(Math.max(0, Math.min(5, bank)));
+        }
         if (idx === 11) {
           const pct = Math.round((raw * 200) / 1023) - 100;
           return (pct >= 0 ? "+" : "") + pct + "%";
@@ -193,7 +203,8 @@
         // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN, default 100%),
         // 16..18 (RWAV/RDRV/RFLD), 21 (RWFC), 22..24 (Breath),
-        // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB).
+        // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB),
+        // 34 (SUBB — sub-bass breath depth, 0..100% -> 0..0.6 swing).
         return Math.round((raw * 100) / 1023) + "%";
       }
 
@@ -748,11 +759,9 @@
         // WAV3 (the chord voice) is randomized independently so Random can
         // produce a genuinely different chord timbre, not a copy of WAV1.
         {
-          const wav1Index = Math.floor(Math.random() * 91);
-          const wav2Index = Math.floor(Math.random() * 91);
-          set("Wave A", Math.round(wav1Index * (1023 / 90)));
-          set("Wave B", Math.round(wav2Index * (1023 / 90)));
-          // (Wave C was removed — the chord/interval concept is gone.)
+          const wavIndex = Math.floor(Math.random() * 91);
+          set("Wave", Math.round(wavIndex * (1023 / 90)));
+          // (Wave B is deprecated — both A/B read the same wave.)
         }
 
         // --- Constrained (critical) parameters -------------------------------

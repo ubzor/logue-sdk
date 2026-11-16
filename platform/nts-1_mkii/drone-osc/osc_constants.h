@@ -117,6 +117,34 @@
   // pitch wobble. 5 c keeps the low end musical (no warble).
   static constexpr float    kSubLfoFmCents = 5.f;
 
+// ---- Polyphonic sub anchor (ONE shared sub bass for the whole cluster) ------
+// Since the polyphonic build, SUB1 (f/2) and SUB2 (f/4) are NOT per-voice any
+// more: the whole kVoiceCount cluster feeds ONE shared sub pair. The anchor
+// frequency is the ENV-WEIGHTED mean of the sounding voices' base rates
+// (w0_sub_anchor = sum(env_i * w0_i) / sum(env_i)), followed by a one-pole
+// relax (kSubAnchorAlpha) so a note off/on morphs the sub bass pitch smoothly
+// instead of stepping (or clicking). This is the drone's "low end = anchor":
+// one stable fundamental under the whole cluster. The level of that shared sub
+// bass BREATHEs with the loudest (breath-focus) voice: the SUBB knob (0..1)
+// sets the swing depth of a one-pole follower (kSubBreathTauSec) that tracks
+// (1 - depth .. 1 + depth) around the focus voice's envelope. At SUBB = 0 the
+// gain is constant 1.0 (regression-safe: the old static low end). At 0 notes
+// (env_sum = 0) the anchor relaxes to 0 (the sub fades out with the cluster).
+  // One-pole anchor-w0 relax coefficient (per sample): ~250 ms at 48 kHz.
+  // Fast enough to track a single note's A-H-R (2 s) without lag, slow enough
+  // to smooth the 1->N note-count transitions into a glide, not a step.
+  static constexpr float    kSubAnchorAlpha  = 0.005f;
+  // Maximum swing of the sub-bass breath gain (SUBB knob, 0..1 -> 0..kSubBreathMax
+  // depth): the gain wanders in [1 - d, 1 + d] around 1.0. 0.6 = +/-60%: a
+  // clearly audible "the low end follows the breathing note" without pumping.
+  static constexpr float    kSubBreathMax    = 0.6f;
+  // One-pole follower time constant (~0.75 s): slow enough to follow the
+  // breath focus rotation (breath stream period ~3 s) but not its wobble.
+  static constexpr float    kSubBreathTauSec = 0.75f;
+  // Floor for the sub-bass breath gain (the low end never fully vanishes while
+  // a note sounds, even when the focus voice is at its quietest).
+  static constexpr float    kSubBreathFloor  = 0.2f;
+
 // ---- Final-mix gains ----------------------------------------------------------
 // Worst-case peaks (see the budget comment in process()):
 //   A+B saturator out * kMixOsc < 0.5
@@ -217,7 +245,7 @@
   // Detune is shown as integer cents (-10..+10) with a '+' for positive.
   // ASYM / RW_* / FOLD / CHRD / SUB1 / SUB2 are shown as 0..100%. SATU is
   // shown as a bare 0..300 number (raw*300/1023, 100 == 1.0x gentle drive).
-  // WAV1 / WAV2 / WAV3 are shown as bare 0..(kWavesTotal-1) numbers.
+  // WAV1 (WAVE) is shown as the bank letter A..F. WAV2 (deprecated) shows 0.
   static constexpr float    kDetuneMaxCents = 10.f;  // sum-voice detune: +/-10 c
   static constexpr float    kSatuMax        = 3.f;   // 0..3.0 drive level
   static constexpr int32_t  kRawMid         = 511;   // raw 10-bit value == 0%
@@ -236,11 +264,10 @@
   // random targets, so the inter-voice beat frequency drifts over time (an
   // asymmetric chorus).
   static constexpr float    kRwDetuneScaleCents = 10.f; // +/-10 cents at RW depth 100%
-  // Wavetable-morph stream (Timbre): the walk nudges the A and B wavetable
-  // morph positions by +/-kRwMorphScaleTables tables (clamped to the 0..90
-  // bank range in Osc::process), so the timbre slowly drifts through the
-  // banks A-F.
-  static constexpr float    kRwMorphScaleTables = 10.f; // +/-10 tables at RW_WAV 100%
+  // (Wavetable-morph stream (Timbre) RW_WAV / kRwMorphScaleTables removed:
+  //  the intra-bank LFO sweep (WaveTable::resolve_wave + lfo_morph in
+  //  osc_mix.h) now handles the timbre movement. The rw_[1] stream still
+  //  drives the SVF cutoff (RWFC) — see kRwCutoffHalfOctaves below.)
   // Drive stream (Density): the walk moves the saturator drive by
   // +/-kRwDriveScale (clamped to 0..kSatuMax in the audio path), and the
   // wavefolder depth by +/-kRwFoldScale (clamped to 0..1 in the audio path),
@@ -322,14 +349,18 @@
 // The cluster sums up to kVoiceCount notes into ONE shared post-stage. Without
 // compensation N simultaneous notes add coherently (worst case ~xN) and, fed
 // through fold/saturate at the same FOLD/SATU, clip and "shout". The summed
-// voice signals (sum_main/sub/sub2/ring) are divided by sqrt(env_sum) [one-pole
-// smoothed, the kClusterCompAlpha one-pole] -> -3 dB/voice, the standard
-// polyphonic-makeup rule. A single note is EXACTLY unchanged (sqrt(1)=1).
+// PER-VOICE voice signals (sum_main / sum_ring) are divided by env_sum [one-pole
+// smoothed, the kClusterCompAlpha one-pole] -> -6 dB/voice (linear 1/N makeup).
+// A single note is EXACTLY unchanged (1/1 = 1). NOTE: the shared sub bass (the
+// ONE SUB1/SUB2 pair) is NOT env_comp_ scaled — it is not a per-voice sum, so
+// there is no N-fold growth to compensate; it uses env_sum_ only as the
+// denominator of its env-weighted ANCHOR mean (see the "Shared sub bass" block
+// in osc_mix.h).
 // The per-voice A-H-R envelope is applied per-voice (each voice gated by its
 // own v.eg.env in the accumulation loop), NOT as a common output envelope --
 // this is what stops the 1->2 note boundary from dipping the whole cluster.
-// kClusterCompAlpha is the one-pole coefficient for the smoothed 1/sqrt(N)
-// (env_comp_): tau ~50 ms, fast enough to follow note count / the 2 s envelope
-// without per-sample pumping, slow enough not to ring on a fast note-on burst.
+// kClusterCompAlpha is the one-pole coefficient for the smoothed 1/N (env_comp_):
+// tau ~5 ms, fast enough to follow note count / the 2 s envelope without
+// per-sample pumping, slow enough not to ring on a fast note-on burst.
 // -----------------------------------------------------------------------------
   static constexpr float    kClusterCompAlpha = 0.0041658f; // 1 - exp(-1/(0.005s*48kHz)); one-pole tau ~5 ms (was 50 ms, too slow for note-on transients -> perceived as "quieter")

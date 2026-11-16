@@ -27,30 +27,39 @@ inline void Osc::init(float *)
     params_.reset();
     lfo_ = 0.f;
     // ---- Polyphonic voice cluster: zero every voice --------------------------
-    // Each cluster voice is independent state (phasors, sub phasors, sub-2
-    // state, A-H-R, w0). All start silent (w0 = 0, idle envelope) so
-    // an all-off cluster produces exactly zero (regression: 0 notes = silent).
+    // Each cluster voice is independent state (phasors, A-H-R, w0). All start
+    // silent (w0 = 0, idle envelope) so an all-off cluster produces exactly
+    // zero (regression: 0 notes = silent). (The sub phasors / sub-2 voice are
+    // SHARED by the whole cluster — see the block below the loop.)
     for (uint8_t vi = 0; vi < kVoiceCount; vi++)
     {
       Voice &v = voice_[vi];
       v.w0 = 0.f;
       v.ph_a = 0.f;
       v.ph_b = 0.f;
-      v.ph_sub = 0.f;
-      v.ph_sub2 = 0.f;
       v.prev_wav_a = 0.f; // FM lookback cache: start at 0 (first sample is a no-op)
       v.prev_wav_b = 0.f;
       v.fm_smooth_a = 0.f; // phase-FM index LPF state (no FM on the first sample)
       v.fm_smooth_b = 0.f;
       v.breath_dev = 1.f;
       v.breath_target = 1.f;
-      v.sub2.lpf_state = 0.f;
-      v.sub2.gate = 0.f;
       v.note = 0;
       v.active = false;
       v.gen = 0;
       v.eg.reset();
     }
+    // ---- Shared sub bass (ONE sub pair for the whole cluster) ----------------
+    // Silent at init: the anchor rate relaxes to 0 (no notes), the sub phasors
+    // are at 0, the sub-2 voice is zeroed, and the SUBB breath gain is 1.0
+    // (static low end — the gain is irrelevant while the anchor is silent).
+    // When the first noteOn() lands, process() computes the anchor target
+    // (env-weighted mean w0) and the one-pole relax glides the sub bass in.
+    sub_ph = 0.f;
+    sub_ph2 = 0.f;
+    sub2.lpf_state = 0.f;
+    sub2.gate = 0.f;
+    sub_anchor_w0 = 0.f;
+    sub_breath_gain = 1.f;
     // (glide removed: no gl_k_ / gl_want_); no last note yet.
     last_note_ = -1;
     // Parameter selector: start with RATE (select_ = 0) selected (RATE leads
@@ -126,11 +135,12 @@ inline void Osc::init(float *)
     env_follower_ = 0.f;
     duck_alpha_ = one_minus_expf(-1.f / (kDuckFollowTauSec * 48000.f)); // ~0.013
     // Polyphonic-cluster loudness compensation (see env_sum_ in osc.h and its
-    // use in process(): 1/sqrt(env_sum) on the summed voice signals). The
+    // use in process(): 1/env_sum on the summed PER-VOICE voice signals). The
     // per-voice A-H-R envelope is applied per-voice in the accumulation loop
-    // (each voice gated by its own v.eg.env); env_sum_ only feeds the
-    // loudness-compensation one-pole (env_comp_). Nothing sounding yet, so the
-    // smoothed 1/sqrt(N) starts at 1 (a single note / silence -> no attenuation).
+    // (each voice gated by its own v.eg.env); env_sum_ also feeds the shared
+    // sub bass's env-weighted ANCHOR mean (denominator) — see the "Shared sub
+    // bass" block in osc_mix.h. Nothing sounding yet, so the smoothed 1/N
+    // starts at 1 (a single note / silence -> no attenuation).
     env_sum_ = 0.f;
     env_comp_ = 1.f;
     // (chord_fade_alpha_ / chord_new_ / chord2_new_ / prev_chord_cents_ /
@@ -146,15 +156,18 @@ inline void Osc::reset()
       Voice &v = voice_[vi];
       v.ph_a = 0.f;
       v.ph_b = 0.f;
-      v.ph_sub = 0.f;
-      v.ph_sub2 = 0.f;
-      v.sub2.lpf_state = 0.f;
-      v.sub2.gate = 0.f;
       v.breath_dev = 1.f;
       v.breath_target = 1.f;
       v.active = false;
       v.eg.reset();
     }
+    // Shared sub bass: zero the phasors and the sub-2 voice state. (The
+    // anchor rate relaxes to 0 in process() once env_sum_ -> 0, i.e. the sub
+    // fades out with the cluster — no need to zero it here.)
+    sub_ph = 0.f;
+    sub_ph2 = 0.f;
+    sub2.lpf_state = 0.f;
+    sub2.gate = 0.f;
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
@@ -218,16 +231,17 @@ inline void Osc::reset()
     v.ph_a = osc_white(); // random [0,1)
     v.ph_b = v.ph_a + 0.25f; // +1/4 cycle (GRIMM's ph[1]=ph[0]+0x40000000)
     if (v.ph_b >= 1.f) v.ph_b -= 1.f; // wrap
-    v.ph_sub = osc_white();
-    v.ph_sub2 = osc_white();
     v.prev_wav_a = 0.f;
     v.prev_wav_b = 0.f;
     v.fm_smooth_a = 0.f;
     v.fm_smooth_b = 0.f;
     v.breath_dev = 1.f;     // per-voice breath: start at neutral level (1.0)
     v.breath_target = 1.f;  // will be set by the rotating-focus on the first tick
-    v.sub2.lpf_state = 0.f;
-    v.sub2.gate = 0.f;
+    // (The sub phasors and the sub-2 voice are now SHARED by the whole cluster
+    //  — see sub_ph / sub_ph2 / sub2 in osc.h. The shared sub bass re-pitches
+    //  itself in process() from the env-weighted anchor (kSubAnchorAlpha), so
+    //  noteOn() only needs to register this voice's w0; the anchor target is
+    //  recomputed every block there.)
     v.eg.noteOn(); // 2 s A-H-R attack
   }
 

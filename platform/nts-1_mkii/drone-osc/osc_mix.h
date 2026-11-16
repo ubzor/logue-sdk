@@ -50,14 +50,30 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   //  access by the per-voice envelope advance below.)
   const float alpha_a = eg_alpha_a_;
   const float alpha_r = eg_alpha_r_;
+  // One-pole relax coefficients (per sample) for the SHARED sub bass.
+  // K-rate precompute: the per-sample one_minus_expf would be a libm call in
+  // the audio path, so both are cached here (see one_minus_expf in osc.h).
+  // kSubAnchorAlpha (osc_constants.h) = 1 - exp(-1/tau), tau = 250 ms at
+  // 48 kHz: the anchor follows the env-weighted mean w0 of the sounding
+  // voices, so a note on/off MORPHS the sub pitch smoothly (no click).
+  // kSubBreathAlpha = 1 - exp(-1/tau), tau = kSubBreathTauSec (~0.75 s):
+  // the SUBB breath-gain follower (see the "Shared sub bass" block below the
+  // per-voice loop).
+  const float sub_anchor_alpha = kSubAnchorAlpha;
+  const float sub_breath_alpha = one_minus_expf(-1.f / (kSubBreathTauSec * 48000.f));
 
   const bool rw_active = p.rw_amount > 0.f;
 
-  // wavetable morph: base (WAV1/WAV2 knob). The pitch-shift morph is now
-  // PER-VOICE (computed from each voice's own w0 in the loop), so only the
-  // knob base is cached here; the LFO + walk morph offsets are added per-sample.
-  const float wave_base_a = p.wave_a;
-  const float wave_base_b = p.wave_b;
+  // Wavetable: the WAVE knob selects a BANK (0..5, A..F). The LFO drives the
+  // intra-bank morph position centered on the bank (see WaveTable::resolve_wave
+  // / bank_center): at LFO=0 the position is the bank center, and at LFO=+/-100%
+  // it sweeps from the first to the last table of the bank, covering every wave.
+  // Both A/B oscillators read the SAME wave (the intra-bank LFO morph); the
+  // A/B DETUNE (det_f_a_/det_f_b_) provides the width, the LFO provides the
+  // timbre movement. The bank boundary is hard: the morph never crosses into
+  // the next bank.
+  uint32_t wave_bank = (uint32_t)p.wave_pos;
+  if (wave_bank > 5U) wave_bank = 5U;
   if (rw_active)
   {
     // Recompute each stream's interval / tracking from its own SPDx/SMTx
@@ -99,7 +115,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   //   Density (rw_[2]) -> drive + wavefolder depth
   // The scaled values must be recomputed every sample (not cached per-block)
   // because rw_[i].advance() moves dev_a/b on every sample.
-  const bool rw_wav_active = rw_active && p.rw_wav > 0.f;
+  // (RW_WAV is now handled by the LFO intra-bank sweep — see lfo_morph below.)
   const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
   const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
   // ---- Phase-FM (FM1/FM2 = STATIC index + RFM walk): per-block cache ----
@@ -152,11 +168,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // POLYPHONIC CLUSTER: kVoiceCount notes, identical settings, shared
     // post-stage. Per sample we (1) advance each voice's phasors (with the
     // SHARED random-walk detune/morph/FM/jitter), (2) sum its A/B wavetable
-    // outputs, subs and ring-mod into shared accumulators, then (3) run the
+    // outputs and ring-mod into shared accumulators, (3) compute the ONE
+    // shared sub bass (the cluster's env-weighted ANCHOR note — see the
+    // "Shared sub bass" block below the per-voice loop), then (4) run the
     // SINGLE common post-stage (folder -> saturator -> SVF -> formant -> comb
     // -> duck -> makeup + soft-clip) on the sums. The A-H-R envelope is
-    // per-voice (each note fades in/out on its own); the duck follower is
-    // shared (one drone's low end).
+    // per-voice (each note fades in/out on its own); the duck follower and the
+    // sub bass are shared (one drone's low end).
 
     // ---- Shared random walk (advance ONCE per sample, shared by all voices)
     // The RATE AMT knob is the DEPTH CEILING of the whole walk: it scales
@@ -184,9 +202,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // (w0_a / w0_b are now computed PER-VOICE in the loop below from each
       //  voice's own w0 + the shared det_f_a_/det_f_b_ factors + these walks.)
     }
-    // Timbre stream (rw_[1]): wavetable morph A/B.
-    const float rw_dev_a_tables = rw_wav_active ? rw_[1].dev_a * rw_amt * kRwMorphScaleTables : 0.f;
-    const float rw_dev_b_tables = rw_wav_active ? rw_[1].dev_b * rw_amt * kRwMorphScaleTables : 0.f;
+    // Timbre stream (rw_[1]): the wavetable-morph target (RW_WAV) is now
+    // handled by the LFO (intra-bank sweep). The rw_[1] stream still drives
+    // the SVF cutoff (RWFC) — see the FCUT modulation below. The old
+    // rw_dev_a_tables / rw_dev_b_tables are removed.
     // Density stream (rw_[2]): saturator drive + wavefolder depth.
     const float rw_dev_drive    = rw_drv_active ? rw_[2].dev_a * rw_amt * kRwDriveScale : 0.f;
     // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld * rw_amt).
@@ -324,19 +343,31 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 #ifdef EMSCRIPTEN
     lfo_ = lfo_sim_.process();
 #endif
-    const float lfo_morph = lfo_ * WaveTable::kLfoMorphDepth;
+    // Intra-bank LFO morph: the LFO drives the position within the selected
+    // bank, centered on the bank (see WaveTable::resolve_wave / bank_center).
+    // The base position is the bank center; the LFO adds +/-half the (size-1)
+    // span, so at 100% LFO the morph sweeps from the first to the last table
+    // of the bank (clamped to [0, bank_size-1] inside resolve_wave).
+    const float lfo_morph =
+        WaveTable::bank_center(wave_bank) + lfo_ * WaveTable::lfo_morph_depth(wave_bank);
 
-    // ---- Per-voice loop: phasors, wavetables, subs, ring-mod ----------------
+    // ---- Per-voice loop: phasors, wavetables, ring-mod -----------------------
     // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its
     // own w0 (possibly gliding). The A/B detune uses the SHARED static factors
     // (det_f_a_/det_f_b_) + the SHARED random-walk detune (rw_dev_a/b_cents);
     // the FM index, JIT, morph and walk are all SHARED (one drone); only the
-    // phasors, FM-lookback, sub phasors, sub-2 state and A-H-R are per-voice.
+    // phasors, FM-lookback and A-H-R are per-voice. (The sub phasors and the
+    // sub-2 voice are now SHARED by the whole cluster — see the "Shared sub
+    // bass" block below this loop, computed from the env-weighted anchor.)
     // Accumulators feed the single common post-stage below.
     float sum_main = 0.f;   // sum over voices of (wav_a*lvl + wav_b*lvl) — per-voice breath lvl
-    float sum_sub  = 0.f;   // sum over voices of the sub-octave sine
-    float sum_sub2 = 0.f;   // sum over voices of the f/4 sub-2 output
     float sum_ring = 0.f;   // sum over voices of (wav_a * wav_b)
+    // ---- Shared sub bass anchor state (updated per-sample below) ------------
+    // env-weighted mean of the sounding voices' base rates: the ONE pitch the
+    // shared sub pair plays. Computed in the same pass as env_sum so there is
+    // a single loop over the voices.
+    float anchor_w_num = 0.f; // running sum(env * w0) over active voices
+    float sub_env_focus = 0.f; // loudest (breath-focus) voice envelope, for SUBB
     {
       // Shared per-sample FM index (advance once, use for all voices).
       const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
@@ -409,16 +440,6 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         v.ph_a -= fast_floorf(v.ph_a);
         v.ph_b -= fast_floorf(v.ph_b);
 
-        // ---- Sub-octave (f/2) phasor: shared LFO-FM detune -----------------
-        {
-          const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
-          v.ph_sub += vw0 * kSubW0Scale * Detune::factor(lfo_fm_cents);
-          v.ph_sub -= fast_floorf(v.ph_sub);
-        }
-        // ---- Sub-2 (f/4) phasor: stable low-end anchor, no LFO-FM ----------
-        v.ph_sub2 += vw0 * 0.25f;
-        v.ph_sub2 -= fast_floorf(v.ph_sub2);
-
         // ---- SUPERSAW (GRIMM-style: single 7-saw stack instead of wavetables) ---
         // TEMPORARY: replaced wavetable lookup with a GRIMM-style supersaw:
         // 7 saw oscillators detuned symmetrically around the note (+/-60c total
@@ -442,13 +463,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // that spread the 7 saws across one cycle (like GRIMM's random phase
         // initialization). This gives a static spread that de-correlates the
         // harmonics without per-sample detune computation.
-        // ---- Wavetable samples (per-voice morph shift from its own w0) ------
-        const float pitch_n = (vw0 * WaveTable::kSampleRate) / WaveTable::kRefHz;
-        const float shift = (pitch_n < 0.f) ? 0.f : (pitch_n > 1.f) ? WaveTable::kWaveMorphShift : (WaveTable::kWaveMorphShift * pitch_n);
-        const float wav_a_pos = wave_base_a + lfo_morph + rw_dev_a_tables + shift;
-        const float wav_b_pos = wave_base_b + lfo_morph + rw_dev_b_tables + shift;
-        const float wav_a = WaveTable::resolve_wave(wav_a_pos, v.ph_a);
-        const float wav_b = WaveTable::resolve_wave(wav_b_pos, v.ph_b);
+        // ---- Wavetable samples (intra-bank LFO morph) ------------------------
+        // Both A/B read the SAME wave: the LFO drives the position within the
+        // selected bank, centered on the bank (see WaveTable::resolve_wave).
+        // The A/B detune (w0_a/w0_b, computed above) provides the width; the
+        // LFO provides the timbre movement. The bank boundary is hard: the
+        // morph never crosses into the next bank.
+        const float wav_a = WaveTable::resolve_wave(wave_bank, lfo_morph, v.ph_a);
+        const float wav_b = WaveTable::resolve_wave(wave_bank, lfo_morph, v.ph_b);
         v.prev_wav_a = wav_a; // FM lookback cache (next sample's modulator)
         v.prev_wav_b = wav_b;
 
@@ -457,11 +479,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         // (v.eg.env). This is what makes the polyphonic cluster work: a new
         // note (env 0→1 over 2 s) ADDS to the cluster instead of dragging the
         // whole thing through a common MAX that dips on the 1→2 note boundary.
-        // (The old common env_max = max over all voices read the cluster's
-        // level as its loudest note, so the instant a 2nd note started from
-        // env=0 the shared gain could momentarily collapse -> "silence" on the
-        // 2nd note, especially where the new note's envelope reset coincides
-        // with the others. Per-voice gating removes that shared-dip.)
+        // (The old COMMON output envelope = max over all voices used to read
+        // the cluster's level as its loudest note, so the instant a 2nd note
+        // started from env=0 the shared gain could momentarily collapse ->
+        // "silence" on the 2nd note, especially where the new note's envelope
+        // reset coincides with the others. Per-voice gating removes that
+        // shared-dip.) The local env_max below is a DIFFERENT, per-block
+        // accumulator (the loudest voice's envelope, for the SUBB breath
+        // follower) — it is NOT the old common output envelope.
         const float eg = v.eg.env;
         // Per-voice Breath level: each note's MAIN (A+B) voice gets its OWN
         // level factor (breath_dev, which tracks the rotating-focus target).
@@ -475,36 +500,100 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         const float lvl = breath_active ? v.breath_dev : 1.f;
         const float lvl_c = (lvl < 0.f) ? 0.f : (lvl > 2.f) ? 2.f : lvl;
         sum_main += (wav_a * lvl_c + wav_b * lvl_c) * eg;
-        // SUB1 (f/2) and SUB2 (f/4) are NOT breathed — the low-end anchor
-        // stays static so the drone never "flutters" in the bass.
-        sum_sub  += osc_sinf(v.ph_sub) * eg;
         sum_ring += (wav_a * wav_b) * eg;
-        sum_sub2 += v.sub2.process(v.ph_sub2, vw0, eg);
+        // Shared sub-bass anchor bookkeeping (see the block below the loop):
+        // the env-weighted mean w0 (anchor target) and the loudest voice's
+        // envelope (SUBB breath focus) are gathered here, in the same pass.
+        anchor_w_num += eg * vw0;
+        if (eg > sub_env_focus) sub_env_focus = eg;
       }
     }
 
     // A+B mix (the shared post-stage input); per-voice Breath levels are
     // already folded into sum_main.
     //
-    // POLYPHONIC LOUDNESS COMPENSATION (Variant A): every summed voice signal
-    // (sum_main / sum_sub / sum_sub2 / sum_ring) grows linearly with the number
-    // of sounding notes, but the downstream kMix* budget (kMixOsc = 0.5, ...)
-    // was designed for ONE note. Without compensation N notes add coherently
+    // POLYPHONIC LOUDNESS COMPENSATION (Variant A): every summed PER-VOICE
+    // voice signal (sum_main / sum_ring) grows linearly with the number of
+    // sounding notes, but the downstream kMix* budget (kMixOsc = 0.5, ...) was
+    // designed for ONE note. Without compensation N notes add coherently
     // (worst case ~x4) and, fed through fold/saturate at the same FOLD/SATU,
     // clip and "shout" (fastertanh2f pegs at +1). So we scale each summed
-    // signal by env_comp_ ~= 1/sqrt(env_sum): N=1 -> 1 (mono EXACTLY
-    // unchanged), N=4 -> ~0.5 (one note's level back). This is applied BEFORE
-    // the shared fold/saturator/SVF so the shared post-stage sees a
-    // single-note-magnitude signal and the whole cluster reads as one DRONE
-    // at the intended loudness. (env_comp_ is the smoothed 1/sqrt(N) from
-    // the envelope-advance block above, so the 2 s attack/release don't pump
-    // it per sample.)
+    // signal by env_comp_ ~= 1/env_sum: N=1 -> 1 (mono EXACTLY unchanged),
+    // N=4 -> 0.25 (one note's level back). This is applied BEFORE the shared
+    // fold/saturator/SVF so the shared post-stage sees a single-note-magnitude
+    // signal and the whole cluster reads as one DRONE at the intended
+    // loudness. (env_comp_ is the smoothed 1/N from the envelope-advance block
+    // above, so the 2 s attack/release don't pump it per sample.)
+    // NOTE: the sub voices are NOT env_comp_ scaled — they are ONE SHARED pair
+    // (not N per-voice voices), so there is no N-fold growth to compensate. A
+    // single note -> env=1 -> exactly the old single-note sub level; N notes
+    // -> one stable fundamental under the cluster (no N-fold low-end growth).
     const float mix  = kMixOsc * (sum_main * env_comp_);
     // RMOD: A*B ring-mod DERIVED voice (summed per-voice), MAIN-ducked.
     const float ring_out = rmod_active ? (sum_ring * env_comp_) * p.ring_mix * p.main_level : 0.f;
-    // Sub-octave / sub-2 (shared sums; scaled by their levels in the mix).
-    const float sub  = sum_sub  * env_comp_;
-    const float sub2 = sum_sub2 * env_comp_;
+
+    // ---- Shared sub bass (ONE sub pair for the whole cluster) ---------------
+    // The env-weighted mean of the sounding voices' base rates is the ONE
+    // pitch the shared sub pair plays (the "anchor"). A one-pole relax
+    // (sub_anchor_alpha, ~250 ms) glides the anchor when notes join/leave, so
+    // the low end MORPHS instead of stepping/clicking. At 0 notes the target
+    // is 0 and the anchor relaxes to 0 (the sub fades out with the cluster).
+    //
+    // The sub LEVEL breathes with the loudest (breath-focus) voice: the SUBB
+    // knob (p.subb_depth, 0..1) sets the swing depth d = subb_depth *
+    // kSubBreathMax; a one-pole follower (kSubBreathTauSec) drives
+    // sub_breath_gain toward (1 + (sub_env_focus - 0.5) * 2 * d) and is floored
+    // at kSubBreathFloor (the low end never fully vanishes while a note
+    // sounds). At SUBB = 0 the gain is constant 1.0 (the old static low end —
+    // regression-safe). At a single note sub_env_focus = that note's A-H-R ->
+    // the gain follows it (swelling with the attack, sinking on release),
+    // which is exactly the "the low end follows the breathing note" behaviour.
+    // The (sub_env_focus - 0.5) * 2 mapping centers the gain at 1.0
+    // (sub_env_focus = 0.5 -> no swing) so a held note at full level sits at
+    // exactly the old static level; the swing is asymmetric in practice (a
+    // note's env spends most of its time above 0.5, so the low end sits
+    // slightly ABOVE static — the drone "breathes in" with the note).
+    //
+    // The phasors advance with the ANCHOR rate (not any single voice's w0), so
+    // the sub bass is one continuous fundamental under the whole cluster.
+    {
+      // Anchor target: the raw env-weighted mean (sum(env*w0)/sum(env)).
+      // env_sum_ (the raw per-sample sum of the per-voice A-H-R levels,
+      // updated in the envelope-advance block below) is the denominator;
+      // anchor_w_num (the running sum(env*w0) gathered in the per-voice loop
+      // above) is the numerator. Using the RAW sum (not env_comp_, the
+      // one-pole smoothed loudness-comp gain) keeps the anchor tracking the
+      // true instantaneous mean.
+      const float env_now = env_sum_;
+      const float anchor_target = (env_now > 1e-6f) ? (anchor_w_num / env_now) : 0.f;
+      // One-pole relax (note on/off -> glide, no click).
+      sub_anchor_w0 += (anchor_target - sub_anchor_w0) * sub_anchor_alpha;
+      // SUBB breath gain: one-pole follower toward (1 + (focus - 0.5)*2*d).
+      // (sub_breath_alpha is the K-rate-precomputed 1 - exp(-1/tau), tau =
+      // kSubBreathTauSec — see the prepass block above the per-sample loop.)
+      const float subb_d = p.subb_depth * kSubBreathMax;
+      const float subb_target = 1.f + (sub_env_focus - 0.5f) * 2.f * subb_d;
+      sub_breath_gain += (subb_target - sub_breath_gain) * sub_breath_alpha;
+      if (sub_breath_gain < kSubBreathFloor) sub_breath_gain = kSubBreathFloor;
+      if (sub_breath_gain > 1.f + kSubBreathMax) sub_breath_gain = 1.f + kSubBreathMax;
+      // SUB1 (f/2) phasor: anchor rate, shared LFO-FM detune (the low end's
+      // slow organic "swell"). kSubW0Scale includes the -4 c fixed detune.
+      {
+        const float lfo_fm_cents = lfo_ * kSubLfoFmCents;
+        sub_ph += sub_anchor_w0 * kSubW0Scale * Detune::factor(lfo_fm_cents);
+        sub_ph -= fast_floorf(sub_ph);
+      }
+      // SUB2 (f/4) phasor: stable low-end anchor, no LFO-FM.
+      sub_ph2 += sub_anchor_w0 * 0.25f;
+      sub_ph2 -= fast_floorf(sub_ph2);
+    }
+    // Sub-octave / sub-2 (ONE shared pair; the SUBB breath gain modulates the
+    // level, the anchor modulates the pitch; scaled by their levels in the mix).
+    // NOTE: the local float `sub2_out` must NOT shadow the member `sub2`
+    // (Sub2Voice) — the old name `sub2` would hide the member and break the
+    // .process() call.
+    const float sub    = osc_sinf(sub_ph) * sub_breath_gain;
+    const float sub2_out = sub2.process(sub_ph2, sub_anchor_w0, sub_breath_gain);
 
     // The COMMON post-stage input is `mix` (the per-voice A+B sum, computed in
     // the loop above as kMixOsc * sum_main). It is then run through the SINGLE
@@ -629,9 +718,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     //
     // While advancing, also build env_sum_ : the sum of the per-voice
     // envelope levels (0..kVoiceCount). This is how "many" notes are sounding;
-    // it feeds the POLYPHONIC LOUDNESS COMPENSATION (env_comp_ = 1/sqrt(N),
-    // a per-sample one-pole smooth below) that scales the summed voice signals
-    // so N notes read at ~one note's loudness instead of N times louder.
+    // it feeds the POLYPHONIC LOUDNESS COMPENSATION (env_comp_ = 1/N, a
+    // per-sample one-pole smooth below) that scales the summed PER-VOICE voice
+    // signals (sum_main / sum_ring) so N notes read at ~one note's loudness
+    // instead of N times louder. (The shared sub bass does NOT use env_comp_:
+    // it is ONE pair, not N per-voice voices — see the "Shared sub bass"
+    // block. It DOES use env_sum_ as the denominator of its env-weighted
+    // ANCHOR mean.)
     // (The per-voice envelope itself is applied in the accumulation loop above,
     // NOT here: each voice is gated by its own v.eg.env.)
     {
@@ -644,21 +737,18 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       }
       env_sum_ = s;
     }
-    // One-pole follow the cluster loudness (1/sqrt(N)) so the makeup gain
-    // moves smoothly with note count / the 2 s envelope, not per-sample.
-    // Target = 1/sqrt(env_sum) with env_sum floored at 1 (a single note is
-    // never attenuated; silence -> 1 = no effect on the zero signal).
+    // One-pole follow the cluster loudness (1/N) so the makeup gain moves
+    // smoothly with note count / the 2 s envelope, not per-sample.
+    // Target = 1/env_sum with env_sum floored at 1 (a single note is never
+    // attenuated; silence -> 1 = no effect on the zero signal). Linear 1/N
+    // compensation so the shared saturator sees the same input level
+    // regardless of voice count: N=1 -> 1.0 (mono unchanged), N=2 -> 0.5,
+    // N=3 -> 0.333, N=4 -> 0.25. This prevents the tanh from generating more
+    // harmonics at higher N. (The 1/sqrt(N) binomial series was tried first
+    // but read too "pumpy" on the 1->2 note boundary; 1/N is gentler and the
+    // shared saturator's drive headroom already covers the single-note case.)
     {
       const float n = (env_sum_ > 1.f) ? env_sum_ : 1.f;
-      // 1/sqrt(n) via 1/sqrt(1 + (n-1)): with t = n - 1 in [0, 3], use
-      //   (1 + t)^-1/2 ~= 1 - t/2 + 3 t^2/8 - 5 t^3/16 + 35 t^4/128
-      // (binomial series, |t|<=3 converges and at t=3 the 5th term is ~0.02 of
-      //  the value — negligible against the tanh soft-clip headroom). For
-      // n <= 1 (t<=0) this is exact in the [0,1] region (t=0 -> 1).
-      // 1/N instead of 1/sqrt(N): linear compensation so the shared
-      // saturator sees the same input level regardless of voice count.
-      // N=1 -> 1.0 (mono unchanged), N=2 -> 0.5, N=3 -> 0.333, N=4 -> 0.25.
-      // This prevents the tanh from generating more harmonics at higher N.
       const float target = 1.0f / n;
       env_comp_ += kClusterCompAlpha * (target - env_comp_);
     }
@@ -727,8 +817,9 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // main voice yields. This is the audible drone behaviour: at a held note
     // the sub sines are steady, so the follower settles to a constant duck
     // gain (the main tone sits a few dB lower while the subs are present) and
-    // any low-end movement (Breath stream on SUB1, note on/off, SUB2 gate)
-    // moves the main tone with it. The duck gain is floored at kDuckFloor
+    // any low-end movement (the SUBB breath swing on the shared sub pair, note
+    // on/off, the SUB2 pitch gate) moves the main tone with it. The duck gain
+    // is floored at kDuckFloor
     // (0.7, ~-3 dB) so the main voice never disappears. The duck is ALWAYS
     // active (the follower advances every sample); the RMOD branch ducks with
     // y_filt: it is a DERIVED voice of A+B (wav_a * wav_b), so the whole
@@ -736,8 +827,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // the same logic the MAIN knob applies (see the RMOD comment above).
     {
       // Follower source: the (level-scaled) sub-voice sum, i.e. the low end
-      // that actually reaches the mix (sub * SUB1, sub2 * SUB2).
-      const float sub_src = sub * p.sub_level + sub2 * p.sub2_level;
+      // that actually reaches the mix (sub * SUB1, sub2_out * SUB2).
+      const float sub_src = sub * p.sub_level + sub2_out * p.sub2_level;
       const float inst = (sub_src < 0.f) ? -sub_src : sub_src;
       env_follower_ += (inst - env_follower_) * duck_alpha_;
       float duck_gain = 1.f - kDuckConstant * env_follower_ * kDuckScale;
@@ -749,12 +840,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // above, so there is NO common output envelope here. N simultaneous notes
       // each fade in/out on their own; the cluster reads as one blended drone
       // whose level is the SUM of the individually-enveloped voices (each
-      // already scaled by env_comp_ = 1/sqrt(env_sum) for polyphonic makeup).
-      // A single note -> env = its own level (mono exact); N notes -> each
-      // note contributes its own envelope, no shared-dip on the 1→2 boundary.
+      // already scaled by env_comp_ = 1/env_sum for polyphonic makeup — the
+      // shared sub bass is NOT env_comp_ scaled, it is ONE pair). A single
+      // note -> env = its own level (mono exact); N notes -> each note
+      // contributes its own envelope, no shared-dip on the 1→2 boundary.
       const float raw = (y_filt * p.main_level * duck_gain
                        + sub * p.sub_level * kMixSub
-                       + sub2 * p.sub2_level * kMixSub2
+                       + sub2_out * p.sub2_level * kMixSub2
                        + ring_out * kMixRing * duck_gain) * kOutDrive;
       out[0] = clip1m1f(fastertanh2f(kOutSat * raw));
     }
