@@ -61,7 +61,7 @@ PER VOICE (x kVoiceCount = 6):
   phasor A  ->  wavA = stream1*(1-x) + stream2*x
                   (stream1 = WAVE bank @ lfo_morph, stream2 = WA2 bank @ lfo_morph2)
   phasor B  ->  wavB = stream1b*(1-x) + stream2b*x   (same 2D crossfade at ph_b)
-               [ DETU, FM1, FMAB, JIT, S(static teeth, shape=FM Mod Wave), FM C(vibrato), + walk detune ]
+               [ DETU, FM1, FMAB, JIT, S(static teeth, shape=FM Mod Wave), FM C(vibrato) (both scaled by FMAM), + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
   -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
@@ -488,6 +488,7 @@ default and effect:
 | 50 | FMCD | % | 0..100% (LINEAR) -> 0..0.05 cycles phase peak | 0% (OFF) | **FM modulator C depth**: how strongly C bends the (A+B) sum's phase (0.05 cycles = 5% of the carrier at 100%). 0 = OFF. |
 | 51 | FMST | 0.05..16 (teeth) / OFF | LOG 0.05..16 teeth per carrier cycle (raw 0 = OFF) | OFF | **FM static teeth (rate)**: the NUMBER of teeth of the S modulator per (A+B) carrier cycle. S is a carrier-LOCKED FM oscillator (the static counterpart of C's free-running vibrato): its phasor advances at FMST × the A rate, so it draws FMST teeth of phase deviation per note cycle — a STATIC harmonic comb that stays in tune with the note. LOG scale (4 decades; raw 0 = OFF, raw 1 = 0.05 teeth, 1023 = 16 teeth). **Teeth < 1 = sub-octave** (fm/fc < 1, the modulator runs slower than the carrier — a deep organ-like comb with sidebands that dip below the note); **1 tooth = in-tune** (fm/fc = 1); 0 = OFF (bit-identical). |\
 | 52 | FMSA | % | 0..100% (LINEAR) -> 0..0.05 cycles peak | 100% | **FM static depth (tooth size)**: the AMPLITUDE (peak swing) of each S tooth — how strongly each tooth bends the (A+B) sum's phase. The effective per-tooth offset is FMSA × 0.05 cycles (5% of the carrier at full scale). The tooth SHAPE is shared with the C modulator (FM Mod Wave / FMCW: SIN/SAW/SQR/NOISE). 0 = no static FM (bit-identical); 100% (default) = full tooth size. |
+| 53 | FMAM | % | 0..100% (LINEAR) | 100% | **FM MOD amount (global master)**: how strongly the WHOLE FM MOD block is applied — a single multiplier on BOTH the C (vibrato) and S (static teeth) phase offsets before they are added to the A/B phasors. 100% (default) = full C+S exactly as set by FMCD/FMSA (bit-identical regression-safe); 0% = the whole FM MOD block is OFF (both offsets are exactly 0, the (A+B) sum is unmodulated) regardless of the individual C/S settings. It scales the DEVIATION only, never the C/S rates (FMCR/FMST) or shapes (FMCW) — turning FMAM down fades the modulation out smoothly while the modulator keeps running in phase. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /

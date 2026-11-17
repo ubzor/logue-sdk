@@ -185,6 +185,10 @@ static RndWindow rnd_window_for(uint8_t idx)
     // FMSA (S amplitude): 25..100% (raw 256..1023) -- the tooth size; low values
     // are barely audible, so the draw stays in the upper half.
     case 52: w.kind=0; w.lo=256;  w.hi=1023; w.div=0; break; // FMSA  25..100%
+    // FMAM (global FM MOD amount): 25..100% (raw 256..1023) -- the master
+    // multiplier on C+S. Low values mute the whole block, so the draw stays in
+    // the upper half (0 (full-off) is only ever a deliberate manual choice).
+    case 53: w.kind=0; w.lo=256;  w.hi=1023; w.div=0; break; // FMAM  25..100%
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, LFO rate/depth, etc.)
   }
   return w;

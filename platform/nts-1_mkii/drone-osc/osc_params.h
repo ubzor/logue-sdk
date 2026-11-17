@@ -163,6 +163,14 @@ struct OscParamsData
   // NOTE: the tooth SHAPE is shared with the C modulator (fm_c_wave, edit FM_CW
   // / FM Mod Wave) -- S re-uses the same SIN/SAW/SQR/NOISE selector, so there
   // is no separate fm_static_wave field.
+  // ---- FM AMT: the GLOBAL FM MOD amount (master multiplier on C + S) --------
+  // A single knob (LINEAR 0..100%) that multiplies BOTH the C (vibrato) and S
+  // (static teeth) phase offsets in the audio path (osc_mix.h) before they are
+  // added to the A/B phasors. At 1.0f (default, 100%) the offsets are
+  // unchanged (bit-identical regression-safe); at 0.f the whole FM MOD block
+  // is OFF regardless of FMCD/FMSA (both offsets are exactly 0). It scales the
+  // DEVIATION only, never the C/S rates (FMCR/FMST) or shapes (FM_CW).
+  float fm_amt;       // 0.f .. 1.f, edit FMAM (global FM MOD amount, LINEAR)
 
   // ---- Enrichment-2 (formant / comb) -----------------------------------------
   // All default to OFF (transparent) so the stock sound is bit-identical.
@@ -244,6 +252,8 @@ struct OscParamsData
       fm_c_depth   = 0.f;   // default: C OFF (no phase deviation)
       fm_static    = 0.f;   // default: S OFF (0 teeth, the (A+B) sum is unmodulated)
       fm_static_amp= 1.f;   // default: full amplitude (100%); with fm_static=0 the offset is 0
+      fm_amt       = 1.f;   // default: 100% -- the global FM MOD master is fully open
+                             // (C/S offsets pass through unchanged, bit-identical)
       // ---- Enrichment-2 defaults (all OFF, regression-safe) ----
       // FORM sits at the middle vowel, but the formant stage is fully DRY
       // (formant_wet = 0) so it contributes nothing until the user raises

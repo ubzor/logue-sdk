@@ -35,7 +35,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 53; // 53 = RATE..FM_SAMP (FM modulator C: CR/CW/CD + static teeth: ST/SA; shape shared with FM Mod Wave)
+      const EDIT_PARAM_COUNT = 54; // 54 = RATE..FM_AMT (FM modulator C: CR/CW/CD + static teeth: ST/SA; FMAM = global FM MOD amount; shape shared with FM Mod Wave)
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -93,7 +93,7 @@
         "Wave 2 LFO Shape", "Wave 2 LFO Gap",
         "Wave Mix LFO Rate", "Wave Mix LFO Depth",
         "Wave Mix LFO Shape", "Wave Mix LFO Gap",
-        "FM Mod Rate", "FM Mod Wave", "FM Mod Depth", "FM Teeth", "FM Teeth Depth",
+        "FM Mod Rate", "FM Mod Wave", "FM Mod Depth", "FM Teeth", "FM Teeth Depth", "FM Amount",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -141,7 +141,7 @@
         { title: "VOLUME",     col: 2, items: [15, 22, 23, 24, 8, 9, 34] },
         { title: "FILTER",     col: 2, items: [19, 20] },
         { title: "CLUSTER",    col: 2, items: [33] },
-        { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52] },
+        { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52, 53] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable

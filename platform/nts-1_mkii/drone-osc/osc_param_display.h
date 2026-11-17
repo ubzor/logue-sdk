@@ -43,7 +43,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "WLFS", "WLFG",
       "W2FS", "W2FG",
       "WMXR", "WMXD", "WMXS", "WMXG",
-      "FMCR", "FMCW", "FMCD", "FMST", "FMSA"};
+      "FMCR", "FMCW", "FMCD", "FMST", "FMSA", "FMAM"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -334,6 +334,10 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // below formats it (raw 0 -> "0%", like FM_CD). NOTE: the S tooth SHAPE is
   // shared with the C modulator (FM_CW / FM Mod Wave) and is not a separate
   // display parameter.
+  // FMAM (global FM MOD amount): 0..100% (LINEAR) -- the default percent
+  // branch below formats it (raw 0 -> "0%", like FM_CD/FMSA). The master
+  // multiplier on both the C (vibrato) and S (static teeth) phase offsets;
+  // 0% = the whole FM MOD block is off.
 
   int v;
   if (k == WAV1 || k == WAV2)

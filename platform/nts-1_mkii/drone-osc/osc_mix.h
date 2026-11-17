@@ -439,9 +439,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       else
         fm_c_wave = (osc_white() - 0.5f) * 2.f;
     }
-    // C phase offset on the sum (cycles): depth * max * centered C wave.
+    // C phase offset on the sum (cycles): depth * max * centered C wave,
+    // scaled by the GLOBAL FM MOD amount (p.fm_amt, edit FMAM, LINEAR 0..1).
+    // At fm_amt = 1.0 (default, 100%) the offset is unchanged (bit-identical);
+    // at 0 the C vibrato is fully muted by the master knob (regression-safe:
+    // fm_c_depth = 0 also gives 0, so both gates are independent).
     const float fm_c_offset = fm_c_active
-        ? (p.fm_c_depth * kFmCMaxCycles * fm_c_wave) : 0.f;
+        ? (p.fm_c_depth * kFmCMaxCycles * fm_c_wave * p.fm_amt) : 0.f;
     // FM modulator S (static teeth): a CARRIER-LOCKED FM oscillator. S runs at
     // p.fm_static (FMST) teeth per (A+B) carrier cycle; its phasor (fm_s_ph) is
     // advanced PER-VOICE by (teeth * w0_a) in the loop below (locked to the
@@ -528,7 +532,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
             case 2: s_wave = (osc_sinf(ph2pi) >= 0.f) ? 1.f : -1.f; break;     // SQR
             default: s_wave = (osc_white() - 0.5f) * 2.f; break;              // NOISE (per-sample)
           }
-          fm_s_offset = p.fm_static_amp * kFmStaticMaxCycles * s_wave;
+          // * p.fm_amt = the GLOBAL FM MOD amount (edit FMAM, LINEAR 0..1):
+          // the same master multiplier as on the C vibrato. At 1.0 (default)
+          // unchanged (bit-identical); at 0 the static comb is fully muted.
+          fm_s_offset = p.fm_static_amp * kFmStaticMaxCycles * s_wave * p.fm_amt;
         }
         else
         {

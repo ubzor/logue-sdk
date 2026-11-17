@@ -273,12 +273,21 @@ public:
     // 0..kFmStaticMaxCycles peak phase deviation. At 0 (or FMST = 0) S is off
     // (bit-identical). 0.05 cycles (5% of the carrier) is the full-scale peak.
     FM_SAMP,        // S tooth amplitude (LINEAR 0..100% -> 0..kFmStaticMaxCycles peak)
+    // ---- FM AMT: the GLOBAL FM MOD amount (master multiplier) ----------------
+    // FMAM is a single master knob (LINEAR 0..100%) that multiplies BOTH the C
+    // (vibrato) and S (static teeth) phase offsets before they are added to the
+    // A/B phasors. It is the block-level "how strongly is the FM MOD applied"
+    // control: 100% (default) = full C+S as set by FMCD/FMSA (bit-identical
+    // regression-safe); 0% = the whole FM MOD block is OFF (both offsets are
+    // exactly 0, the (A+B) sum is unmodulated) regardless of the individual C/S
+    // settings. It scales the DEVIATION only, never the C/S rates or shapes.
+    FM_AMT,         // global FM MOD amount (LINEAR 0..100%, default 100%)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
   // Number of editable DSP parameters (RATE_AMT..WMIX_LFO_GAP).
-  static constexpr uint8_t kEditParamCount = 53; // RATE_AMT..FM_SAMP
+  static constexpr uint8_t kEditParamCount = 54; // RATE_AMT..FM_AMT
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -355,12 +364,15 @@ public:
   // = 511 (~30 s); 44 (WMXR) = 0 (wave-mix LFO OFF — static mix, regression-
   // safe); 45 (WMXD) = 1023 (100% swing); 46 (WMXS) = 0 (Sin); 47 (WMXG) =
   // 511 (~30 s); 48 (FM_CR) = 0 (FM modulator C OFF — the (A+B) sum is
-  // unmodulated, regression-safe); 49 (FM_CW) = 0 (SIN); 50 (FM_CD) = 0 (OFF).
+  // unmodulated, regression-safe); 49 (FM_CW) = 0 (SIN); 50 (FM_CD) = 0 (OFF);
+  // 51 (FM_ST) = 0 (S OFF); 52 (FM_SA) = 1023 (100%, full tooth size — with
+  // FMST = 0 the offset is 0 anyway); 53 (FM_AMT) = 1023 (100% — the global FM
+  // MOD master is fully open, so C/S behave exactly as set, bit-identical).
   // At the factory preset the wave-mix LFO is OFF (rate = 0 Hz), so the
   // crossfade stays at the static WMIX value — bit-identical to the pre-LFO
   // sound; and FM modulator C is OFF (rate = 0), so the sum is bit-identical
   // to the pre-FM-C sound.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -371,7 +383,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the

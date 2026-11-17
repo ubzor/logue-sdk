@@ -523,6 +523,17 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // it re-uses params_.fm_c_wave (edit FM_CW / FM Mod Wave), so there is no
     // separate FM_SW case here.
 
+    // ---- FM AMT (FM_AMT / FMAM): the GLOBAL FM MOD amount -------------------
+    // The master multiplier (LINEAR 0..100%, raw 0..1) on BOTH the C (vibrato)
+    // and S (static teeth) phase offsets. The audio path (osc_mix.h) multiplies
+    // fm_c_offset and fm_s_offset by params_.fm_amt before adding them to the
+    // A/B phasors. At 1.0 (100%, default) the offsets are unchanged
+    // (bit-identical); at 0 (0%) the whole FM MOD block is OFF regardless of
+    // FMCD/FMSA. It scales the deviation only, never the C/S rates or shapes.
+    case FM_AMT:
+      params_.fm_amt = param_10bit_to_f32(value); // raw 0..1 LINEAR
+      break;
+
     default:
       break;
   }
