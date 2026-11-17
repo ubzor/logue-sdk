@@ -61,6 +61,48 @@
   // only open up near the top.
   static constexpr float    kFmCurveExp    = 2.0f;
 
+// ---- FM modulator C: phase-FM on the (A+B) SUM (the drone carrier) --------
+// C is an INDEPENDENT low-frequency oscillator (the modulator) that bends the
+// phase of the (A+B) sum (the carrier). Classic FM: C is NOT heard by itself,
+// it only produces sidebands on the carrier. This is a "vibrato / motion"
+// layer on top of the (untouched) cross-FM A+B timbre.
+//
+// FM_CR (rate): a LOG 0..1 Hz LFO-style knob. raw 0 = OFF (0 Hz, the sum is
+// unmodulated), raw 1023 = 1 Hz (full vibrato). The log scale (3 decades, like
+// the wave-LFO rate knobs) gives fine control near 0 and a full vibrato at the
+// top. 1 Hz is the ceiling: above it, on a low drone note, a SAW/SQR modulator
+// would start to be heard as its OWN tone (beating with the carrier), so 1 Hz
+// keeps C firmly in the "vibrato" range rather than "buzzing".
+  static constexpr float    kFmCRateMaxHz  = 1.0f;   // FM_CR raw 1023 -> 1 Hz
+  // FM_CD (depth): LINEAR 0..100% -> 0..kFmCMaxCycles peak phase deviation on
+  // the sum. 0.05 cycles (5% of the carrier) is a clearly-audible vibrato /
+  // motion without going into the harsh "screech" region (a full >0.1-cycle
+  // index is too aggressive for a slow drone vibrato). Applied as a PHASE
+  // offset on the sum (sample-and-hold re-timed by C), so the carrier itself is
+  // not blurred (unlike the kFmSmoothAlpha index low-pass).
+  static constexpr float    kFmCMaxCycles  = 0.05f;  // FM_CD 100% -> 0.05 cycles
+  // ---- FM modulator S (static teeth): a carrier-locked FM oscillator --------
+  // S is an oscillator whose RATE is LOCKED to the (A+B) carrier: it runs at
+  // N teeth per carrier cycle (FMST sets N, log-scaled kFmStaticMinTeeth..kFmStaticMaxTeeth).
+  // Its output phase-FMs the (A+B) sum, drawing N "teeth" of phase deviation
+  // per carrier cycle -- a STATIC harmonic comb (vibrato at a multiple of the
+  // note frequency, so it never drifts out of tune with the note). This is the
+  // static counterpart of C (which is a free-running low-frequency vibrato).
+  //
+  // FMST (teeth): LOG 0.05..kFmStaticMaxTeeth teeth per carrier cycle. raw 0 =
+  // OFF (0 teeth, the sum is unmodulated -- regression-safe). The log scale
+  // (4 decades) gives FINE control below 1 tooth (sub-octave: fm/fc < 1) up to
+  // a dense comb at the top (16). Teeth < 1 = the S modulator runs SLOWER than
+  // the carrier (fm/fc < 1) -- a deep, organ-like comb with sidebands that dip
+  // below the carrier; 1 tooth = in-tune (fm/fc = 1).
+  static constexpr float    kFmStaticMaxTeeth = 16.0f; // FMST raw 1023 -> 16 teeth/cycle
+  static constexpr float    kFmStaticMinTeeth = 0.05f; // FMST raw 1   -> 0.05 teeth/cycle (sub-octave)
+  // FMSA (amplitude): LINEAR 0..100% -> 0..kFmStaticMaxCycles peak phase
+  // deviation (the "size"/height of each tooth). 0.05 cycles (5% of the
+  // carrier) is a clearly-audible comb without harsh screech, matching the C
+  // modulator's kFmCMaxCycles. At FMSA = 0 (or FMST = 0) S is off (bit-identical).
+  static constexpr float    kFmStaticMaxCycles = 0.05f; // FMSA 100% -> 0.05 cycles peak
+
 // ---- Phase jitter (JIT): random phase wobble on A/B -------------------------
 // The JIT knob adds a per-sample random offset (white() - 0.5) * jit to each
 // voice's phasor increment, "smearing" the carrier into a dense set of

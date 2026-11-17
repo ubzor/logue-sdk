@@ -248,16 +248,16 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // sidebands (gated by RATE, like every other walk). At fm=0 & rfm=0 the FM
     // is fully off.
     case FM_A:
-      params_.fm_a = param_10bit_to_f32(value); // raw 0..1 depth (curve in the audio path)
+      params_.fm_a = param_10bit_to_f32(value); // raw 0..1 LOG depth (audio path: 10^(x*5-5)*0.2 cycles)
       break;
     case FM_B:
-      params_.fm_b = param_10bit_to_f32(value); // raw 0..1 depth (curve in the audio path)
+      params_.fm_b = param_10bit_to_f32(value); // raw 0..1 LOG depth (audio path: 10^(x*5-5)*0.2 cycles)
       break;
     case RFM_A:
-      params_.rfm_a = param_10bit_to_f32(value);
+      params_.rfm_a = param_10bit_to_f32(value); // raw 0..1 LINEAR depth (audio path: *0.2 cycles)
       break;
     case RFM_B:
-      params_.rfm_b = param_10bit_to_f32(value);
+      params_.rfm_b = param_10bit_to_f32(value); // raw 0..1 LINEAR depth (audio path: *0.2 cycles)
       break;
 
     // ---- Enrichment-2: formant vowel position (FORM) + dry/wet (FVOL) ----
@@ -463,6 +463,65 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // unnecessary; DCK is now a CONSTANT (kDuckConstant, osc_constants.h) and
     // no longer has an apply path. The audio path no longer references
     // params_.fold2_depth / params_.duck_amt.
+
+    // ---- FM modulator C: phase-FM on the (A+B) sum --------------------------
+    // C is an independent low-frequency oscillator that bends the sum's phase
+    // (vibrato / motion colour). C is NOT heard by itself. At FM_CR = 0 (OFF)
+    // the sum is unmodulated (regression-safe).
+    case FM_CR:
+      // LOG 0..1 Hz (raw 0 = OFF). 3 decades like the wave-LFO rate knobs:
+      // raw 0 -> 0 Hz, else 10^(3*raw/1023 - 3) * kFmCRateMaxHz (0.001..1 Hz).
+      params_.fm_c_rate = (value == 0)
+          ? 0.f
+          : (float)(fasterpowf(10.f, 3.f * param_10bit_to_f32(value) - 3.f) * kFmCRateMaxHz);
+      break;
+    case FM_CW:
+      // Wave shape: 0..511 = SIN, 512..767 = SAW, 768..1023 = SQR. (NOISE is
+      // the 4th shape, drawn per-sample from osc_white() in the audio path; the
+      // display / randomize treat raw >= 768 & < 1024 as the noise zone. We
+      // keep the same 3-band convention as the wave-LFO shape knobs for the
+      // first three, and add NOISE as raw 1024+ -- but since the knob is 10-bit
+      // (max 1023), NOISE is the TOP band: 870..1023. See getParameterStrValue.)
+      {
+        const uint8_t band = (value < 512) ? 0
+            : (value < 768) ? 1
+            : (value < 870) ? 2
+            : 3; // 870..1023 = NOISE
+        params_.fm_c_wave = band;
+      }
+      break;
+    case FM_CD:
+      params_.fm_c_depth = param_10bit_to_f32(value); // raw 0..1 LINEAR depth
+      break;
+
+    // ---- FM modulator S (FM_STATIC / FMST): TEETH per carrier cycle --------
+    // S is a carrier-locked FM oscillator: it runs at N teeth per (A+B) carrier
+    // cycle. LOG kFmStaticMinTeeth..kFmStaticMaxTeeth (raw 0 = OFF, 0 teeth ->
+    // the sum is unmodulated, bit-identical; raw 1023 -> kFmStaticMaxTeeth;
+    // raw 1 -> kFmStaticMinTeeth = 0.05 teeth). The log scale (4 decades,
+    // fasterpowf) gives FINE control below 1 tooth (sub-octave: the S modulator
+    // runs slower than the carrier, fm/fc < 1) up to a dense comb at the top.
+    // Teeth < 1 draw sidebands that dip below the carrier (deep/organ); 1 =
+    // in-tune (fm/fc = 1). Written to params_.fm_static (teeth).
+    case FM_STATIC:
+      params_.fm_static = (value == 0)
+          ? 0.f
+          : kFmStaticMinTeeth *
+                fasterpowf(kFmStaticMaxTeeth / kFmStaticMinTeeth, param_10bit_to_f32(value));
+      break;
+
+    // ---- FM modulator S amplitude (FM_SAMP / FMSA): tooth SIZE --------------
+    // The peak swing of each tooth. LINEAR 0..100% (raw 0..1). The audio path
+    // (osc_mix.h) computes the effective offset as
+    // params_.fm_static_amp * kFmStaticMaxCycles * S_wave, so FMSA sets the
+    // amplitude and FMST sets the tooth count. At 0 the offset is 0.
+    case FM_SAMP:
+      params_.fm_static_amp = param_10bit_to_f32(value); // raw 0..1 LINEAR
+      break;
+
+    // NOTE: the S (static teeth) tooth SHAPE is shared with the C modulator --
+    // it re-uses params_.fm_c_wave (edit FM_CW / FM Mod Wave), so there is no
+    // separate FM_SW case here.
 
     default:
       break;

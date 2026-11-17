@@ -42,7 +42,8 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "W2LR", "W2LD", "WMIX",
       "WLFS", "WLFG",
       "W2FS", "W2FG",
-      "WMXR", "WMXD", "WMXS", "WMXG"};
+      "WMXR", "WMXD", "WMXS", "WMXG",
+      "FMCR", "FMCW", "FMCD", "FMST", "FMSA"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -251,6 +252,88 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[n] = '\0';
     return buf;
   }
+
+  // ---- FM modulator C (FM_CR / FM_CW / FM_CD) -----------------------------
+  // FM_CR (rate): LOG 0..1 Hz. raw 0 -> "0 H", else Hz like the wave-LFO rate.
+  if (k == FM_CR)
+  {
+    if (raw == 0)
+    {
+      buf[0] = '0';
+      buf[1] = ' ';
+      buf[2] = 'H';
+      buf[3] = '\0';
+      return buf;
+    }
+    const float hz = fasterpowf(10.f, 3.f * param_10bit_to_f32(raw) - 3.f) * kFmCRateMaxHz;
+    if (hz >= 0.1f)
+    {
+      const int d = (int)(hz * 10 + 0.5f); // 1..10
+      buf[0] = (d >= 10) ? '1' : (char)('0' + d);
+      buf[1] = (d >= 10) ? ' ' : '.';
+      if (d >= 10) { buf[2] = 'H'; buf[3] = '\0'; }
+      else { buf[2] = (char)('0' + d); buf[3] = ' '; buf[4] = 'H'; buf[5] = '\0'; }
+      return buf;
+    }
+    const int mhz = (int)(hz * 1000 + 0.5f); // 1..999
+    buf[0] = '0';
+    buf[1] = '.';
+    int m = mhz < 1 ? 1 : (mhz > 999 ? 999 : mhz);
+    buf[2] = (char)('0' + m / 100);
+    buf[3] = (char)('0' + (m / 10) % 10);
+    buf[4] = (char)('0' + m % 10);
+    buf[5] = ' ';
+    buf[6] = 'H';
+    buf[7] = '\0';
+    return buf;
+  }
+  // FM_CW (wave): SIN / SAW / SQR / NOISE (band of the raw value).
+  if (k == FM_CW)
+  {
+    if (raw < 512) return "SIN";
+    if (raw < 768) return "SAW";
+    if (raw < 870) return "SQR";
+    return "NS"; // NOISE (the display width is tight; "NS" = noise)
+  }
+  // FM_CD (depth): 0..100% (LINEAR) -- the default branch formats it.
+
+  // ---- FM modulator S (FM_STATIC / FMST): TEETH per carrier cycle ----------
+  // LOG kFmStaticMinTeeth..kFmStaticMaxTeeth (raw 0 = OFF, 0 teeth). Display the
+  // tooth count so the user sees "how many teeth per A+B cycle": whole teeth
+  // >= 10 as "NN" (10..16), "N." (1..9, one fixed frac digit), "N.NN" (0.05..0.9).
+  // raw 0 -> "OFF". The log mapping mirrors apply_edit_param (FM_STATIC).
+  if (k == FM_STATIC)
+  {
+    if (raw == 0) return "OFF";
+    const float teeth = kFmStaticMinTeeth *
+        fasterpowf(kFmStaticMaxTeeth / kFmStaticMinTeeth, param_10bit_to_f32(raw));
+    if (teeth >= 9.5f) // 10..16 -> "NN"
+    {
+      const int t = (int)(teeth + 0.5f);
+      buf[0] = (char)('0' + t / 10);
+      buf[1] = (char)('0' + t % 10);
+      buf[2] = '\0';
+      return buf;
+    }
+    // < 10 teeth -> "N.F" (1..9) or "0.FF" (0.05..0.99), 1..2 frac digits.
+    int n = 0;
+    int whole = (int)teeth; // 0..9
+    int frac1 = (int)(teeth * 10.f) % 10; // first frac digit
+    buf[n++] = (char)('0' + whole);
+    buf[n++] = '.';
+    buf[n++] = (char)('0' + frac1);
+    if (whole < 1) // sub-tooth: show a second frac digit (0.NN)
+    {
+      const int frac2 = (int)(teeth * 100.f) % 10;
+      buf[n++] = (char)('0' + frac2);
+    }
+    buf[n] = '\0';
+    return buf;
+  }
+  // FMSA (S tooth amplitude): 0..100% (LINEAR) -- the default percent branch
+  // below formats it (raw 0 -> "0%", like FM_CD). NOTE: the S tooth SHAPE is
+  // shared with the C modulator (FM_CW / FM Mod Wave) and is not a separate
+  // display parameter.
 
   int v;
   if (k == WAV1 || k == WAV2)

@@ -144,14 +144,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // kFmCurveExp is 2.0f (see osc_constants.h), so the quadratic depth curve is
   // just x^2. We do NOT call libm powf(): it is emitted as a dynamic UND
   // symbol that the NTS-1 mkII runtime cannot resolve at load.
-  const float fm_a_curve  = (p.fm_a * p.fm_a) * kFmMaxCents; // 0..kFmMaxCents
-  const float fm_b_curve  = (p.fm_b * p.fm_b) * kFmMaxCents;
-  const float fm_a_static = fm_a_curve * 0.5f;  // static peak index (cycles)
-  const float fm_b_static = fm_b_curve * 0.5f;  // static peak index (cycles)
+  const float fm_a_curve  = fasterpowf(10.f, 5.f * p.fm_a - 5.f) * 0.2f; // LOG: 1e-5..0.2 cycles
+  const float fm_b_curve  = fasterpowf(10.f, 5.f * p.fm_b - 5.f) * 0.2f; // LOG: 1e-5..0.2 cycles
+  const float fm_a_static = fm_a_curve;  // static peak index (cycles) (no 0.5 normalization: the log curve already maps to 0.2 max)
+  const float fm_b_static = fm_b_curve;  // static peak index (cycles) (no 0.5 normalization: the log curve already maps to 0.2 max)
   const bool fm_a_wander = rw_active && p.rfm_a > 0.f;  // walk on FM A (RATE-gated)
   const bool fm_b_wander = rw_active && p.rfm_b > 0.f;  // walk on FM B (RATE-gated)
-  const float fm_a_wander_depth = p.rfm_a * kFmMaxCents * 0.5f;  // walk peak (cycles)
-  const float fm_b_wander_depth = p.rfm_b * kFmMaxCents * 0.5f;  // walk peak (cycles)
+  const float fm_a_wander_depth = p.rfm_a * 0.2f;  // walk peak (cycles) (LINEAR: 0..0.2)
+  const float fm_b_wander_depth = p.rfm_b * 0.2f;  // walk peak (cycles) (LINEAR: 0..0.2)
   // ---- JIT: per-block cache (the per-sample white() draws are in the loop) ----
   // The knob is L-rate; cache the > 0 gate so the loop's branch is a simple
   // const test. At 0 (default) the jitter is off and the phasor update is
@@ -404,12 +404,55 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // a single loop over the voices.
     float anchor_w_num = 0.f; // running sum(env * w0) over active voices
     float sub_env_focus = 0.f; // loudest (breath-focus) voice envelope, for SUBB
+    // Shared per-sample FM index (advance once, use for all voices).
+    const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
+    const float fm_b_wander = fm_b_wander ? (rw_[0].dev_a * rw_amt * fm_b_wander_depth) : 0.f;
+    const float fm_a_eff = fm_a_static + fm_a_wander;  // effective index (cycles)
+    const float fm_b_eff = fm_b_static + fm_b_wander;  // effective index (cycles)
+    // ---- FM modulator C: independent oscillator, phase-FMs the (A+B) SUM ----
+    // C is the modulator, (A+B) is the carrier. C is NOT heard by itself -- it
+    // only bends the sum's phase (a sample-and-hold re-timed by C), producing
+    // classic FM sidebands (vibrato / motion colour) on top of the (untouched)
+    // cross-FM A+B timbre. Advance C's phasor ONCE per sample, shared by the
+    // whole cluster (C is a single shared modulator, not per-voice). At
+    // p.fm_c_rate = 0 (default) the phasor holds and c_wave = 0, so the sum is
+    // unmodulated (regression-safe: the phase offset is exactly 0).
+    const bool fm_c_active = (p.fm_c_rate > 0.f) && (p.fm_c_depth > 0.f);
+    float fm_c_wave = 0.f;   // C oscillator output (centered, ~[-1,+1] / [0,1])
+    if (fm_c_active)
     {
-      // Shared per-sample FM index (advance once, use for all voices).
-      const float fm_a_wander = fm_a_wander ? (rw_[0].dev_b * rw_amt * fm_a_wander_depth) : 0.f;
-      const float fm_b_wander = fm_b_wander ? (rw_[0].dev_a * rw_amt * fm_b_wander_depth) : 0.f;
-      const float fm_a_eff = fm_a_static + fm_a_wander;  // effective index (cycles)
-      const float fm_b_eff = fm_b_static + fm_b_wander;  // effective index (cycles)
+      // Advance C's phase (per-sample). kFmCRateMaxHz is folded into fm_c_rate
+      // (apply_edit_param already maps raw -> Hz), so fm_c_rate is Hz here.
+      fm_c_ph += p.fm_c_rate * (1.f / 48000.f);
+      if (fm_c_ph >= 1.f) fm_c_ph -= 1.f;
+      // C wave shape (centered where it matters for a phase offset):
+      //   SIN:  sin(2*pi*ph)              -> [-1,+1], zero-mean
+      //   SAW:  2*ph - 1                  -> [-1,+1], zero-mean
+      //   SQR:  sign(sin(2*pi*ph))        -> {-1,+1}, zero-mean
+      //   NOISE: (white - 0.5) * 2        -> [-1,+1], zero-mean, per-sample
+      if (p.fm_c_wave == 0)
+        fm_c_wave = osc_sinf(6.283185307179586f * fm_c_ph);
+      else if (p.fm_c_wave == 1)
+        fm_c_wave = 2.f * fm_c_ph - 1.f;
+      else if (p.fm_c_wave == 2)
+        fm_c_wave = (osc_sinf(6.283185307179586f * fm_c_ph) >= 0.f) ? 1.f : -1.f;
+      else
+        fm_c_wave = (osc_white() - 0.5f) * 2.f;
+    }
+    // C phase offset on the sum (cycles): depth * max * centered C wave.
+    const float fm_c_offset = fm_c_active
+        ? (p.fm_c_depth * kFmCMaxCycles * fm_c_wave) : 0.f;
+    // FM modulator S (static teeth): a CARRIER-LOCKED FM oscillator. S runs at
+    // p.fm_static (FMST) teeth per (A+B) carrier cycle; its phasor (fm_s_ph) is
+    // advanced PER-VOICE by (teeth * w0_a) in the loop below (locked to the
+    // carrier so the comb stays in tune with the note). The S wave is generated
+    // per sample (the shared phasor, so it is phase-coherent across the cluster)
+    // and the per-sample offset is fm_static_amp (FMSA) * kFmStaticMaxCycles *
+    // S_wave cycles. At p.fm_static = 0 (default, OFF) or p.fm_static_amp = 0
+    // the offset is 0 (bit-identical). The offset is declared here (0) and
+    // updated inside the loop after the phasor advances.
+    float fm_s_offset = 0.f;   // S phase offset on the sum (cycles), per sample
+    {
       // Per-voice JIT: each voice draws its OWN white() so the notes are not
       // phase-locked (a shared draw would beat them together). (Plain arrays,
       // not const — they are written inside the loop below.)
@@ -461,18 +504,62 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
           w0_b = vw0 * det_f_b_;
         }
 
+        // ---- FM modulator S: advance the carrier-locked phasor + S wave -----
+        // S runs at (teeth) x the carrier rate: advance the SHARED phasor by
+        // (teeth * w0_a) so it completes N cycles per A cycle (locked to the
+        // note, never drifting out of tune). Then generate the S wave (centered,
+        // ~[-1,+1]) and the per-sample offset on the (A+B) sum. When S is OFF
+        // (teeth = 0 or amp = 0) the offset stays 0 (bit-identical) and the
+        // phasor holds. The shared phasor means the comb is phase-coherent
+        // across the whole cluster (every voice's A+B is modulated in phase).
+        if (p.fm_static > 0.f && p.fm_static_amp > 0.f)
+        {
+          fm_s_ph += p.fm_static * w0_a;
+          fm_s_ph -= fast_floorf(fm_s_ph); // wrap to [0,1)
+          // The tooth SHAPE is shared with the C modulator (p.fm_c_wave, edit
+          // FM_CW / FM Mod Wave): 0=SIN, 1=SAW, 2=SQR, 3=NOISE. This lets the
+          // user shape the static comb with the SAME wave knob as the vibrato.
+          const float ph2pi = 6.283185307179586f * fm_s_ph;
+          float s_wave = 0.f;
+          switch (p.fm_c_wave)
+          {
+            case 0: s_wave = osc_sinf(ph2pi); break;                          // SIN
+            case 1: s_wave = 2.f * fm_s_ph - 1.f; break;                      // SAW
+            case 2: s_wave = (osc_sinf(ph2pi) >= 0.f) ? 1.f : -1.f; break;     // SQR
+            default: s_wave = (osc_white() - 0.5f) * 2.f; break;              // NOISE (per-sample)
+          }
+          fm_s_offset = p.fm_static_amp * kFmStaticMaxCycles * s_wave;
+        }
+        else
+        {
+          fm_s_offset = 0.f; // S OFF: no offset, phasor holds (bit-identical)
+        }
+
         // ---- Phase-FM (shared index, per-voice lookback state) --------------
         const float fm_a_raw = v.prev_wav_b * fm_a_eff;
         const float fm_b_raw = v.prev_wav_a * fm_b_eff;
         v.fm_smooth_a += kFmSmoothAlpha * (fm_a_raw - v.fm_smooth_a);
         v.fm_smooth_b += kFmSmoothAlpha * (fm_b_raw - v.fm_smooth_b);
 
-        // ---- Advance A/B phasors (+FM smoothed +JIT), wrap to [0,1) --------
-        // (The modular fast_floorf wrap handles the signed FM/JIT offsets so
+        // ---- Advance A/B phasors (+FM smoothed +JIT +C), wrap to [0,1) -----
+        // (The modular fast_floorf wrap handles the signed FM/JIT/C offsets so
         //  the phasor stays in [0,1) for any finite input — see the original
         //  wrap comment; one fast_floorf per phasor per sample.)
-        v.ph_a += w0_a + v.fm_smooth_a + jit_a[vi];
-        v.ph_b += w0_b + v.fm_smooth_b + jit_b[vi];
+        // FM modulator C: the SHARED c phase offset (fm_c_offset, cycles) is
+        // added to BOTH A and B phasors. Because A and B are summed to form
+        // the carrier, offsetting both by the same amount re-times the SUM --
+        // this is the C vibrato on the (A+B) carrier. When fm_c_offset == 0
+        // (C OFF) this is a no-op and the phasors are bit-identical to the
+        // pre-FM-C sound. (C is a single shared modulator, so the same offset
+        // is applied to every voice -- the cluster moves as one drone.)
+        // fm_s_offset is the S (static teeth) phase offset (a carrier-locked
+        // harmonic comb); fm_c_offset is C's free-running vibrato. Both are
+        // added to A and B, so the (A+B) sum carries the static comb plus the C
+        // vibrato on top. When both are 0 the phasors are bit-identical to the
+        // pre-FM sound. (Both are single shared modulators, so the same offset
+        // is applied to every voice -- the cluster moves as one drone.)
+        v.ph_a += w0_a + v.fm_smooth_a + jit_a[vi] + fm_c_offset + fm_s_offset;
+        v.ph_b += w0_b + v.fm_smooth_b + jit_b[vi] + fm_c_offset + fm_s_offset;
         v.ph_a -= fast_floorf(v.ph_a);
         v.ph_b -= fast_floorf(v.ph_b);
 
@@ -573,6 +660,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // (not N per-voice voices), so there is no N-fold growth to compensate. A
     // single note -> env=1 -> exactly the old single-note sub level; N notes
     // -> one stable fundamental under the cluster (no N-fold low-end growth).
+    // (FM modulator C's phase offset is applied to the (A+B) sum in the voice
+    // loop above: each voice's A/B phasors are advanced with + fm_c_offset, so
+    // `mix` already carries the C vibrato. When C is OFF, fm_c_offset == 0 and
+    // this is bit-identical to the pre-FM-C sound.)
     const float mix  = kMixOsc * (sum_main * env_comp_);
     // RMOD: A*B ring-mod DERIVED voice (summed per-voice), MAIN-ducked.
     const float ring_out = rmod_active ? (sum_ring * env_comp_) * p.ring_mix * p.main_level : 0.f;
@@ -627,9 +718,12 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // callback is a stub now), so the sub runs at a constant rate (no
       // "swell"). kSubLfoFmCents / Detune::factor(lfo_fm_cents) are gone with
       // the LFO-FM.
+      // (FM on the SUB phasors was removed: a phase shift of a pure sub only
+      // moves its PITCH — it reads as the bass going out of tune, not as FM
+      // color. The sub runs at a constant rate.)
       sub_ph += sub_anchor_w0 * kSubW0Scale;
       sub_ph -= fast_floorf(sub_ph);
-      // SUB2 (f/4) phasor: stable low-end anchor, no LFO-FM.
+      // SUB2 (f/4) phasor: stable low-end anchor.
       sub_ph2 += sub_anchor_w0 * 0.25f;
       sub_ph2 -= fast_floorf(sub_ph2);
     }
@@ -700,6 +794,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       const float ln2 = 0.6931471805599453f;
       const float e = oct_dev * ln2;
       const float scale = 1.f + e + (e * e * 0.5f);
+      // (FM bus on the SVF cutoff was REMOVED -- see osc_params.h.)
       float cc_w = svf_.cc * scale;
       if (cc_w < Svf::kCcMin) cc_w = Svf::kCcMin;
       else if (cc_w > Svf::kCcMax) cc_w = Svf::kCcMax;
@@ -748,9 +843,11 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // fixed member (kCombDelayMaxSmp floats); the read index is a fast mask.
     if (p.comb_fb > 0.f)
     {
-      // Write the current sample, read the delayed sample kCombDelaySmp back.
+      // (FM bus on the comb resonator delay was REMOVED -- see osc_params.h.)
+      const uint32_t comb_delay_smp = kCombDelaySmp;
+      // Write the current sample, read the delayed sample comb_delay_smp back.
       comb_buf_[comb_w_] = y_filt;
-      const uint32_t r = (comb_w_ + (kCombDelayMaxSmp - kCombDelaySmp)) & (kCombDelayMaxSmp - 1U);
+      const uint32_t r = (comb_w_ + (kCombDelayMaxSmp - comb_delay_smp)) & (kCombDelayMaxSmp - 1U);
       const float yd = comb_buf_[r];
       comb_w_ = (comb_w_ + 1U) & (kCombDelayMaxSmp - 1U);
       // IIR comb: y = in + fb * delayed (one feedback tap).

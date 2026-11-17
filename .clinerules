@@ -15,7 +15,7 @@
 | `drone-chain/`     | **WEB-ONLY** — единый web-sим OSC→MOD→DEL→REV (итоговый UI) |
 
 Код DSP ищем в первую очередь в `drone-osc/`; ARM-юниты — в `drone-*/`;
-UI симулятора — в `drone-chain/` (shell — `websim/index.html`).
+UI симулятора — в `drone-chain/` (shell — `/var/www/logue-sdk/websim/index.html`).
 
 ## Структура `drone-osc/`
 - `header.c` — заголовок юнита (имя, параметры, инициализация, callback'и).
@@ -106,9 +106,9 @@ int32_t unit_get_param_value(uint8_t id) {
 
 ### Web-симулятор
 С 2026-11-10 **итоговый** web-симулятор — `drone-chain/` (единая страница,
-полный путь OSC→MOD→DEL→REV). Shell — **`websim/index.html`** (chain-simulator,
+полный путь OSC→MOD→DEL→REV). Shell — **`/var/www/logue-sdk/websim/index.html`** (chain-simulator,
 см. `drone-chain/Makefile`, `--shell-file $(SANDBOXDIR)/index.html`).
-**Все правки UI итогового симулятора делать в `websim/index.html`.**
+**Все правки UI итогового симулятора делать в `/var/www/logue-sdk/websim/index.html`.**
 
 `websim/osc.html` — **legacy standalone-шелл для `drone-osc/sim/`**,
 откатан к аутентичной KORG-версии (commit `58dc94f`), **не редактируется**:

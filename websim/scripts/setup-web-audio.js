@@ -35,7 +35,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 48; // 48 = RATE..WMIX_LFO_GAP
+      const EDIT_PARAM_COUNT = 53; // 53 = RATE..FM_SAMP (FM modulator C: CR/CW/CD + static teeth: ST/SA; shape shared with FM Mod Wave)
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -93,6 +93,7 @@
         "Wave 2 LFO Shape", "Wave 2 LFO Gap",
         "Wave Mix LFO Rate", "Wave Mix LFO Depth",
         "Wave Mix LFO Shape", "Wave Mix LFO Gap",
+        "FM Mod Rate", "FM Mod Wave", "FM Mod Depth", "FM Teeth", "FM Teeth Depth",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -140,6 +141,7 @@
         { title: "VOLUME",     col: 2, items: [15, 22, 23, 24, 8, 9, 34] },
         { title: "FILTER",     col: 2, items: [19, 20] },
         { title: "CLUSTER",    col: 2, items: [33] },
+        { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52] },
       ];
 
       // Format the raw 10-bit value (0..1023) of one of the 37 editable
@@ -215,12 +217,31 @@
           return String(Math.round((raw / 1023) * 300)); // 300 = kSatuMax*100 (SATU)
         // (CHSAT/CHFLD/CINT/CINT2 were removed — the chord/interval concept is gone.)
         if (idx === 27 || idx === 28) {
-          // FM1 / FM2 (edit 27/28): phase-FM index, 0..kFmMaxCents/2 cycles
-          // (0..0.05 c at kFmMaxCents=0.1, mirrors the constant in osc.h).
-          // Display the ACTUAL depth after the quadratic kFmCurveExp (2.0)
-          // curve that the audio path applies: powf(raw/1023, 2) * kFmMaxCents.
-          // Low knob -> ~0c (near-silent "breathing"), full knob -> 0.1c.
-          return (Math.pow(raw / 1023, 2) * 0.1).toFixed(2) + "c";
+          // FM1 / FM2 (edit 27/28): phase-FM index, LOG scale 1e-5..0.2 cycles.
+          // Mirrors the DSP (osc_mix.h): 10^(x*5 - 5) * 0.2 cycles,
+          // where x = raw/1023 (raw 0 = OFF, raw 1023 = 0.2 cycles).
+          if (raw === 0) return "0";
+          const cycles = Math.pow(10, 5 * (raw / 1023) - 5) * 0.2;
+          if (cycles < 0.0001) {
+            // "0.00001" .. "0.00010" (1e-5 .. 1e-4)
+            const d = Math.max(1, Math.min(10, Math.round(cycles * 100000)));
+            return "0.000" + d;
+          } else if (cycles < 0.001) {
+            // "0.0001" .. "0.0010" (1e-4 .. 1e-3)
+            const d = Math.max(10, Math.min(100, Math.round(cycles * 100000)));
+            return "0.000" + (d < 100 ? d : "0" + (d % 10));
+          } else if (cycles < 0.01) {
+            // "0.001" .. "0.010" (1e-3 .. 1e-2)
+            const d = Math.max(10, Math.min(100, Math.round(cycles * 1000)));
+            return "0.00" + (d < 100 ? d : "0" + (d % 10));
+          } else if (cycles < 0.1) {
+            // "0.01" .. "0.10" (1e-2 .. 1e-1)
+            const d = Math.max(10, Math.min(100, Math.round(cycles * 100)));
+            return "0.0" + (d < 100 ? d : "0" + (d % 10));
+          } else {
+            // "0.1" .. "0.2" (0.1 .. 0.2)
+            return cycles.toFixed(1);
+          }
         }
         if (idx === 19) {
           // FCUT (edit 19): SVF cutoff (log-mapped 80 Hz .. 12 kHz). Hz or kHz.
@@ -273,7 +294,37 @@
           const sec = Math.round(Math.pow(300, raw / 1023));
           return Math.max(1, Math.min(300, sec)) + " s";
         }
-        // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
+        if (idx === 48) {
+          // FM Mod Rate (edit 48): LOG 0..1 Hz (raw 0 = OFF). Mirrors the DSP
+          // (osc_param_apply.h, case FM_CR): 10^(3*raw/1023 - 3) Hz.
+          if (raw === 0) return "0 H";
+          const hz = Math.pow(10, 3 * (raw / 1023) - 3);
+          if (hz >= 0.1) return (hz >= 1 ? "1" : "0." + Math.round(hz * 10)) + " H";
+          return "0." + String(Math.max(1, Math.min(999, Math.round(hz * 1000)))).padStart(3, "0") + " H";
+        }
+        if (idx === 49) {
+          // FM Mod Wave (edit 49): SIN / SAW / SQR / NOISE (raw band).
+          if (raw < 512) return "SIN";
+          if (raw < 768) return "SAW";
+          if (raw < 870) return "SQR";
+          return "NOISE";
+        }
+        if (idx === 51) {
+          // FM Teeth (edit 51): LOG 0.05..16 teeth per carrier cycle (raw 0 = OFF).
+          // Mirrors the DSP (osc_param_apply.h, case FM_STATIC):
+          // 0.05 * (16/0.05)^(raw/1023). Teeth < 1 = sub-octave (fm/fc < 1).
+          if (raw === 0) return "OFF";
+          const teeth = 0.05 * Math.pow(16 / 0.05, raw / 1023);
+          if (teeth >= 9.5) return String(Math.round(teeth)); // 10..16 whole
+          if (teeth >= 1) return (Math.floor(teeth) + "." + Math.floor(teeth * 10) % 10); // N.F
+          return (Math.floor(teeth * 10) / 10).toFixed(2); // 0.NN
+        }
+        // idx === 50 (FM Mod Depth) and idx === 52 (FM Teeth Depth) fall through
+        // to the 0..100% default below. NOTE: the S (static teeth) shape is
+        // shared with FM Mod Wave (idx 49), so there is no separate FM Teeth
+        // Shape parameter.
+        // Every other index formats as 0..100%:
+        // 0..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN, default 100%),
         // 16..18 (RWAV/RDRV/RFLD), 21 (RWFC), 22..24 (Breath),
         // 25 (JIT), 26 (RMOD), 29..30 (RFMA/RFMB), 32 (FVOL), 33 (COMB),
@@ -542,6 +593,47 @@
 
           (targetEl || document.getElementById("Parameters")).appendChild(container);
           (targetEl || document.getElementById("Parameters")).appendChild(gapRow);
+          return;
+        }
+
+        // ---- FM Mod Wave (edit 49): radio group SIN/SAW/SQR/NOISE -----------
+        // Same pattern as the WAVE bank A..F radio group (index 13): one
+        // <input type="radio" class="octave-join-item btn ..."> per shape.
+        // No #editparam_49 slider is created; applyPresetRaw / fireRandom
+        // special-case index 49 (they walk #editparam_<i> by index).
+        if (index === 49) {
+          const shapes = [
+            { label: "SIN",   raw: 0    },
+            { label: "SAW",   raw: 640  },
+            { label: "SQR",   raw: 800  },
+            { label: "NOISE", raw: 950  },
+          ];
+          const group = document.createElement("div");
+          group.className = "octave-join drop-shadow flex-1 min-w-0";
+          const radios = [];
+          shapes.forEach((s) => {
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "FmModWave";
+            radio.value = String(s.raw);
+            radio.className = "octave-join-item btn btn-soft btn-primary btn-xs flex-1 min-w-0";
+            radio.setAttribute("aria-label", s.label);
+            group.appendChild(radio);
+            radios.push(radio);
+          });
+          container.appendChild(group);
+          const setChecked = (shapeIdx) => {
+            const si = Math.max(0, Math.min(3, shapeIdx | 0));
+            for (let i = 0; i < radios.length; i++) radios[i].checked = (i === si);
+          };
+          window._setFmModWaveChecked = setChecked;
+          const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
+          const initShape = initRaw < 512 ? 0 : (initRaw < 768 ? 1 : (initRaw < 870 ? 2 : 3));
+          setChecked(initShape);
+          radios.forEach((radio, si) => {
+            radio.onchange = () => apply(shapes[si].raw);
+          });
+          (targetEl || document.getElementById("Parameters")).appendChild(container);
           return;
         }
 
@@ -1156,6 +1248,20 @@
         // COMB: 0..30% (raw 0..307) -- a gentle resonance, never the ringy
         // fb>0.7 zone that "rings" harshly.
         set("Comb Res", rRange(0, 307));
+        // ---- FM modulator C (48/49/50): gentle windows ----------------------
+        // FM Mod Rate: 0..~30% (raw 0..307) -- a slow vibrato; 0 (OFF) is a
+        // valid draw (most re-rolls leave C off, a few add gentle motion).
+        set("FM Mod Rate", rRange(0, 307));
+        // FM Mod Wave: any of the 4 shapes (raw 0..1023 spans SIN/SAW/SQR/NOISE).
+        set("FM Mod Wave", rRange(0, 1023));
+        // FM Mod Depth: 0..50% (raw 0..511) -- a subtle vibrato.
+        set("FM Mod Depth", rRange(0, 511));
+        // FM Teeth: 0..~10 teeth (raw 0..614) -- a sparse comb; 0 (OFF) is a
+        // valid draw (most re-rolls leave S off, a few add a static comb).
+        set("FM Teeth", rRange(0, 614));
+        // FM Teeth Depth: 25..100% (raw 256..1023) -- the tooth size; low values
+        // are barely audible, so draw the upper half.
+        set("FM Teeth Depth", rRange(256, 1023));
         return raws;
       }
 
@@ -1255,6 +1361,12 @@
                                         : window._setLfoShape2Checked;
               const shapeIdx = raws[i] < 512 ? 0 : (raws[i] < 768 ? 1 : 2);
               if (setter) setter(shapeIdx);
+            } else if (i === 49) {
+              // FM Mod Wave: no #editparam_49 slider exists (it is the
+              // SIN/SAW/SQR/NOISE radio group) — re-check the radio.
+              const setter = window._setFmModWaveChecked;
+              const shapeIdx = raws[i] < 512 ? 0 : (raws[i] < 768 ? 1 : (raws[i] < 870 ? 2 : 3));
+              if (setter) setter(shapeIdx);
             } else if (el) {
               el.value = raws[i];
               const span = el.parentElement.querySelector("span");
@@ -1315,7 +1427,7 @@
       function highlightSlider(i) {
         // The WAVE / WAVE 2 radio groups have no slider to recolor (indices
         // 13 / 14 are rendered as A..F radios, not range inputs) — skip.
-        if (i === WAVE_PARAM_IDX || i === WAVE2_PARAM_IDX) return;
+        if (i === WAVE_PARAM_IDX || i === WAVE2_PARAM_IDX || i === 49) return;
         const el = document.getElementById("editparam_" + i);
         if (el && !morphingSliders.has(el)) {
           el.classList.remove("range-primary");
@@ -1367,6 +1479,17 @@
                                         : window._setLfoShape2Checked;
               if (setter) {
                 const shapeIdx = v < 512 ? 0 : (v < 768 ? 1 : 2);
+                setter(shapeIdx);
+                dirty = true;
+              }
+              continue;
+            }
+            if (i === 49) {
+              // FM Mod Wave: no #editparam_49 slider exists (it is the
+              // SIN/SAW/SQR/NOISE radio group). Re-check the radio.
+              const setter = window._setFmModWaveChecked;
+              if (setter) {
+                const shapeIdx = v < 512 ? 0 : (v < 768 ? 1 : (v < 870 ? 2 : 3));
                 setter(shapeIdx);
                 dirty = true;
               }

@@ -137,6 +137,32 @@ struct OscParamsData
   // purely "breathing".
   float rfm_a;        // 0.f .. 1.f, edit RFMA (random-walk depth on FM A)
   float rfm_b;        // 0.f .. 1.f, edit RFMB (random-walk depth on FM B)
+  // ---- FM modulator C: an INDEPENDENT oscillator that phase-FMs the (A+B)
+  //  SUM (the drone carrier). Classic FM: C is the modulator, A+B the carrier.
+  //  C is NOT heard by itself -- it only bends the sum's phase for vibrato /
+  //  motion colour on top of the (untouched) cross-FM A+B timbre. The audio
+  //  path (osc_mix.h) advances a C phasor at fm_c_rate and adds
+  //  fm_c_depth * kFmCMaxCycles * C_wave to the sum's phase. At fm_c_rate = 0
+  //  (default) C is off and the stock sound is bit-identical. (This is the
+  //  "dedicated, always-running modulator" the former FM bus was removed for.)
+  float fm_c_rate;    // 0.f .. 1.f, edit FMCR (C frequency, LOG 0..1 Hz)
+  uint8_t fm_c_wave;  // 0=SIN, 1=SAW, 2=SQR, 3=NOISE, edit FMCW
+  float fm_c_depth;   // 0.f .. 1.f, edit FMCD (C depth, LINEAR)
+  // ---- FM modulator S (static teeth): a carrier-locked FM oscillator --------
+  // S's rate is LOCKED to the (A+B) carrier: it runs at `fm_static` teeth per
+  // carrier cycle (FMST, log kFmStaticMinTeeth..kFmStaticMaxTeeth; <1 =
+  // sub-octave, fm/fc < 1), phase-FMing the (A+B) sum with N teeth of
+  // deviation per cycle (a static harmonic comb). The audio
+  // path (osc_mix.h) advances an S phasor by `fm_static` x the A phasor advance
+  // per sample and adds `fm_static_amp * kFmStaticMaxCycles * S_wave` to both
+  // A and B phasors. At fm_static = 0 (default) or fm_static_amp = 0 S is off
+  // (bit-identical). Combined with C: S is the static (note-locked) comb, C is
+  // the free-running low-frequency vibrato.
+  float fm_static;    // 0.f .. kFmStaticMaxTeeth, edit FMST (teeth per carrier cycle, LOG 0.05..16)
+  float fm_static_amp; // 0.f .. 1.f, edit FMSA (tooth amplitude / FM depth, LINEAR)
+  // NOTE: the tooth SHAPE is shared with the C modulator (fm_c_wave, edit FM_CW
+  // / FM Mod Wave) -- S re-uses the same SIN/SAW/SQR/NOISE selector, so there
+  // is no separate fm_static_wave field.
 
   // ---- Enrichment-2 (formant / comb) -----------------------------------------
   // All default to OFF (transparent) so the stock sound is bit-identical.
@@ -212,6 +238,12 @@ struct OscParamsData
       fm_b         = 0.f;   // default: static phase-FM off (B)
       rfm_a        = 0.f;   // default: FM-A walk off (pure static FM)
       rfm_b        = 0.f;   // default: FM-B walk off (pure static FM)
+      // ---- FM modulator C defaults (OFF, regression-safe) ----
+      fm_c_rate    = 0.f;   // default: C OFF (the (A+B) sum is unmodulated)
+      fm_c_wave    = 0;     // default: SIN
+      fm_c_depth   = 0.f;   // default: C OFF (no phase deviation)
+      fm_static    = 0.f;   // default: S OFF (0 teeth, the (A+B) sum is unmodulated)
+      fm_static_amp= 1.f;   // default: full amplitude (100%); with fm_static=0 the offset is 0
       // ---- Enrichment-2 defaults (all OFF, regression-safe) ----
       // FORM sits at the middle vowel, but the formant stage is fully DRY
       // (formant_wet = 0) so it contributes nothing until the user raises

@@ -252,12 +252,33 @@ public:
     WMIX_LFO_DEPTH, // wave-mix LFO swing depth (0..100%, default 100%)
     WMIX_LFO_SHAPE, // wave-mix LFO shape (0=SIN, 1=S, 2=WALK; default SIN)
     WMIX_LFO_GAP,   // wave-mix WALK: mean seconds between points (LOG 1..300 s)
+    // ---- FM modulator C: an INDEPENDENT oscillator that phase-FMs the
+    // (A+B) SUM (the drone carrier). Classic FM: C is the modulator, A+B is
+    // the carrier. C is NOT heard by itself (pure phase modulation, like the
+    // DX7 modulator) -- it only bends the sum's phase for vibrato / motion
+    // colour on top of the (untouched) cross-FM A+B timbre. At FM_CR = 0
+    // (default) C is off and the stock sound is bit-identical.
+    FM_CR,          // C frequency (LOG 0..1 Hz; raw 0 = OFF)
+    FM_CW,          // C wave shape (0=SIN, 1=SAW, 2=SQR, 3=NOISE)
+    FM_CD,          // C depth (LINEAR 0..100% -> 0..kFmCMaxCycles phase peak)
+    // ---- FM modulator S (static teeth): a CARRIER-LOCKED FM oscillator ------
+    // S's rate is locked to the (A+B) carrier: FMST sets N teeth per carrier
+    // cycle (LOG kFmStaticMinTeeth..kFmStaticMaxTeeth; raw 0 = OFF). Teeth < 1
+    // = sub-octave (fm/fc < 1, a deep organ-like comb); 1 = in-tune. The audio
+    // path advances an S phasor by N x the A phasor advance per sample and
+    // phase-FMs the (A+B) sum with N teeth of deviation per cycle (a static
+    // harmonic comb, the static counterpart of C's free-running vibrato).
+    FM_STATIC,      // S teeth per carrier cycle (LOG 0.05..16; raw 0 = OFF; <1 = sub-octave)
+    // FMSA (amplitude): the SIZE (peak swing) of each tooth. LINEAR 0..100% ->
+    // 0..kFmStaticMaxCycles peak phase deviation. At 0 (or FMST = 0) S is off
+    // (bit-identical). 0.05 cycles (5% of the carrier) is the full-scale peak.
+    FM_SAMP,        // S tooth amplitude (LINEAR 0..100% -> 0..kFmStaticMaxCycles peak)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
   // Number of editable DSP parameters (RATE_AMT..WMIX_LFO_GAP).
-  static constexpr uint8_t kEditParamCount = 48; // RATE_AMT..WMIX_LFO_GAP
+  static constexpr uint8_t kEditParamCount = 53; // RATE_AMT..FM_SAMP
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -333,10 +354,13 @@ public:
   // 41 (WLFG) = 511 (~30 s, default walk gap); 42 (W2FS) = 0 (Sin); 43 (W2FG)
   // = 511 (~30 s); 44 (WMXR) = 0 (wave-mix LFO OFF — static mix, regression-
   // safe); 45 (WMXD) = 1023 (100% swing); 46 (WMXS) = 0 (Sin); 47 (WMXG) =
-  // 511 (~30 s). At the factory preset the wave-mix LFO is OFF (rate = 0 Hz),
-  // so the crossfade stays at the static WMIX value — bit-identical to the
-  // pre-LFO sound.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511};
+  // 511 (~30 s); 48 (FM_CR) = 0 (FM modulator C OFF — the (A+B) sum is
+  // unmodulated, regression-safe); 49 (FM_CW) = 0 (SIN); 50 (FM_CD) = 0 (OFF).
+  // At the factory preset the wave-mix LFO is OFF (rate = 0 Hz), so the
+  // crossfade stays at the static WMIX value — bit-identical to the pre-LFO
+  // sound; and FM modulator C is OFF (rate = 0), so the sum is bit-identical
+  // to the pre-FM-C sound.
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -347,7 +371,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -639,6 +663,8 @@ public:
   Sub2Voice  sub2;             // shared f/4 saturated / LPF'd / gated sub voice
   float      sub_anchor_w0 = 0.f; // one-pole relaxed anchor rate (0..w0) — the pitch the sub phasors advance at
   float      sub_breath_gain = 1.f;  // one-pole relaxed SUBB breath gain (1.0 = static)
+  float      fm_c_ph = 0.f;   // FM modulator C phasor (0..1): independent LFO-style oscillator that phase-FMs the (A+B) sum
+  float      fm_s_ph = 0.f;   // FM modulator S phasor (0..1): carrier-locked "static teeth" oscillator (N teeth per A cycle) that phase-FMs the (A+B) sum
   Voice voice_[kVoiceCount];
   // Shared K-rate static-detune FACTORS (the DETU knob, applied per-voice in
   // the audio path as w0_a = v.w0 * det_f_a_). These are pure factors

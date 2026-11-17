@@ -169,6 +169,22 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 41: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WLFG  ~10..200 s
     case 43: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // W2FG  ~10..200 s
     case 47: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WMXG  ~10..200 s
+    // ---- FM modulator C (48/49/50): gentle windows ------------------------
+    // FM_CR: 0..~30% (raw 0..307) -- a slow vibrato, never the full 1 Hz that
+    // would "chug" on a low note; 0 (OFF) is a valid draw (most re-rolls leave
+    // C off, a few add gentle motion).
+    case 48: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // FM_CR  0..~30%
+    // FM_CW: any of the 4 shapes (raw 0..1023 spans SIN/SAW/SQR/NOISE).
+    case 49: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // FM_CW  any shape
+    // FM_CD: 0..50% (raw 0..511) -- a subtle vibrato; 100% (0.05 c) is too much
+    // to randomize blindly.
+    case 50: w.kind=0; w.lo=0;    w.hi=511;  w.div=0; break; // FM_CD  0..50%
+    // FM_ST (S teeth): 0..~60% (raw 0..614) -- a few to a dozen teeth; 0 (OFF)
+    // is a valid draw (most re-rolls leave S off, a few add a sparse comb).
+    case 51: w.kind=0; w.lo=0;    w.hi=614;  w.div=0; break; // FMST  0..~10 teeth
+    // FMSA (S amplitude): 25..100% (raw 256..1023) -- the tooth size; low values
+    // are barely audible, so the draw stays in the upper half.
+    case 52: w.kind=0; w.lo=256;  w.hi=1023; w.div=0; break; // FMSA  25..100%
     default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, LFO rate/depth, etc.)
   }
   return w;

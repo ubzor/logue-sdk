@@ -61,7 +61,7 @@ PER VOICE (x kVoiceCount = 6):
   phasor A  ->  wavA = stream1*(1-x) + stream2*x
                   (stream1 = WAVE bank @ lfo_morph, stream2 = WA2 bank @ lfo_morph2)
   phasor B  ->  wavB = stream1b*(1-x) + stream2b*x   (same 2D crossfade at ph_b)
-               [ DETU, FM1, FMAB, JIT, + walk detune ]
+               [ DETU, FM1, FMAB, JIT, S(static teeth, shape=FM Mod Wave), FM C(vibrato), + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
   -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
@@ -462,8 +462,8 @@ default and effect:
 | 24 | SMT | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Breath** stream time constant: how quickly each note's level tracks its target. |
 | 25 | JIT | % | 0..100% -> 0..0.5% phase | 0% (off) | Random phase jitter on A/B (smears the carrier). |
 | 26 | RMOD | % | 0..100% | 0% (off) | A*B ring-mod parallel voice (ducked by MAIN). |
-| 27 | FM1 | Nc | 0..100% (quadratic) -> 0..0.05 c | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). |
-| 28 | FM2 | Nc | 0..100% (quadratic) -> 0..0.05 c | 0% (off) | Static phase-FM of osc B by A (not RATE-gated). |
+| 27 | FM1 | 0.XXX | LOG 0..0.2 cycles (raw 0 = OFF, raw 1023 = 0.2) | 0% (off) | Static phase-FM of osc A by B (not RATE-gated). LOG scale: 1e-5..0.2 cycles. |
+| 28 | FM2 | 0.XXX | LOG 0..0.2 cycles (raw 0 = OFF, raw 1023 = 0.2) | 0% (off) | Static phase-FM of osc B by A (not RATE-gated). LOG scale: 1e-5..0.2 cycles. |
 | 29 | FMAB | % | 0..100% | 0% (off) | Walk depth on the FM-A index ("breathing" FM, RATE-gated). |
 | 30 | FMBB | % | 0..100% | 0% (off) | Walk depth on the FM-B index ("breathing" FM, RATE-gated). |
 | 31 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
@@ -483,10 +483,19 @@ default and effect:
 | 45 | WMXD | % | 0..100% (linear) | 100% | **Wave-Mix LFO swing depth**: 0 = the crossfade stays at the static WMIX (no swing), 100% = the LFO swings the full -100%..+100% range of the crossfade weight (clamped by the audio path when the static WMIX is off-center, so the balance "parks" at a stream-only edge until the LFO swings back). Same convention as WLFD / W2LD, for the third LFO. |
 | 46 | WMXS | SIN / S / WALK | SIN / S / WALK (same quantization as WLFS) | SIN | **Wave-Mix LFO shape**: same three trajectories (SIN / S / WALK) for the wave-mix LFO — a walking balance drifts the stream 1 <-> stream 2 mix along a random scene. |
 | 47 | WMXG | N s | 1..300 s (LOG) | ~30 s | **Wave-Mix LFO WALK gap**: mean WALK control-point gap for the wave-mix LFO (only used when WMXS = WALK). |
+| 48 | FMCR | 0 H / 0.NNN H / 0.N H / 1 H | LOG 0..1 Hz (raw 0 = OFF) | 0 H (OFF) | **FM modulator C frequency**: an INDEPENDENT low-frequency oscillator (the modulator) that phase-FMs the (A+B) sum (the carrier). C is NOT heard by itself -- it only bends the sum's phase for vibrato / motion colour on top of the (untouched) cross-FM A+B timbre. raw 0 = OFF (the sum is unmodulated, regression-safe). The log scale (3 decades) gives fine control near 0; 1 Hz is the ceiling (above it a SAW/SQR modulator would be heard as its own tone on a low note). |
+| 49 | FMCW | SIN / SAW / SQR / NOISE | raw band (0..511 / 512..767 / 768..869 / 870..1023) | SIN | **FM modulator C wave shape**: the C oscillator's waveform (SIN = smooth vibrato, SAW = metallic, SQR = hard/robotic, NOISE = chaotic tremolo). |
+| 50 | FMCD | % | 0..100% (LINEAR) -> 0..0.05 cycles phase peak | 0% (OFF) | **FM modulator C depth**: how strongly C bends the (A+B) sum's phase (0.05 cycles = 5% of the carrier at 100%). 0 = OFF. |
+| 51 | FMST | 0.05..16 (teeth) / OFF | LOG 0.05..16 teeth per carrier cycle (raw 0 = OFF) | OFF | **FM static teeth (rate)**: the NUMBER of teeth of the S modulator per (A+B) carrier cycle. S is a carrier-LOCKED FM oscillator (the static counterpart of C's free-running vibrato): its phasor advances at FMST × the A rate, so it draws FMST teeth of phase deviation per note cycle — a STATIC harmonic comb that stays in tune with the note. LOG scale (4 decades; raw 0 = OFF, raw 1 = 0.05 teeth, 1023 = 16 teeth). **Teeth < 1 = sub-octave** (fm/fc < 1, the modulator runs slower than the carrier — a deep organ-like comb with sidebands that dip below the note); **1 tooth = in-tune** (fm/fc = 1); 0 = OFF (bit-identical). |\
+| 52 | FMSA | % | 0..100% (LINEAR) -> 0..0.05 cycles peak | 100% | **FM static depth (tooth size)**: the AMPLITUDE (peak swing) of each S tooth — how strongly each tooth bends the (A+B) sum's phase. The effective per-tooth offset is FMSA × 0.05 cycles (5% of the carrier at full scale). The tooth SHAPE is shared with the C modulator (FM Mod Wave / FMCW: SIN/SAW/SQR/NOISE). 0 = no static FM (bit-identical); 100% (default) = full tooth size. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
-"DUCK" above.)
+"DUCK" above. The former FM bus — FMCB / FMSV, phase-FM on the comb resonator
+delay and the SVF cutoff, driven by the shared FM-B index — was also removed:
+it proved inaudible in practice. It was replaced by the FM modulator C above
+(FMCR/FMCW/FMCD) — a dedicated, always-running modulator that phase-FMs the
+(A+B) sum, which is the "post-oscillator FM" the FM bus was removed for.)
 
 ### The four random-walk streams
 
