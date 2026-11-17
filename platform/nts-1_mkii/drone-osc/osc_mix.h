@@ -356,6 +356,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // phase-locked.
     const float lfo_ = lfo_sim_.process();
     const float lfo2_ = lfo_sim2_.process();
+    const float lfo_mixv = lfo_mix_.process(); // wave-mix balance LFO (see below)
     // Per-stream intra-bank LFO morph: each LFO drives the position within its
     // selected bank, centered on the bank (see WaveTable::resolve_wave /
     // bank_center). The base position is the bank center; the LFO adds +/-half
@@ -366,12 +367,25 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         WaveTable::bank_center(wave_bank) + lfo_ * WaveTable::lfo_morph_depth(wave_bank);
     const float lfo_morph2 =
         WaveTable::bank_center(wave_bank2) + lfo2_ * WaveTable::lfo_morph_depth(wave_bank2);
-    // Crossfade weight between stream 1 and stream 2 (from WAVE_MIX, -1..+1):
-    // x = 0.5*(1+mix) -> 0 (stream 1 only) .. 0.5 (50/50) .. 1 (stream 2 only).
-    // At the factory preset stream 2 == stream 1 (bank A, LFO 2 off), so any x
-    // blends two identical waves -> bit-identical to the old single-stream
-    // sound.
-    const float wave_mix_x = 0.5f * (1.f + p.wave_mix);
+    // Crossfade weight between stream 1 and stream 2. The STATIC WAVE_MIX knob
+    // (params_.wave_mix, -1..+1) is the CENTER; the wave-mix LFO (lfo_mix_,
+    // the THIRD internal ShapeLfoSim, see osc_lfo_sim.h) is the SWING around
+    // it: lfo_mixv = (shape * depth) in [-1, +1], driven by the WMIX_LFO_RATE
+    // / WMIX_LFO_DEPTH / WMIX_LFO_SHAPE / WMIX_LFO_GAP edit parameters.
+    // mix_eff = clamp(WMIX + LFO, -1, +1); x = 0.5*(1+mix_eff):
+    // x = 0 (stream 1 only) .. 0.5 (50/50) .. 1 (stream 2 only).
+    // The clamp only bites when the static WMIX is off-center (|WMIX| > 0) and
+    // the LFO would push the weight past a stream-only extreme (the balance
+    // "parks" at the edge until the LFO swings back). At the factory default
+    // (WMXR = 0, LFO OFF -> lfo_mixv = 0) mix_eff = WMIX exactly, and with
+    // stream 2 == stream 1 (bank A, LFO 2 off) any x blends two identical
+    // waves -> bit-identical to the old single-stream sound.
+    float wave_mix_eff = p.wave_mix + lfo_mixv;
+    if (wave_mix_eff > 1.f)
+      wave_mix_eff = 1.f;
+    else if (wave_mix_eff < -1.f)
+      wave_mix_eff = -1.f;
+    const float wave_mix_x = 0.5f * (1.f + wave_mix_eff);
 
     // ---- Per-voice loop: phasors, wavetables, ring-mod -----------------------
     // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its

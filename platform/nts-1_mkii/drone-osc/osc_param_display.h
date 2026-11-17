@@ -39,7 +39,10 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "JIT", "RMOD", "FM1", "FM2", "FMAB", "FMBB",
       "FMVT", "FLVL", "COMB", "SUBB",
       "WLFR", "WLFD",
-      "W2LR", "W2LD", "WMIX"};
+      "W2LR", "W2LD", "WMIX",
+      "WLFS", "WLFG",
+      "W2FS", "W2FG",
+      "WMXR", "WMXD", "WMXS", "WMXG"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -162,7 +165,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   // large enough ("0.999H\0" = 6 chars).
   // WAVE2_LFO_RATE (stream-2 wave-LFO frequency) shares the EXACT same LOG Hz
   // formatting as WAVE_LFO_RATE (stream 1) — the two LFOs use identical scales.
-  if (k == WAVE_LFO_RATE || k == WAVE2_LFO_RATE)
+  if (k == WAVE_LFO_RATE || k == WAVE2_LFO_RATE || k == WMIX_LFO_RATE)
   {
     if (raw == 0)
     {
@@ -202,6 +205,49 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[n++] = (char)('0' + (mhz / 10) % 10); // "0.NN"
     buf[n++] = (char)('0' + mhz % 10); // "0.NNN"
     buf[n++] = 'H';
+    buf[n] = '\0';
+    return buf;
+  }
+
+  // ---- LFO shape (WAVE_LFO_SHAPE / WAVE2_LFO_SHAPE) -----------------------
+  // Display as "SIN" / "S" / "WALK" (raw 0..511 = SIN, 512..767 = S,
+  // 768..1023 = WALK).
+  if (k == WAVE_LFO_SHAPE || k == WAVE2_LFO_SHAPE || k == WMIX_LFO_SHAPE)
+  {
+    if (raw < 512)
+      return "SIN";
+    if (raw < 768)
+      return "S";
+    return "WALK";
+  }
+
+  // ---- WALK gap (WAVE_LFO_GAP / WAVE2_LFO_GAP) ----------------------------
+  // Display as seconds: LOG scale 1..300 s (raw 0..1023).
+  // raw 0 -> "1 s", raw 1023 -> "300 s".
+  if (k == WAVE_LFO_GAP || k == WAVE2_LFO_GAP || k == WMIX_LFO_GAP)
+  {
+    const float sec = 1.f * fasterpowf(300.f, param_10bit_to_f32(raw));
+    int s = (int)(sec + 0.5f);
+    if (s < 1) s = 1;
+    if (s > 300) s = 300;
+    int n = 0;
+    if (s >= 100)
+    {
+      buf[n++] = (char)('0' + s / 100);
+      buf[n++] = (char)('0' + (s / 10) % 10);
+      buf[n++] = (char)('0' + s % 10);
+    }
+    else if (s >= 10)
+    {
+      buf[n++] = (char)('0' + s / 10);
+      buf[n++] = (char)('0' + s % 10);
+    }
+    else
+    {
+      buf[n++] = (char)('0' + s);
+    }
+    buf[n++] = ' ';
+    buf[n++] = 's';
     buf[n] = '\0';
     return buf;
   }

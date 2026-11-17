@@ -161,7 +161,15 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 34: w.kind=0; w.lo=0;    w.hi=614;  w.div=0; break; // SUBB  0..60% sub breath
     // (GLIDE removed: the portamento knob is gone.)
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
-    default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, etc.)
+    // LFO shape (40/42/46): only SIN (0) or WALK (768..1023) — S is too niche for random.
+    case 40: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // WLFS  SIN or WALK
+    case 42: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // W2FS  SIN or WALK
+    case 46: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // WMXS  SIN or WALK
+    // WALK gap (41/43/47): 10..200 s (a sensible random range).
+    case 41: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WLFG  ~10..200 s
+    case 43: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // W2FG  ~10..200 s
+    case 47: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WMXG  ~10..200 s
+    default: break; // full range (SPDx/SMTx, walk depths, WAV1/2, LFO rate/depth, etc.)
   }
   return w;
 }
@@ -236,8 +244,12 @@ static const uint8_t kRndOrbiFamTimbre[6]  = {10, 11, 12, 19, 20, 33};
 // WAVE_LFO_RATE (35) / WAVE_LFO_DEPTH (36) and WAVE2_LFO_RATE (37) /
 // WAVE2_LFO_DEPTH (38) are MOTION (the two internal wave-LFOs that drive the
 // stream 1 / stream 2 intra-bank morphs): a re-roll varies how fast / how far
-// each wavetable drifts, so they belong in the motion family.
-static const uint8_t kRndOrbiFamMotion[16] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22, 35, 36, 37, 38};
+// each wavetable drifts, so they belong in the motion family. WAVE_LFO_SHAPE
+// (40) / WAVE_LFO_GAP (41) and WAVE2_LFO_SHAPE (42) / WAVE2_LFO_GAP (43) are
+// also MOTION (the LFO trajectory shape / walk density). The wave-mix LFO
+// (WMIX_LFO_RATE 44 / WMIX_LFO_DEPTH 45 / WMIX_LFO_SHAPE 46 / WMIX_LFO_GAP 47)
+// is MOTION too: it modulates the stream 1 <-> stream 2 balance over time.
+static const uint8_t kRndOrbiFamMotion[24] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22, 35, 36, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47};
 static const uint8_t kRndOrbiFamExtra[3]   = {9, 29, 31};
 
 // The family's parameter list + length for an Orbit fire (family 0..3).

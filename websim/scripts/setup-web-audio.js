@@ -35,7 +35,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 40; // 40 = RATE..WAVE_MIX
+      const EDIT_PARAM_COUNT = 48; // 48 = RATE..WMIX_LFO_GAP
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -89,6 +89,10 @@
         "Sub Bass Bre",
         "Wave LFO Rate", "Wave LFO Depth",
         "Wave 2 LFO Rate", "Wave 2 LFO Depth", "Wave Mix",
+        "Wave LFO Shape", "Wave LFO Gap",
+        "Wave 2 LFO Shape", "Wave 2 LFO Gap",
+        "Wave Mix LFO Rate", "Wave Mix LFO Depth",
+        "Wave Mix LFO Shape", "Wave Mix LFO Gap",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -113,14 +117,27 @@
         // they control the INTERNAL wave-LFO that drives the WAVE-bank
         // intra-bank morph (the hardware's OSC-button RATE/SHAPE knobs are
         // NO-OPs now; the LFO is fully internal, see osc_lfo_sim.h).
-        { title: "MAIN",       col: 0, items: [15, 13, 35, 36, 14, 37, 38, 39, 10, 11, 12, 27, 28, 25, 26, 0] },
-        { title: "BREATH",   col: 0, items: [22, 23, 24] },
-        { title: "FORMANT",  col: 0, items: [31, 32] },
+        // NOTE: the WALK-gap params (41 / 43 / 47) are deliberately NOT listed
+        // here — each one is rendered ONLY as the gapRow that createEditableParam
+        // appends right after its Shape radio group (40 / 42 / 46), hidden
+        // unless Shape = Walk. Listing them as group items would create a SECOND,
+        // always-visible slider with the same #editparam_<i> id (duplicate DOM
+        // ids break getElementById-based preset / morph sync).
+        { title: "",           col: 0, items: [13, 35, 36, 40] },
+        { title: "",           col: 0, items: [14, 37, 38, 42], divider: true },
+        // Wave Mix LFO Rate (44) / Depth (45) / Shape (46) sit right after
+        // Wave Mix (39): they drive the THIRD internal LFO (lfo_mix_) that
+        // modulates the stream 1 <-> stream 2 crossfade AROUND the static Wave
+        // Mix value (same Rate/Depth/Shape/Gap convention as the two per-stream
+        // wave-LFOs; the Gap slider 47 appears only when Shape = Walk).
+        { title: "",           col: 0, items: [39, 44, 45, 46], divider: true },
+        { title: "",           col: 0, items: [10, 11, 12, 27, 28, 25, 26, 0], divider: true },
+        { title: "FORMANT",    col: 0, items: [31, 32] },
         // ---- Column 1 ----
         { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
         { title: "WANDER TGT", col: 1, items: [16, 21, 17, 18, 29, 30] },
         // ---- Column 2 ----
-        { title: "SUBS",       col: 2, items: [8, 9, 34] },
+        { title: "VOLUME",     col: 2, items: [15, 22, 23, 24, 8, 9, 34] },
         { title: "FILTER",     col: 2, items: [19, 20] },
         { title: "CLUSTER",    col: 2, items: [33] },
       ];
@@ -224,7 +241,7 @@
           const vi = Math.min(4, Math.floor((raw / 1023) * 4.999));
           return "AEIOU".charAt(vi);
         }
-        if (idx === 35 || idx === 37) {
+        if (idx === 35 || idx === 37 || idx === 44) {
           // WAVE LFO RATE (edit 35) / WAVE 2 LFO RATE (edit 37): internal
           // wave-LFO 1 / wave-LFO 2 frequency, LOG scale
           // (a LINEAR knob mapped to an EXPONENTIAL frequency, 3 decades):
@@ -242,6 +259,19 @@
           }
           const mhz = Math.min(999, Math.max(1, Math.round(hz * 1000)));
           return "0." + String(mhz).padStart(3, "0") + " H";
+        }
+        if (idx === 40 || idx === 42 || idx === 46) {
+          // WAVE LFO SHAPE (edit 40) / WAVE 2 LFO SHAPE (edit 42):
+          // 0..511 = SIN, 512..767 = S, 768..1023 = WALK.
+          if (raw < 512) return "Sin";
+          if (raw < 768) return "S";
+          return "Walk";
+        }
+        if (idx === 41 || idx === 43 || idx === 47) {
+          // WAVE LFO GAP (edit 41) / WAVE 2 LFO GAP (edit 43):
+          // LOG scale 1..300 s (raw 0..1023). Display as "N s".
+          const sec = Math.round(Math.pow(300, raw / 1023));
+          return Math.max(1, Math.min(300, sec)) + " s";
         }
         // Every other index formats as 0..100%: 0..7 (RATE, SPD1..SMT3),
         // 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN, default 100%),
@@ -420,6 +450,98 @@
           const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
           setChecked(waveBankFromRaw(initRaw));
           (targetEl || document.getElementById("Parameters")).appendChild(container);
+          return;
+        }
+
+        // ---- LFO Shape (edit 40/42/46): radio group Sin/S/Walk + hidden GAP slider ----
+        if (index === 40 || index === 42 || index === 46) {
+          const isStream1 = (index === 40);
+          const isWaveMix = (index === 46);
+          const gapIdx = isStream1 ? 41 : (isWaveMix ? 47 : 43);
+          const radioName = isStream1 ? "LfoShape1" : (isWaveMix ? "LfoShape3" : "LfoShape2");
+          const shapes = [
+            { label: "Sin",  raw: 0    },
+            { label: "S",    raw: 640  },
+            { label: "Walk", raw: 896  },
+          ];
+          const group = document.createElement("div");
+          group.className = "octave-join drop-shadow flex-1 min-w-0";
+          const radios = [];
+          shapes.forEach((s) => {
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = radioName;
+            radio.value = String(s.raw);
+            radio.className = "octave-join-item btn btn-soft btn-primary btn-xs flex-1 min-w-0";
+            radio.setAttribute("aria-label", s.label);
+            group.appendChild(radio);
+            radios.push(radio);
+          });
+          container.appendChild(group);
+          // No value_string for LFO Shape: the radio group IS the readout
+          // (the checked button shows Sin/S/Walk), same as the WAVE bank A..F
+          // radio group. value_string is created above but deliberately NOT
+          // appended.
+
+          const gapRow = document.createElement("div");
+          gapRow.className = "flex items-center gap-3 lfo-gap-row";
+          gapRow.style.display = "none";
+          const gapLabel = document.createElement("label");
+          gapLabel.textContent = EDIT_PARAM_NAMES[gapIdx];
+          gapLabel.className = "w-32 text-sm font-medium shrink-0 truncate";
+          const gapInput = document.createElement("input");
+          gapInput.type = "range";
+          gapInput.min = 0;
+          gapInput.max = 1023;
+          gapInput.step = 1;
+          gapInput.id = "editparam_" + gapIdx;
+          gapInput.className = "range range-primary range-sm flex-1 min-w-0";
+          const gapVal = document.createElement("span");
+          gapVal.className = "badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right";
+          gapRow.appendChild(gapLabel);
+          gapRow.appendChild(gapInput);
+          gapRow.appendChild(gapVal);
+
+          const gapInitRaw = (Module.getEditParamValue) ? Module.getEditParamValue(gapIdx) : 511;
+          gapInput.value = String(gapInitRaw);
+          gapVal.textContent = formatParamValue(gapIdx, gapInitRaw);
+          gapInput.oninput = () => {
+            const raw = parseInt(gapInput.value, 10);
+            gapVal.textContent = formatParamValue(gapIdx, raw);
+            if (Module.setEditParam) Module.setEditParam(gapIdx, raw);
+            if (Module.stableSync && Module.getMorphActive && Module.getMorphActive() === 0)
+              Module.stableSync();
+          };
+
+          const updateGapVisibility = () => {
+            const sel = radios.find((r) => r.checked);
+            const shapeRaw = sel ? parseInt(sel.value, 10) : 0;
+            gapRow.style.display = (shapeRaw >= 768) ? "flex" : "none";
+          };
+
+          const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
+          const initShape = initRaw < 512 ? 0 : (initRaw < 768 ? 1 : 2);
+          radios[initShape].checked = true;
+          updateGapVisibility();
+
+          radios.forEach((radio, si) => {
+            radio.onchange = () => {
+              apply(shapes[si].raw);
+              updateGapVisibility();
+            };
+          });
+
+          const setChecked = (shapeIdx) => {
+            const si = Math.max(0, Math.min(2, shapeIdx | 0));
+            for (let i = 0; i < radios.length; i++) radios[i].checked = (i === si);
+            updateGapVisibility();
+          };
+          if (isStream1) window._setLfoShape1Checked = setChecked;
+          else if (isWaveMix) window._setLfoShape3Checked = setChecked;
+          else window._setLfoShape2Checked = setChecked;
+
+          (targetEl || document.getElementById("Parameters")).appendChild(container);
+          (targetEl || document.getElementById("Parameters")).appendChild(gapRow);
           return;
         }
 
@@ -827,10 +949,20 @@
           group.className = (PARAM_GROUPS[g].className
             ? PARAM_GROUPS[g].className + " "
             : "") + "flex flex-col gap-2";
-          const heading = document.createElement("div");
-          heading.className = "text-xs uppercase tracking-wide opacity-60 mt-1";
-          heading.textContent = PARAM_GROUPS[g].title;
-          group.appendChild(heading);
+          // Horizontal divider after groups marked with `divider: true`
+          // (color matches the button borders).
+          if (PARAM_GROUPS[g].divider) {
+            const divider = document.createElement("div");
+            divider.className = "border-t my-1";
+            divider.style.borderColor = "var(--btn-color, var(--color-primary))";
+            col.appendChild(divider);
+          }
+          if (PARAM_GROUPS[g].title) {
+            const heading = document.createElement("div");
+            heading.className = "text-xs uppercase tracking-wide opacity-60 mt-1";
+            heading.textContent = PARAM_GROUPS[g].title;
+            group.appendChild(heading);
+          }
           for (const idx of PARAM_GROUPS[g].items) {
             createEditableParam(wasmProcessor, idx, group);
           }
@@ -860,9 +992,12 @@
       // RWAV 0, RDRV 0, RFLD 0, FCUT 921, RES 0, RWFC 0,
       // BRT 0, BRR 511, SMT 511, JIT 0, RMOD 0, FM1 0, FM2 0, RFMA 0, RFMB 0,
       // FORM 511, FVOL 0, COMB 0, SUBB 307 (~30%),
-      // WLFR 0 (wave-LFO OFF, static wave), WLFD 1023 (full-bank sweep).
-      // (FOLD2 / DCK removed — 37 params total.)
-      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 0, 307, 0, 1023];
+      // WLFR 0 (wave-LFO OFF, static wave), WLFD 1023 (full-bank sweep),
+      // W2LR 0 / W2LD 1023 (stream-2 LFO off, full depth), WMIX 511 (50/50),
+      // WLFS 0 (Sin) / WLFG 511 (~30 s), W2FS 0 / W2FG 511, WMXR 0 (wave-mix
+      // LFO OFF — static mix), WMXD 1023 (100% swing), WMXS 0 (Sin), WMXG 511.
+      // (FOLD2 / DCK removed — 48 params total.)
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -917,6 +1052,17 @@
         // 50/50). Full range is safe. Randomize uniformly.
         for (const n of ["Wave LFO Rate", "Wave LFO Depth", "Wave 2 LFO Rate", "Wave 2 LFO Depth", "Wave Mix"])
           set(n, r1023());
+        // WAVE MIX LFO: the third internal LFO modulating the crossfade around
+        // the static Wave Mix value. Same full-range safety as the two stream
+        // LFOs (rate 0 = static mix, max = 1 Hz full swing).
+        for (const n of ["Wave Mix LFO Rate", "Wave Mix LFO Depth"])
+          set(n, r1023());
+        // WAVE MIX LFO SHAPE: SIN or WALK (same convention as the stream LFO
+        // shapes; S is too niche for random). The shape is a radio group in the
+        // UI, so a fresh random draw can also be WALK — the Gap row (47)
+        // appears in that case and gets a full-range gap draw.
+        set("Wave Mix LFO Shape", Math.random() < 0.5 ? 0 : 896); // 0 = Sin, 896 = Walk
+        set("Wave Mix LFO Gap", rRange(171, 962)); // ~10..200 s
 
         // --- Constrained (critical) parameters -------------------------------
         // DETU: static A/B detune, +/-kDetuneMaxCents (10 c) centered on 511.
@@ -1099,6 +1245,16 @@
               // WAVE 2 bank: no #editparam_14 slider exists (it is the A..F
               // radio group) — re-check the stream-2 radio the same way.
               if (setWaveBank2Checked) setWaveBank2Checked(waveBankFromRaw(raws[i]));
+            } else if (i === 40 || i === 42 || i === 46) {
+              // LFO Shape: no #editparam_40/#editparam_42/#editparam_46 slider
+              // exists (it is the Sin/S/Walk radio group) — re-check the radio
+              // for the shape this raw quantizes to; the setEditParam below
+              // still applies.
+              const setter = (i === 40) ? window._setLfoShape1Checked
+                           : (i === 46) ? window._setLfoShape3Checked
+                                        : window._setLfoShape2Checked;
+              const shapeIdx = raws[i] < 512 ? 0 : (raws[i] < 768 ? 1 : 2);
+              if (setter) setter(shapeIdx);
             } else if (el) {
               el.value = raws[i];
               const span = el.parentElement.querySelector("span");
@@ -1198,6 +1354,21 @@
                   setter(bank);
                   dirty = true;
                 }
+              }
+              continue;
+            }
+            if (i === 40 || i === 42 || i === 46) {
+              // LFO Shape: no #editparam_40/#editparam_42/#editparam_46 slider
+              // exists (it is the Sin/S/Walk radio group). Re-check the radio
+              // whose shape the morphing raw quantizes to, same as the WAVE
+              // bank poll.
+              const setter = (i === 40) ? window._setLfoShape1Checked
+                           : (i === 46) ? window._setLfoShape3Checked
+                                        : window._setLfoShape2Checked;
+              if (setter) {
+                const shapeIdx = v < 512 ? 0 : (v < 768 ? 1 : 2);
+                setter(shapeIdx);
+                dirty = true;
               }
               continue;
             }

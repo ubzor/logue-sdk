@@ -222,12 +222,42 @@ public:
     WAVE2_LFO_RATE,  // stream-2 wave-LFO frequency (log 0..1 Hz, default 0 = off)
     WAVE2_LFO_DEPTH, // stream-2 wave-LFO morph depth (0..100%, default 100%)
     WAVE_MIX,        // wave 1 <-> wave 2 crossfade (-100%..+100%, default 50/50)
+    // ---- LFO shape (per stream) ---------------------------------------------
+    // Each wave stream's LFO can be: 0 = SIN (classic sine, default),
+    // 1 = S (S-curve warp), 2 = WALK (random-walk scene, regenerated every
+    // cycle). WALK_GAP is the mean seconds between control points (LOG 1..300 s,
+    // default 30 s); only used in WALK mode.
+    WAVE_LFO_SHAPE,  // stream-1 LFO shape (0=SIN, 1=S, 2=WALK; default SIN)
+    WAVE_LFO_GAP,    // stream-1 WALK: mean seconds between points (LOG 1..300 s)
+    WAVE2_LFO_SHAPE, // stream-2 LFO shape (0=SIN, 1=S, 2=WALK; default SIN)
+    WAVE2_LFO_GAP,   // stream-2 WALK: mean seconds between points (LOG 1..300 s)
+    // ---- Wave-Mix LFO (third internal LFO, see osc_lfo_sim.h) ----------------
+    // WAVE_MIX (index 39) is the CENTRAL crossfade between stream 1 (WAVE bank)
+    // and stream 2 (WA2 bank): it is the "initial balance" the sound sits on.
+    // This LFO MODULATES that balance: the audio path computes
+    //   mix_eff = clamp(WMIX + lfo_mix_.process(), -1, +1)
+    //   x = 0.5 * (1 + mix_eff)
+    // so the static WMIX knob is the CENTER and the LFO (shape * depth, -1..+1)
+    // is the SWING around it. At the factory default (RATE = 0, LFO OFF) the
+    // mix is fully static (bit-identical to the pre-LFO sound). Same three
+    // parameters and scales as the two per-stream wave-LFOs:
+    //   WMIX_LFO_RATE  -- LFO frequency (LOG: raw 0 = 0 Hz / LFO OFF, else
+    //                     10^(3*raw/1023 - 3) = 0.001..1 Hz; default 0 = OFF)
+    //   WMIX_LFO_DEPTH -- swing depth (LINEAR 0..100%, default 100%: a full
+    //                     -100%..+100% swing of the crossfade weight)
+    //   WMIX_LFO_SHAPE -- trajectory (0=SIN default, 1=S, 2=WALK)
+    //   WMIX_LFO_GAP   -- WALK mean gap (LOG 1..300 s, default ~30 s; only used
+    //                     when shape = WALK)
+    WMIX_LFO_RATE,  // wave-mix LFO frequency (log 0..1 Hz, default 0 = off)
+    WMIX_LFO_DEPTH, // wave-mix LFO swing depth (0..100%, default 100%)
+    WMIX_LFO_SHAPE, // wave-mix LFO shape (0=SIN, 1=S, 2=WALK; default SIN)
+    WMIX_LFO_GAP,   // wave-mix WALK: mean seconds between points (LOG 1..300 s)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..WAVE_MIX).
-  static constexpr uint8_t kEditParamCount = 40; // RATE_AMT..WAVE_MIX
+  // Number of editable DSP parameters (RATE_AMT..WMIX_LFO_GAP).
+  static constexpr uint8_t kEditParamCount = 48; // RATE_AMT..WMIX_LFO_GAP
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -256,9 +286,17 @@ public:
   //   37 W2LFO R (WAVE2_LFO_RATE: wave-LFO 2 frequency, log 0..1 Hz)
   //   38 W2LFO D (WAVE2_LFO_DEPTH: wave-LFO 2 morph depth, 0..100%)
   //   39 WMIX (WAVE_MIX: wave 1 <-> wave 2 crossfade, -100%..+100%, 50/50 def)
+  //   40 WLFO SHP (WAVE_LFO_SHAPE: stream-1 LFO shape, 0=SIN/1=S/2=WALK)
+  //   41 WLFO GAP (WAVE_LFO_GAP: stream-1 WALK mean gap, log 1..300 s)
+  //   42 W2LFO SHP (WAVE2_LFO_SHAPE: stream-2 LFO shape, 0=SIN/1=S/2=WALK)
+  //   43 W2LFO GAP (WAVE2_LFO_GAP: stream-2 WALK mean gap, log 1..300 s)
+  //   44 WMXR (WMIX_LFO_RATE: wave-mix LFO frequency, log 0..1 Hz)
+  //   45 WMXD (WMIX_LFO_DEPTH: wave-mix LFO swing depth, 0..100%)
+  //   46 WMXS (WMIX_LFO_SHAPE: wave-mix LFO shape, 0=SIN/1=S/2=WALK)
+  //   47 WMXG (WMIX_LFO_GAP: wave-mix WALK mean gap, log 1..300 s)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 40 = (WAVE_MIX - RATE_AMT + 1);
-  // select_ 0..39 -> RATE_AMT..WAVE_MIX.
+  // kEditParamCount = 48 = (WMIX_LFO_GAP - RATE_AMT + 1);
+  // select_ 0..47 -> RATE_AMT..WMIX_LFO_GAP.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -288,13 +326,17 @@ public:
   // identical waves is bit-identical to the old single-stream sound.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  // 40 values (kEditParamCount = 40, RATE_AMT..WAVE_MIX): indices 0..36 keep
-  // the old values (13 (WAV1) = 0 bank A, 14 (WAV2) = 128 bank A, 35 (WLFR)
+  // 48 values (kEditParamCount = 48, RATE_AMT..WMIX_LFO_GAP): indices 0..43
+  // keep the old values (13 (WAV1) = 0 bank A, 14 (WAV2) = 128 bank A, 35 (WLFR)
   // = 0, 36 (WLFD) = 1023); 37 (W2LFR) = 0 (stream-2 LFO off); 38 (W2LFD) =
-  // 1023 (100%); 39 (WMIX) = 511 (50/50). At the factory preset stream 2 is
-  // the SAME bank A as stream 1 with its LFO off, so the 50/50 crossfade of
-  // two identical waves is bit-identical to the old single-stream sound.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511};
+  // 1023 (100%); 39 (WMIX) = 511 (50/50); 40 (WLFS) = 0 (Sin, default);
+  // 41 (WLFG) = 511 (~30 s, default walk gap); 42 (W2FS) = 0 (Sin); 43 (W2FG)
+  // = 511 (~30 s); 44 (WMXR) = 0 (wave-mix LFO OFF — static mix, regression-
+  // safe); 45 (WMXD) = 1023 (100% swing); 46 (WMXS) = 0 (Sin); 47 (WMXG) =
+  // 511 (~30 s). At the factory preset the wave-mix LFO is OFF (rate = 0 Hz),
+  // so the crossfade stays at the static WMIX value — bit-identical to the
+  // pre-LFO sound.
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -305,7 +347,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -950,6 +992,17 @@ private:
   // osc_mix.h audio path calls process() on both LFOs once per sample and
   // crossfades the two resolved waves by WAVE_MIX (params_.wave_mix).
   ShapeLfoSim lfo_sim2_;
+  // Third internal wave-LFO for the WAVE-MIX balance (see osc_lfo_sim.h):
+  // MODULATES the stream 1 <-> stream 2 crossfade weight around the static
+  // WAVE_MIX value (params_.wave_mix is the CENTER; lfo_mix_.process() is the
+  // SWING). Its frequency / depth / shape / gap are set by WMIX_LFO_RATE /
+  // WMIX_LFO_DEPTH / WMIX_LFO_SHAPE / WMIX_LFO_GAP through the standard
+  // apply_edit_param() path (osc_param_apply.h), exactly like lfo_sim_.
+  // Default (factory): freq_hz = 0 (LFO OFF) -> process() returns 0 -> the
+  // mix is fully static (regression-safe). The osc_mix.h audio path computes
+  //   mix_eff = clamp(params_.wave_mix + lfo_mix_.process(), -1, +1)
+  //   x = 0.5 * (1 + mix_eff).
+  ShapeLfoSim lfo_mix_;
 
   // local variables related to audio processing
   // (The per-voice phasors, FM lookback caches, FM index LPF states, sub-2

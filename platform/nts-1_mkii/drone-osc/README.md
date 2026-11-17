@@ -31,23 +31,31 @@ env-weighted ANCHOR note — see below), then (3) applies the SINGLE common
 post-stage (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
-2D WAVE MORPH (TWO independent internal LFOs + crossfade; see osc_lfo_sim.h):
+2D WAVE MORPH (TWO independent internal LFOs + crossfade + wave-mix LFO; see osc_lfo_sim.h):
   Stream 1 (WAVE bank, WLFR/WLFD):
     lfo_       = lfo_sim_.process()   (sin(phase) * WLFD; phase advances by WLFR Hz)
     lfo_morph  = bank_center(WAVE) + lfo_ * lfo_morph_depth(WAVE)
   Stream 2 (WA2 bank, W2LR/W2LD):
     lfo2_      = lfo_sim2_.process()  (sin(phase) * W2LD; phase advances by W2LR Hz)
     lfo_morph2 = bank_center(WA2) + lfo2_ * lfo_morph_depth(WA2)
-  x = 0.5 * (1 + WMIX)     (WMIX -100..+100% -> x 0..1; 50/50 at WMIX = 0)
+  Wave-Mix LFO (WMXR/WMXD/WMXS/WMXG, the THIRD internal LFO, lfo_mix_):
+    lfo_mix    = lfo_mix_.process()   (shape * WMXD; phase advances by WMXR Hz)
+  mix_eff = clamp(WMIX + lfo_mix, -1, +1)   (WMIX is the CENTER, LFO the SWING)
+  x = 0.5 * (1 + mix_eff)  (x 0..1; 50/50 at mix_eff = 0)
      -> each stream's intra-bank morph position (clamped to [0, bank_size-1])
-  NOTE: the two LFOs run INDEPENDENT phases (each ShapeLfoSim owns its own),
+  NOTE: all three LFOs (lfo_sim_, lfo_sim2_, lfo_mix_) run INDEPENDENT phases
+        (each ShapeLfoSim owns its own);
         so the (stream 1, stream 2) trajectory in the 2D texture space never
         repeats for incommensurate frequencies (e.g. ~13 s / ~19 s) while the
         sound stays perfectly smooth (interpolation happens both inside the
         banks and between the streams via the crossfade).
   NOTE: the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs)
-        is a NO-OP (setShapeLfo() is a stub); the morph is driven ENTIRELY by
-        these two internal LFOs (WLFR / WLFD / W2LR / W2LD edit parameters).
+        is a NO-OP (setShapeLfo() is a stub); the morph and the mix balance are
+        driven ENTIRELY by the THREE internal LFOs (WLFR / WLFD / W2LR / W2LD
+        for the streams, WMXR / WMXD / WMXS / WMXG for the wave-mix balance;
+        the wave-mix LFO modulates the crossfade around the static WMIX knob,
+        with the clamp parking the balance at a stream-only extreme when the
+        LFO would push it past the +/-100% edge).
 
 PER VOICE (x kVoiceCount = 6):
   phasor A  ->  wavA = stream1*(1-x) + stream2*x
@@ -422,7 +430,7 @@ multiplexer on the two physical knobs:
 * **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 35 editable DSP parameters (select_ index -> name), with range, factory
+All 48 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
@@ -466,7 +474,15 @@ default and effect:
 | 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO morph depth**: 0 = static wave (LFO off, the wave stays at the bank center), 100% = the morph sweeps the full bank (first to last table, and back). The factory default is 100%, so any non-zero WLFR drives the morph across the whole bank. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
 | 37 | W2LR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG, same scale as WLFR; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Wave-LFO 2 frequency**: the sine that drives the WAVE-2-bank (stream 2) intra-bank morph (see `osc_lfo_sim.h`, the second `ShapeLfoSim`). Runs with an INDEPENDENT phase from WLFR, so the two streams are never phase-locked: with two incommensurate frequencies (e.g. ~13 s and ~19 s) the (stream 1, stream 2) trajectory in the 2D texture space never repeats. |
 | 38 | W2LD | % | 0..100% (linear) | 100% | **Wave-LFO 2 morph depth**: 0 = stream-2 wave static (at its bank center), 100% = the morph sweeps the full stream-2 bank. Same convention as WLFD, for the second LFO. |
-| 39 | WMIX | +/-% | -100..+100% (symmetric; 50/50 at 0%) | 0% (50/50) | **Wave Mix**: the stream 1 (WAVE) <-> stream 2 (WA2) crossfade weight. The audio path computes x = 0.5*(1+mix): -100% (raw 0) = stream 1 only, 0% (raw 511) = equal 50/50 blend, +100% (raw 1023) = stream 2 only. At the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0), so any mix value is bit-identical to the old single-stream sound. |
+| 39 | WMIX | +/-% | -100..+100% (symmetric; 50/50 at 0%) | 0% (50/50) | **Wave Mix**: the CENTRAL stream 1 (WAVE) <-> stream 2 (WA2) crossfade weight — the "initial balance" the sound sits on. It is the CENTER of the crossfade; the wave-mix LFO (WMXR / WMXD / WMXS / WMXG, below) swings it around this center. The audio path computes mix_eff = clamp(WMIX + LFO, -1, +1), x = 0.5*(1+mix_eff): -100% (raw 0) = stream 1 only, 0% (raw 511) = equal 50/50 blend, +100% (raw 1023) = stream 2 only. At the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0) and the mix LFO is OFF (WMXR = 0), so any mix value is bit-identical to the old single-stream sound. |
+| 40 | WLFS | SIN / S / WALK | SIN / S / WALK (raw 0..511 / 512..767 / 768..1023) | SIN | **Wave-LFO 1 shape**: the LFO trajectory of the stream-1 intra-bank morph (see `osc_lfo_sim.h`): SIN = classic sine, S = S-curve with a local reversal, WALK = a random-walk scene regenerated every LFO cycle (Catmull-Rom smoothed; the mean control-point gap is WLFG). |
+| 41 | WLFG | N s | 1..300 s (LOG) | ~30 s | **Wave-LFO 1 WALK gap**: mean seconds between random control points of the WALK scene (only used when WLFS = WALK; no effect in SIN / S). |
+| 42 | W2FS | SIN / S / WALK | SIN / S / WALK (same quantization as WLFS) | SIN | **Wave-LFO 2 shape**: same three trajectories for the stream-2 LFO (independent phase and scene from WLFS). |
+| 43 | W2FG | N s | 1..300 s (LOG) | ~30 s | **Wave-LFO 2 WALK gap**: mean WALK control-point gap for the stream-2 LFO (only used when W2FS = WALK). |
+| 44 | WMXR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG, same scale as WLFR / W2LR; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Wave-Mix LFO frequency**: the LFO that modulates the stream 1 <-> stream 2 crossfade AROUND the static WMIX value (the third internal `ShapeLfoSim`, `lfo_mix_`; see the "2D wave morph" block in the Sound path). Runs with an independent phase from both stream LFOs. raw 0 = LFO OFF (the mix stays at the static WMIX — the factory default and the regression-safe state). |
+| 45 | WMXD | % | 0..100% (linear) | 100% | **Wave-Mix LFO swing depth**: 0 = the crossfade stays at the static WMIX (no swing), 100% = the LFO swings the full -100%..+100% range of the crossfade weight (clamped by the audio path when the static WMIX is off-center, so the balance "parks" at a stream-only edge until the LFO swings back). Same convention as WLFD / W2LD, for the third LFO. |
+| 46 | WMXS | SIN / S / WALK | SIN / S / WALK (same quantization as WLFS) | SIN | **Wave-Mix LFO shape**: same three trajectories (SIN / S / WALK) for the wave-mix LFO — a walking balance drifts the stream 1 <-> stream 2 mix along a random scene. |
+| 47 | WMXG | N s | 1..300 s (LOG) | ~30 s | **Wave-Mix LFO WALK gap**: mean WALK control-point gap for the wave-mix LFO (only used when WMXS = WALK). |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -517,7 +533,7 @@ gently follows the loudest (breath-focus) voice's A-H-R.
 | Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
 | Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
 | Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
-| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The 2D wave morph is driven ENTIRELY by the TWO INTERNAL wave-LFOs (edit params WLFR / WLFD for stream 1, W2LR / W2LD for stream 2; the crossfade weight is WMIX, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
+| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The 2D wave morph is driven ENTIRELY by the THREE INTERNAL wave-LFOs (edit params WLFR / WLFD for stream 1, W2LR / W2LD for stream 2, WMXR / WMXD / WMXS / WMXG for the wave-mix balance; the static crossfade center is WMIX, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
@@ -567,7 +583,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
-| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the Osc owns TWO independent instances, `lfo_sim_` / `lfo_sim2_`, driving the stream 1 / stream 2 intra-bank morphs; frequency / depth set by the WLFR / WLFD and W2LR / W2LD edit parameters). |
+| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the Osc owns THREE independent instances: `lfo_sim_` / `lfo_sim2_` driving the stream 1 / stream 2 intra-bank morphs (WLFR / WLFD and W2LR / W2LD edit parameters) and `lfo_mix_` modulating the stream 1 <-> stream 2 crossfade around the static WMIX (WMXR / WMXD / WMXS / WMXG edit parameters)). |
 | osc_constants.h | All static tuning constants (max depths, scales, envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |

@@ -323,6 +323,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
           const float x = param_10bit_to_f32(value); // 0..1
           lfo_sim_.freq_hz = fasterpowf(10.f, 3.f * x - 3.f); // 0.001..1 (log)
         }
+        lfo_sim_.invalidate(); // new period -> new point count, apply now
       }
       break;
 
@@ -351,6 +352,7 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
           const float x = param_10bit_to_f32(value); // 0..1
           lfo_sim2_.freq_hz = fasterpowf(10.f, 3.f * x - 3.f); // 0.001..1 (log)
         }
+        lfo_sim2_.invalidate(); // new period -> new point count, apply now
       }
       break;
 
@@ -374,6 +376,86 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // to the old single-stream sound.
     case WAVE_MIX:
       params_.wave_mix = param_10bit_to_f32(value) * 2.f - 1.f; // -1..+1
+      break;
+
+    // ---- LFO shape (per stream) -------------------------------------------
+    // raw 0..1023 -> shape 0..2 (quantized: 0..511 = SIN, 512..767 = S,
+    // 768..1023 = WALK). Written to lfo_sim_.shape / lfo_sim2_.shape.
+    case WAVE_LFO_SHAPE:
+      lfo_sim_.shape = (value < 512) ? 0 : (value < 768) ? 1 : 2;
+      if (lfo_sim_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_sim_.invalidate(); // enter WALK: build the first scene now
+      break;
+    case WAVE2_LFO_SHAPE:
+      lfo_sim2_.shape = (value < 512) ? 0 : (value < 768) ? 1 : 2;
+      if (lfo_sim2_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_sim2_.invalidate();
+      break;
+
+    // ---- WALK gap (per stream) --------------------------------------------
+    // LOG scale: raw 0..1023 -> 1..300 s (3 decades).
+    // raw 0    -> 1 s (dense)
+    // raw 511  -> ~17 s
+    // raw 1023 -> 300 s (sparse)
+    // Written to lfo_sim_.gap_sec / lfo_sim2_.gap_sec.
+    case WAVE_LFO_GAP:
+      lfo_sim_.gap_sec = 1.f * fasterpowf(300.f, param_10bit_to_f32(value));
+      if (lfo_sim_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_sim_.invalidate(); // new point density — audible immediately
+      break;
+    case WAVE2_LFO_GAP:
+      lfo_sim2_.gap_sec = 1.f * fasterpowf(300.f, param_10bit_to_f32(value));
+      if (lfo_sim2_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_sim2_.invalidate();
+      break;
+
+    // ---- Wave-Mix LFO: frequency (WMIX_LFO_RATE) ----------------------------
+    // Identical LOG scale to WAVE_LFO_RATE / WAVE2_LFO_RATE, but written to the
+    // THIRD internal LFO (lfo_mix_, see osc_lfo_sim.h), which modulates the
+    // stream 1 <-> stream 2 crossfade AROUND the static WAVE_MIX value: raw 0
+    // = 0 Hz (LFO OFF, the mix stays at the static WMIX — the factory default
+    // and the regression-safe state); raw 1..1023 -> 10^(3*raw/1023 - 3) =
+    // 0.001..1 Hz (3 decades). The lfo_mix_ phase is independent of both
+    // stream LFOs (each ShapeLfoSim owns its own phase).
+    case WMIX_LFO_RATE:
+      {
+        if (value == 0)
+          lfo_mix_.freq_hz = 0.f; // raw 0 = wave-mix LFO OFF (0 Hz)
+        else
+        {
+          const float x = param_10bit_to_f32(value); // 0..1
+          lfo_mix_.freq_hz = fasterpowf(10.f, 3.f * x - 3.f); // 0.001..1 (log)
+        }
+        lfo_mix_.invalidate(); // new period -> new point count, apply now
+      }
+      break;
+
+    // ---- Wave-Mix LFO: swing depth (WMIX_LFO_DEPTH) --------------------------
+    // LINEAR scale, 0..100% (raw 0..1023 -> 0..1), same as WAVE_LFO_DEPTH /
+    // WAVE2_LFO_DEPTH but for lfo_mix_. At 0 the crossfade stays at the static
+    // WMIX value (no swing); at 100% the LFO sweeps the full -100%..+100%
+    // range of the crossfade weight (clamped by the audio path when the static
+    // WMIX is off-center). Written to lfo_mix_.morph_amt.
+    case WMIX_LFO_DEPTH:
+      lfo_mix_.morph_amt = param_10bit_to_f32(value); // 0..1
+      break;
+
+    // ---- Wave-Mix LFO: shape (WMIX_LFO_SHAPE) --------------------------------
+    // Same quantization as WAVE_LFO_SHAPE / WAVE2_LFO_SHAPE (raw 0..1023 ->
+    // 0..511 = SIN, 512..767 = S, 768..1023 = WALK). Written to lfo_mix_.shape.
+    case WMIX_LFO_SHAPE:
+      lfo_mix_.shape = (value < 512) ? 0 : (value < 768) ? 1 : 2;
+      if (lfo_mix_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_mix_.invalidate(); // enter WALK: build the first scene now
+      break;
+
+    // ---- Wave-Mix LFO: WALK gap (WMIX_LFO_GAP) -------------------------------
+    // Same LOG scale as WAVE_LFO_GAP / WAVE2_LFO_GAP (raw 0..1023 -> 1..300 s,
+    // 3 decades). Written to lfo_mix_.gap_sec; only used when shape = WALK.
+    case WMIX_LFO_GAP:
+      lfo_mix_.gap_sec = 1.f * fasterpowf(300.f, param_10bit_to_f32(value));
+      if (lfo_mix_.shape == ShapeLfoSim::kShapeWalk)
+        lfo_mix_.invalidate();
       break;
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
