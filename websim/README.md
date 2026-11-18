@@ -1,34 +1,18 @@
-# how to set up web audio simulator
+# websim
 
-``
-git submodule update --init
-``
-to get emsdk, and then follow the official instruction: https://emscripten.org/docs/getting_started/downloads.html
+Web-sимулятор DRONE (NTS-1 mkII): полный звуковой тракт OSC → MOD → DEL → REV
+в одном wasm audio worklet. UI — SvelteKit-приложение в [`app/`](app/README.md);
+запуск: `platform/nts-1_mkii/serve.sh` (http://localhost:8000/).
 
-``
-cd tools/emsdk
-./emsdk install latest
-./emsdk activate latest
-``
+Папка содержит только:
 
-# how to compile to wasm and test in browser
-For the DRONE family the only web simulator is the unified chain page:
-instead of `make install` (which creates a hardware-specific unit file), run
+| Путь        | Роль |
+|---|---|
+| `app/`      | SvelteKit-приложение (UI + audio wiring + глук-мост) — единственный источник правок |
+| `dsp/*.c`   | LUT/stub-исходники, которые wasm-сборка `drone-chain/` линкует (см. `drone-chain/config.mk`) |
 
-``
-cd platform/nts-1_mkii/drone-chain && make wasm
-``
-
-This builds the full OSC -> MOD -> DEL -> REV audio path into ONE wasm audio
-worklet (drone-chain/sim/index.html). Serve it with
-`platform/nts-1_mkii/serve.sh` (http://localhost:8000/), which adds the
-COOP/COEP headers the SharedArrayBuffer build needs.
-
-This directory is the shared shell/project for that simulator:
-- `index.html` — the page shell (linked into drone-chain/sim/index.html);
-- `dsp/*.c` — the LUT/stub sources the chain wasm links in;
-- `scripts/` — the page JS (`setup-web-audio.js`, `qwerty-hancock.js`), the
-  FlyonUI asset sources (`entry.js`, `app.css`) + `vite*.js` builds them into
-  `sim/flyon.js` / `sim/flyon.css`;
-- `styles/` — the custom `luxury-light` theme (imported from `scripts/app.css`).
-The per-unit standalone pages (osc.html / fx.html) are gone.
+Всё остальное (legacy-шелл `index.html`, `scripts/`, `styles/`, `sim/`,
+`images/`, `samples/`, Vite-конфиги верхнего уровня) удалено: UI живёт в
+`app/src/`, а артефакты emscripten (`index.js`/`index.wasm`) `make wasm` из
+`platform/nts-1_mkii/drone-chain/` сам синхронизирует в `app/static/`, а
+`platform/nts-1_mkii/serve.sh` собирает и запускает приложение.

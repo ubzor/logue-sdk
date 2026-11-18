@@ -1,13 +1,33 @@
-// UI setup for the drone chain simulator (extracted from the inline
-// <script> block in websim/index.html). Plain (non-module) script: declares
-// window.setupWebAudioAndUI, which emscripten glue code (drone.js, linked
-// via the {{{ SCRIPT }}} placeholder) invokes through EM_ASM once the wasm
-// worklet module is ready. It must therefore be a classic script (not
-// type="module") - the classic global assignment is all the glue needs.
-// Loaded in index.html before the {{{ SCRIPT }}} placeholder.
-
-    // Expose function globally so EM_ASM can call it
-    window.setupWebAudioAndUI = function (context, wasmProcessor) {
+// UI setup for the drone chain simulator (ported from the legacy
+// websim/scripts/setup-web-audio.js). The original was a classic (non-module)
+// script because the emscripten glue (index.js) found window.setupWebAudioAndUI
+// through EM_ASM. In the SvelteKit app (src/lib/audio/) it is an ES module:
+// the glue dynamically imports it (see +page.svelte / stage-3 glue) and uses
+// the named export directly. The legacy global assignment is kept as the first
+// statement so anything still expecting window.setupWebAudioAndUI (old glue
+// builds, console debugging) keeps working.
+//
+// Everything inside is byte-identical to the legacy script (1:1 port): it only
+// talks to the DOM through the ids the SvelteKit page markup provides
+// (VolumeSlider, BpmSlider, TimeDomain, FrequencyDomain, Parameters,
+// ParamCol0..2, Presets, hwflt_*, fxmod_*, fxdel_*, fxrev_*, the Octave /
+// HwFltType radio groups, #keyboard) and to the wasm through the embind
+// Module (setEditParam, getEditParamValue, setFxParam, ...).
+export function setupWebAudioAndUI(context, wasmProcessor, wasmModule) {
+  // The emscripten glue calls us through EM_ASM, which resolves
+  // `setupWebAudioAndUI` as a BARE GLOBAL (its generated body is a plain JS
+  // function, not a module). Expose ourselves before the first EM_ASM call so
+  // the glue finds us; keep the same name the legacy classic script used.
+  window.setupWebAudioAndUI = setupWebAudioAndUI;
+  // The legacy classic script ran in the SAME global scope as the emscripten
+  // glue (index.js), so bare `Module` inside it resolved to the glue's
+  // `var Module`. As a separate ES module, that binding is NOT in scope.
+  // The glue (a module) keeps Module in its own module scope, so the wiring
+  // receives it from the glue: the patched EM_ASM call passes the glue's
+  // Module as a third argument (see scripts/relink-glue.mjs). When running
+  // against an UNPATCHED glue (old build) fall back to the global - in a
+  // classic-script glue, top-level `var Module` IS a global property.
+  const Module = wasmModule || globalThis.Module;
 
       function approximatelyEqual(a, b, epsilon = 1e-4) {
         return Math.abs(a - b) < epsilon;
@@ -1874,5 +1894,4 @@
         box.checked = active;
         refresh();
       }
-    };
-    
+    }

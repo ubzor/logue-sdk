@@ -1,0 +1,8 @@
+node_modules/
+build/
+.svelte-kit/
+flyonui-patched/
+*.local
+static/index.js
+static/index.wasm
+static/setup-web-audio.js

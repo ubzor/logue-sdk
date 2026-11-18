@@ -120,8 +120,9 @@ done
 # The unified chain page is the ONLY web simulator: it runs all four DSP
 # stages (OSC -> MOD -> DEL -> REV) in a single wasm worklet. Build it when
 # the requested run includes it -- by default (both) or via an explicit name.
-# The Vite flyon.css/js were already built above, so `make wasm` here only
-# recompiles the C/C++ and links (the slow part).
+# `make wasm` compiles/links the C/C++ and syncs the emscripten artifacts
+# (index.js/index.wasm) into websim/app/static/ (the SvelteKit app's static
+# dir; the app build itself is done by serve.sh).
 if [ "$BUILD_SIM" -eq 1 ]; then
   MOD_DIR="$PLATFORM_DIR/$CHAIN_MODULE"
   echo "============================================"

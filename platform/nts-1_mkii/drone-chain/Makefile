@@ -7,7 +7,7 @@
 # cross-compiler / linker / install target here, only `make wasm`.
 #
 # Usage:
-#   make wasm    # build sim/index.html + index.js + index.wasm (+ assets)
+#   make wasm    # build sim/index.js + index.wasm, sync into app/static/
 #   make clean
 #
 ##############################################################################
@@ -88,8 +88,9 @@ vpath %.cpp $(sort $(dir $(WASMSRC_CXX)))
 ##############################################################################
 # Targets
 #
-# The simulator page is emitted as index.html so serve.sh can serve the sim/
-# directory as the document root and land on http://host:8000/ [index.html].
+# The emscripten glue is emitted as sim/index.js; the SvelteKit app in
+# websim/app/ serves it (plus index.wasm) from the document root, so the
+# landing URL is http://host:8000/.
 # NOTE: keep recipe comments parenthesis-free -- /bin/sh (dash) on some
 # build machines rejects unquoted '(' inside recipe comment lines.
 #
@@ -97,58 +98,26 @@ vpath %.cpp $(sort $(dir $(WASMSRC_CXX)))
 
 wasm: $(WASMOBJS)
 	@echo 'Building WebAssembly audio processor (drone-chain)'
-	@echo Linking $(WASMDIR)/index.html
+	@echo Linking $(WASMDIR)/index.js
 	@$(EMCC_BIN_PATH)/em++ -Wno-unknown-attributes -Wno-limited-postlink-optimizations $(INCDIR) \
 		-fno-rtti -fno-exceptions -std=c++17 -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
 		-s AUDIO_WORKLET=1 \
 		-s WASM_WORKERS=1 \
 		-s SHARED_MEMORY=1 \
 		-lembind \
-		--shell-file $(SANDBOXDIR)/index.html \
 		-O2 \
 		-g -fdebug-compilation-dir='..' \
 		$(WASMOBJS) \
-		-o $(WASMDIR)/index.html
-	# The shell index.html loads assets with relative paths [scripts/, images/,
-	# samples/], and serve.sh serves $(WASMDIR) as the document root. Copy them
-	# so the simulator is self-contained and does not depend on the websim/ tree.
-	@echo Copying web assets to $(WASMDIR)
-	@mkdir -p $(WASMDIR)/scripts $(WASMDIR)/images $(WASMDIR)/samples
-	@cp -p $(SANDBOXDIR)/scripts/*.js $(WASMDIR)/scripts/
-	@cp -p $(SANDBOXDIR)/images/*.ico $(WASMDIR)/images/ 2>/dev/null || true
-	@cp -p $(SANDBOXDIR)/samples/*.json $(WASMDIR)/samples/ 2>/dev/null || true
-	@cp -p $(SANDBOXDIR)/samples/*.wav $(WASMDIR)/samples/ 2>/dev/null || true
-	@cp -p $(SANDBOXDIR)/samples/*.ogg $(WASMDIR)/samples/ 2>/dev/null || true
-	@cp -p $(SANDBOXDIR)/samples/*.mp3 $(WASMDIR)/samples/ 2>/dev/null || true
-	@echo 'Building FlyonUI assets (Vite) in $(SANDBOXDIR)'
-	@if [ ! -d "$(SANDBOXDIR)/node_modules" ]; then \
-		echo "node_modules missing - running npm install in $(SANDBOXDIR)"; \
-		cd "$(SANDBOXDIR)" && npm install --no-audit --no-fund; \
-	fi
-	@cd "$(SANDBOXDIR)" && npx vite build
-	@cp -p "$(SANDBOXDIR)/sim/flyon.css" "$(WASMDIR)/flyon.css"
-	@cp -p "$(SANDBOXDIR)/sim/flyon.js" "$(WASMDIR)/flyon.js"
-	# Vercel deploy config: the wasm build uses -s SHARED_MEMORY=1 (see above),
-	# which needs SharedArrayBuffer, i.e. the page must be cross-origin isolated.
-	# Vercel does not send these headers by default (unlike serve.sh, which adds
-	# them in the Python handler), so without vercel.json the simulator's
-	# index.js fails at startup and the generated parameter UI never appears.
-	# sim/ is git-ignored and wiped on rebuild, so this file must be generated
-	# after the build, not kept in the repo.
-	@echo 'Writing Vercel config (COOP/COEP headers) to $(WASMDIR)/vercel.json'
-	@printf '%s\n' \
-	'{' \
-	'  "headers": [' \
-	'    {' \
-	'      "source": "/(.*)",' \
-	'      "headers": [' \
-	'        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },' \
-	'        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },' \
-	'        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" }' \
-	'      ]' \
-	'    }' \
-	'  ]' \
-	'}' > "$(WASMDIR)/vercel.json"
+		-o $(WASMDIR)/index.js
+	# The emscripten glue (index.js) is the artifact the SvelteKit app in
+	# $(SANDBOXDIR)/app serves from the document root (plus index.wasm). The
+	# legacy HTML shell (websim/index.html) is gone: the UI is the SvelteKit
+	# app (app/src/), and the glue's boot call is rewired to the app's audio
+	# wiring module by app/scripts/relink-glue.mjs (run by serve.sh).
+	@echo 'Syncing emscripten artifacts into the SvelteKit app (app/static/)'
+	@mkdir -p $(SANDBOXDIR)/app/static
+	@cp -p $(WASMDIR)/index.js $(SANDBOXDIR)/app/static/index.js
+	@cp -p $(WASMDIR)/index.wasm $(SANDBOXDIR)/app/static/index.wasm
 	@echo Done
 
 $(WASMOBJDIR):

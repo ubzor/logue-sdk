@@ -1,0 +1,263 @@
+/* Main stylesheet for the SvelteKit drone chain simulator (ported from the
+ * legacy websim/scripts/app.css; import paths adjusted to src/).
+ *
+ * Everything (Tailwind utilities + flyonui base/theme layers + flyonui
+ * component CSS) is imported here and compiled into one asset by
+ * @tailwindcss/vite (see vite.config.js).
+ *
+ * NOTE on flyonui's minified component CSS: flyonui 2.4.1 ships
+ * components/*.css with a few minification artifacts (value/declaration
+ * boundaries fused together) that make Lightning CSS - which @tailwindcss/vite
+ * runs over every @import - crash or drop the &-nested blocks (e.g. the switch
+ * knob). The `flyonuiRepair` Vite plugin (see vite.flyonui.js) fixes the source
+ * *before* Lightning CSS runs, so the components can be imported normally and
+ * their &-nested pseudo-elements survive. */
+@import "tailwindcss";
+
+/* Iconify (Tabler) icons: generates `icon-[tabler--<name>]` utilities that
+ * inline the SVG as a CSS mask using currentColor, so icons follow the active
+ * text color like any other element. See FlyonUI docs "Setup Icons". */
+@plugin "@iconify/tailwind4";
+
+/* ---- flyonui: base layers ------------------------------------------------ */
+@import "../node_modules/flyonui/theme/light.css";
+@import "../node_modules/flyonui/theme/dark.css";
+@import "../node_modules/flyonui/base/scrollbar.css";
+@import "../node_modules/flyonui/base/rootcolor.css";
+@import "../node_modules/flyonui/base/reset.css";
+@import "../node_modules/flyonui/base/custombase.css";
+@import "../node_modules/flyonui/base/svg.css";
+@import "../node_modules/flyonui/base/properties.css";
+
+/* ---- extra themes (flyonui ships light+dark only in flyonui.css) -------- */
+@import "../node_modules/flyonui/theme/spotify.css";
+@import "../node_modules/flyonui/theme/valorant.css";
+@import "../node_modules/flyonui/theme/slack.css";
+@import "../node_modules/flyonui/theme/vscode.css";
+@import "../node_modules/flyonui/theme/gourmet.css";
+@import "../node_modules/flyonui/theme/luxury.css";
+@import "../styles/luxury-light.css";
+
+/* ---- flyonui: components the shell actually uses -------------------------
+ * These are REPAIRED COPIES staged into ./flyonui-patched/ by the flyonuiRepair
+ * Vite plugin (vite.flyonui.js, buildStart) - flyonui 2.4.1's own minified
+ * components/*.css carry fused value/declaration boundaries that make
+ * Lightning CSS (run by @tailwindcss/vite over every @import) crash or drop
+ * the &-nested blocks (switch knob, etc.). The plugin copies each whitelisted
+ * component from node_modules/flyonui/components/ into flyonui-patched/ with
+ * the repair applied, and we import those copies here. They are compiled into
+ * the stylesheet by @tailwindcss/vite. The COMPONENTS list in vite.flyonui.js
+ * must stay in sync with this @import block. */
+@import "../flyonui-patched/button.css";
+@import "../flyonui-patched/card.css";
+@import "../flyonui-patched/range.css";
+@import "../flyonui-patched/switches.css";
+@import "../flyonui-patched/badge.css";
+@import "../flyonui-patched/kbd.css";
+@import "../flyonui-patched/label.css";
+@import "../flyonui-patched/divider.css";
+
+/* ------------------------------------------------------------------ */
+/* Custom bits not covered by FlyonUI (verbatim from the legacy shell) */
+/* ------------------------------------------------------------------ */
+
+/* FX parameter blocks (MOD / DEL / REV) mirror the MAIN (OSC) parameter
+ * block, which is NOT inside a flyonui .card. The .card component sets
+ * `color: color-mix(... base-content 80% ...)` (a dimmed 80%-alpha text), so
+ * the FX slider labels read fainter than the MAIN labels. `.fx-params`
+ * restores the full --color-base-content so the FX labels match MAIN exactly.
+ * Plain (unlayered) rule: unlayered author CSS beats flyonui's layered
+ * `.card` rule, so this wins without !important. */
+.fx-params {
+	color: var(--color-base-content);
+}
+
+/* flyonui range-slider repair (verbatim from the legacy app.css).
+ * flyonui 2.4.1 ships components/range.css in modern CSS-nesting syntax; the
+ * @tailwindcss/vite plugin (Lightning CSS) drops the nested thumb
+ * declarations (width/top/border). We re-assert the dropped properties for
+ * *every* breakpoint variant (.range, .sm\:range, ...) in FLAT CSS so
+ * Lightning CSS passes it through intact. */
+@layer utilities {
+	.range::-webkit-slider-runnable-track {
+		background-color: color-mix(in oklab, var(--color-neutral) 10%, transparent);
+	}
+	.range::-moz-range-track {
+		background-color: color-mix(in oklab, var(--color-neutral) 10%, transparent);
+	}
+	.range::-webkit-slider-thumb {
+		width: var(--range-thumb-size);
+		height: var(--range-thumb-size);
+		top: 50%;
+		margin-top: calc(var(--range-thumb-size) / -2);
+	}
+	.range::-moz-range-thumb {
+		width: var(--range-thumb-size);
+		height: var(--range-thumb-size);
+	}
+	@media (min-width: 640px) {
+		.sm\:range::-webkit-slider-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+			top: 50%;
+			margin-top: calc(var(--range-thumb-size) / -2);
+		}
+		.sm\:range::-moz-range-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+		}
+	}
+	@media (min-width: 768px) {
+		.md\:range::-webkit-slider-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+			top: 50%;
+			margin-top: calc(var(--range-thumb-size) / -2);
+		}
+		.md\:range::-moz-range-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+		}
+	}
+	@media (min-width: 1024px) {
+		.lg\:range::-webkit-slider-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+			top: 50%;
+			margin-top: calc(var(--range-thumb-size) / -2);
+		}
+		.lg\:range::-moz-range-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+		}
+	}
+	@media (min-width: 1280px) {
+		.xl\:range::-webkit-slider-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+			top: 50%;
+			margin-top: calc(var(--range-thumb-size) / -2);
+		}
+		.xl\:range::-moz-range-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+		}
+	}
+	@media (min-width: 1536px) {
+		.\32 xl\:range::-webkit-slider-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+			top: 50%;
+			margin-top: calc(var(--range-thumb-size) / -2);
+		}
+		.\32 xl\:range::-moz-range-thumb {
+			width: var(--range-thumb-size);
+			height: var(--range-thumb-size);
+		}
+	}
+}
+
+/* flyonui 2.4.1 declares the pseudo-element content via a custom property
+ * (--tw-content) inside an @property block that Vite drops. Without a
+ * fallback the knob/content pseudo-elements vanish. */
+@layer base {
+	:root {
+		--tw-content: "";
+	}
+}
+
+/* The Space Grotesk web font is loaded by the shell (<link> in <head>,
+ * see app.html); just make it the body font. */
+body {
+	font-family: "Space Grotesk", system-ui, sans-serif;
+	-webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* Octave radio group ("Join radio with btn style", FlyonUI docs pattern,
+ * verbatim from the legacy app.css): the .btn rule in flyonui/components/
+ * button.css already paints input[type=radio] via
+ * `&:after { content: attr(aria-label) }` (hence the aria-labels carry the
+ * visible "1".."5" text), and input[type=radio]:checked flips --btn-bg to the
+ * primary color with primary content. The CSS keeps group state entirely in
+ * :checked, so the Z/X hotkeys only set radio.checked from JS and the group
+ * follows for free. */
+.octave-join {
+	display: flex;
+	flex: 1 1 0;
+	gap: 0;
+	&:not(:first-child) .octave-join-item {
+		margin-inline-start: calc(var(--border, 1px) * -1);
+	}
+	/* Middle items (neither first nor last): all corners square, so only the
+	 * 4 outer corners of the whole group are rounded. */
+	.octave-join-item {
+		--join-ss: 0;
+		--join-se: 0;
+		--join-es: 0;
+		--join-ee: 0;
+	}
+	.octave-join-item:first-child {
+		--join-ss: var(--radius-field);
+		--join-se: 0;
+		--join-es: var(--radius-field);
+		--join-ee: 0;
+	}
+	.octave-join-item:last-child {
+		--join-ss: 0;
+		--join-se: var(--radius-field);
+		--join-es: 0;
+		--join-ee: var(--radius-field);
+	}
+	.octave-join-item:only-child {
+		--join-ss: var(--radius-field);
+		--join-se: var(--radius-field);
+		--join-es: var(--radius-field);
+		--join-ee: var(--radius-field);
+	}
+}
+.octave-join.drop-shadow {
+	filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--color-neutral) 20%, transparent));
+}
+
+/* qwerty-hancock.js paints its own inline styles, but give the container
+ * a deterministic baseline. */
+#keyboard {
+	width: 100%;
+}
+
+/* Scope canvases: theme-aware background + drawing colors (verbatim from the
+ * legacy app.css). The JS scope reads --scope-bg / --scope-fg through a
+ * MutationObserver on <html> and paints the canvas in those colors, so the
+ * time-domain trace and the FFT histogram stay readable on every theme
+ * without hard-coding a per-theme selector list. The CSS background mirrors
+ * --scope-bg so the canvas looks right even before the first draw frame.
+ * width:100% + max-width:512px stretches the native 512px buffer to the
+ * rendered box, but never past the native resolution - no upscaling. */
+.scope-canvas {
+	width: 100%;
+	max-width: 512px;
+	height: 128px;
+	display: block;
+	--scope-bg: var(--color-base-100);
+	/* Lines/bars are drawn in the active theme's primary color so the scope
+	 * accent follows the active theme. */
+	--scope-fg: var(--color-primary);
+	background: var(--scope-bg);
+}
+
+/* Keyboard (qwerty-hancock) theme-aware key colors (verbatim from the legacy
+ * app.css). qwerty-hancock paints each key via inline `style.backgroundColor`,
+ * so the values passed to its constructor must be resolvable at render time.
+ * CSS `var()` works in inline styles and inherits from <html>, so we hand the
+ * library two custom properties and let the active theme define them. This
+ * keeps the keyboard's warm palette in lockstep with luxury (dark) and
+ * luxury-light (light) instead of the hard-coded #fff/#000 that clashed with
+ * the theme. */
+[data-theme="luxury"] {
+	--kbd-white: oklch(88% 0.02 70);
+	--kbd-black: oklch(12% 0.02 65);
+}
+[data-theme="luxury-light"] {
+	--kbd-white: oklch(99% 0.005 70);
+	--kbd-black: oklch(20% 0.03 65);
+}
