@@ -166,6 +166,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   // and its state update is skipped (regression-safe). The walk-modified
   // cutoff coefficient (svf_.cc_w) is set per-sample below when active.
   const float svf_wet = p.svf_wet;
+  const float svf_wet2 = p.svf_wet2; // cascaded 2nd stage (12 -> 24 dB/oct)
   const bool svf_active = svf_wet > 0.f;
 
   for (const float *out_end = out + frames; out != out_end; in += 2, out += 1)
@@ -431,13 +432,23 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       //   SQR:  sign(sin(2*pi*ph))        -> {-1,+1}, zero-mean
       //   NOISE: (white - 0.5) * 2        -> [-1,+1], zero-mean, per-sample
       if (p.fm_c_wave == 0)
-        fm_c_wave = osc_sinf(6.283185307179586f * fm_c_ph);
+        fm_c_wave = osc_sinf(6.283185307179586f * fm_c_ph);        // SIN
       else if (p.fm_c_wave == 1)
-        fm_c_wave = 2.f * fm_c_ph - 1.f;
+      {
+        // TRI (triangle): 4*|2*ph-1|-3 over one period. Zero-mean, peak +/-1,
+        // harmonics fall off as 1/n^2 (vs 1/n for SIN/SAW) -> the FEWEST upper
+        // sidebands of any periodic wave. The go-to "FM complex but not
+        // screechy" shape. No libm (abs via branch-free ternary).
+        const float t = 2.f * fm_c_ph - 1.f;
+        const float at = (t < 0.f) ? -t : t;
+        fm_c_wave = 4.f * at - 3.f;
+      }
       else if (p.fm_c_wave == 2)
-        fm_c_wave = (osc_sinf(6.283185307179586f * fm_c_ph) >= 0.f) ? 1.f : -1.f;
+        fm_c_wave = 2.f * fm_c_ph - 1.f;                          // SAW
+      else if (p.fm_c_wave == 3)
+        fm_c_wave = (osc_sinf(6.283185307179586f * fm_c_ph) >= 0.f) ? 1.f : -1.f; // SQR
       else
-        fm_c_wave = (osc_white() - 0.5f) * 2.f;
+        fm_c_wave = (osc_white() - 0.5f) * 2.f;                   // NOISE
     }
     // C phase offset on the sum (cycles): depth * max * centered C wave,
     // scaled by the GLOBAL FM MOD amount (p.fm_amt, edit FMAM, LINEAR 0..1).
@@ -528,8 +539,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
           switch (p.fm_c_wave)
           {
             case 0: s_wave = osc_sinf(ph2pi); break;                          // SIN
-            case 1: s_wave = 2.f * fm_s_ph - 1.f; break;                      // SAW
-            case 2: s_wave = (osc_sinf(ph2pi) >= 0.f) ? 1.f : -1.f; break;     // SQR
+            case 1: {                                                          // TRI (1/n^2 harmonics)
+              const float t = 2.f * fm_s_ph - 1.f;
+              const float at = (t < 0.f) ? -t : t;
+              s_wave = 4.f * at - 3.f;
+            } break;
+            case 2: s_wave = 2.f * fm_s_ph - 1.f; break;                      // SAW
+            case 3: s_wave = (osc_sinf(ph2pi) >= 0.f) ? 1.f : -1.f; break;     // SQR
             default: s_wave = (osc_white() - 0.5f) * 2.f; break;              // NOISE (per-sample)
           }
           // * p.fm_amt = the GLOBAL FM MOD amount (edit FMAM, LINEAR 0..1):
@@ -806,7 +822,16 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       if (cc_w < Svf::kCcMin) cc_w = Svf::kCcMin;
       else if (cc_w > Svf::kCcMax) cc_w = Svf::kCcMax;
       svf_.cc_w = cc_w;
+      svf2_.cc_w = cc_w; // the 2nd stage tracks the SAME (wandered) cutoff
       y_filt = svf_.process(y, svf_wet);
+      // CASCaded 2nd stage (12 dB/oct -> 24 dB/oct total): its dry/wet is
+      // svf_wet2 (the FCUT2 knob). At svf_wet2 == 0 (default) the cascade is
+      // transparent (regression-safe). The 2nd stage is always FULL-wet as an
+      // LPF of the 1st stage's output (no separate dry/wet blend inside the
+      // cascade) so the two stages act as one 24 dB/oct filter; the user
+      // morphs 12 <-> 24 dB/oct by svf_wet2.
+      if (svf_wet2 > 0.f)
+        y_filt = svf2_.process(y_filt, 1.f);
     }
 
 

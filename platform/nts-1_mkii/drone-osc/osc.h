@@ -259,7 +259,7 @@ public:
     // colour on top of the (untouched) cross-FM A+B timbre. At FM_CR = 0
     // (default) C is off and the stock sound is bit-identical.
     FM_CR,          // C frequency (LOG 0..1 Hz; raw 0 = OFF)
-    FM_CW,          // C wave shape (0=SIN, 1=SAW, 2=SQR, 3=NOISE)
+    FM_CW,          // C wave shape (0=SIN, 1=TRI, 2=SAW, 3=SQR, 4=NOISE)
     FM_CD,          // C depth (LINEAR 0..100% -> 0..kFmCMaxCycles phase peak)
     // ---- FM modulator S (static teeth): a CARRIER-LOCKED FM oscillator ------
     // S's rate is locked to the (A+B) carrier: FMST sets N teeth per carrier
@@ -282,12 +282,21 @@ public:
     // exactly 0, the (A+B) sum is unmodulated) regardless of the individual C/S
     // settings. It scales the DEVIATION only, never the C/S rates or shapes.
     FM_AMT,         // global FM MOD amount (LINEAR 0..100%, default 100%)
+    // ---- FCUT2: the CASCaded 2nd-stage SVF dry/wet (12 -> 24 dB/oct) --------
+    // FCUT2 is the dry/wet of the SECOND (cascaded) SVF stage (svf2_, see
+    // osc.h svf2_ member / osc_mix.h). It shares the SAME cutoff (CUT) and
+    // resonance (RES) as the 1st stage, so only the wet amount is settable:
+    // 0% = the 2nd stage is transparent (a single 12 dB/oct SVF, bit-identical
+    // to the factory default); 100% = full 2nd-stage LPF (24 dB/oct total).
+    // Raising FCUT2 gives a steeper top-end roll-off for taming FM upper
+    // sidebands (the "FM complex but not screechy" recipe).
+    FCUT2,          // 2nd-stage SVF dry/wet (LINEAR 0..100%, default 0% = 12 dB/oct)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
-  // Number of editable DSP parameters (RATE_AMT..WMIX_LFO_GAP).
-  static constexpr uint8_t kEditParamCount = 54; // RATE_AMT..FM_AMT
+  // Number of editable DSP parameters (RATE_AMT..FCUT2).
+  static constexpr uint8_t kEditParamCount = 55; // RATE_AMT..FCUT2
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -325,7 +334,7 @@ public:
   //   46 WMXS (WMIX_LFO_SHAPE: wave-mix LFO shape, 0=SIN/1=S/2=WALK)
   //   47 WMXG (WMIX_LFO_GAP: wave-mix WALK mean gap, log 1..300 s)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 48 = (WMIX_LFO_GAP - RATE_AMT + 1);
+  // kEditParamCount = 55 = (FCUT2 - RATE_AMT + 1);
   // select_ 0..47 -> RATE_AMT..WMIX_LFO_GAP.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
@@ -356,7 +365,7 @@ public:
   // identical waves is bit-identical to the old single-stream sound.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  // 48 values (kEditParamCount = 48, RATE_AMT..WMIX_LFO_GAP): indices 0..43
+  // 55 values (kEditParamCount = 55, RATE_AMT..FCUT2): indices 0..53
   // keep the old values (13 (WAV1) = 0 bank A, 14 (WAV2) = 128 bank A, 35 (WLFR)
   // = 0, 36 (WLFD) = 1023); 37 (W2LFR) = 0 (stream-2 LFO off); 38 (W2LFD) =
   // 1023 (100%); 39 (WMIX) = 511 (50/50); 40 (WLFS) = 0 (Sin, default);
@@ -367,12 +376,13 @@ public:
   // unmodulated, regression-safe); 49 (FM_CW) = 0 (SIN); 50 (FM_CD) = 0 (OFF);
   // 51 (FM_ST) = 0 (S OFF); 52 (FM_SA) = 1023 (100%, full tooth size — with
   // FMST = 0 the offset is 0 anyway); 53 (FM_AMT) = 1023 (100% — the global FM
-  // MOD master is fully open, so C/S behave exactly as set, bit-identical).
+  // MOD master is fully open, so C/S behave exactly as set, bit-identical);
+  // 54 (FCUT2) = 0 (0% wet — the 2nd SVF stage is transparent, a single 12 dB/oct).
   // At the factory preset the wave-mix LFO is OFF (rate = 0 Hz), so the
   // crossfade stays at the static WMIX value — bit-identical to the pre-LFO
   // sound; and FM modulator C is OFF (rate = 0), so the sum is bit-identical
   // to the pre-FM-C sound.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -383,7 +393,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -877,7 +887,16 @@ private:
   // K-rate; the cutoff is modulated per-sample by the random walk (RWFC is
   // folded into the FCUT knob's dry/wet — see apply_edit_param). The dry/wet
   // crossfade (svf_wet) blends the raw saturator output with the LPF output.
+  // svf_ is the FIRST (12 dB/oct) stage; svf2_ is the CASCaded second stage
+  // (another 12 dB/oct) -> 24 dB/oct total, with its OWN dry/wet (svf_wet2):
+  // the 1st stage is always at full wet (a hard LPF), the 2nd is wet-blended,
+  // so the user can morph 12 -> 24 dB/oct. At svf_wet2 == 0 (default) the
+  // cascade is transparent and the sound is bit-identical to the old single
+  // 12 dB/oct SVF (regression-safe). The random-walk cutoff (RWFC) is folded
+  // into svf_.cc_w; svf2_.cc_w is the SAME scale so both stages track the
+  // same (wandered) cutoff in unison.
   Svf::State svf_;
+  Svf::State svf2_;
 
   // LATCH is ALWAYS ON (see the voice-cluster block). The per-voice "active"
   // flag and the A-H-R envelope live in Voice (voice_[]). The cluster's last

@@ -43,7 +43,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "WLFS", "WLFG",
       "W2FS", "W2FG",
       "WMXR", "WMXD", "WMXS", "WMXG",
-      "FMCR", "FMCW", "FMCD", "FMST", "FMSA", "FMAM"};
+      "FMCR", "FMCW", "FMCD", "FMST", "FMSA", "FMAM", "FCUT2"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -98,6 +98,20 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[n++] = 'c';
     buf[n] = '\0';
     return buf;
+  }
+
+  // FMCW (FM Mod Wave): the modulator's waveform name (5 shapes:
+  // SIN / TRI / SAW / SQR / NOISE). The same wave drives BOTH the C
+  // (vibrato) and S (static teeth) modulators. raw band -> name (mirrors
+  // apply_edit_param FM_CW: 0..341 / 342..511 / 512..682 / 683..853 /
+  // 854..1023).
+  if (k == FM_CW)
+  {
+    if (raw < 342) return "SIN";
+    if (raw < 512) return "TRI";
+    if (raw < 683) return "SAW";
+    if (raw < 854) return "SQR";
+    return "NOISE";
   }
 
   // RES (SVF resonance Q): "X.Y" (0.5..2.5, fixed 3 chars, no loop needed).
@@ -287,12 +301,17 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     buf[7] = '\0';
     return buf;
   }
-  // FM_CW (wave): SIN / SAW / SQR / NOISE (band of the raw value).
+  // FM_CW (wave): SIN / TRI / SAW / SQR / NOISE (band of the raw value, mirrors
+  // apply_edit_param FM_CW: 0..341 / 342..511 / 512..682 / 683..853 / 854..1023).
+  // NOTE: an EARLIER FMCW branch (right after FM_A/FM_B) already handles this and
+  // returns the full names; this is the legacy 4-band branch kept in sync so the
+  // two never disagree (the earlier one wins at runtime).
   if (k == FM_CW)
   {
-    if (raw < 512) return "SIN";
-    if (raw < 768) return "SAW";
-    if (raw < 870) return "SQR";
+    if (raw < 342) return "SIN";
+    if (raw < 512) return "TRI";
+    if (raw < 683) return "SAW";
+    if (raw < 854) return "SQR";
     return "NS"; // NOISE (the display width is tight; "NS" = noise)
   }
   // FM_CD (depth): 0..100% (LINEAR) -- the default branch formats it.

@@ -79,6 +79,7 @@ inline void Osc::init(float *)
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // each stream starts centered, AMT=0 (off)
     svf_.reset(); // zero the SVF integrator states (coefficients set by apply_edit_param above)
+    svf2_.reset(); // zero the cascaded 2nd-stage SVF states (coefficients set alongside svf_)
     // Reset the Rnd debounce state (both builds): no pending re-rolls, clock at
     // zero. (The debounce fields live outside the EMSCRIPTEN block so the
     // hardware build's Rnd slot shares them.)
@@ -176,6 +177,7 @@ inline void Osc::reset()
     for (uint8_t i = 0; i < kRwStreamCount; i++)
       rw_[i].reset(); // re-center every stream on stop
     svf_.reset(); // zero the SVF integrator states (keeps the knob-derived coefficients)
+    svf2_.reset(); // zero the cascaded 2nd-stage SVF states (keeps the knob-derived coefficients)
     last_note_ = -1;
     // (glide removed: no gl_want_)
     env_sum_ = 0.f; // cluster is silent -> no pending loudness compensation

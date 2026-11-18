@@ -35,7 +35,7 @@
       // PARAM_GROUPS. Kept in sync with EDIT_PARAM_NAMES.length (asserted).
       // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now
       //  a constant (kDuckConstant in osc_constants.h).)
-      const EDIT_PARAM_COUNT = 54; // 54 = RATE..FM_AMT (FM modulator C: CR/CW/CD + static teeth: ST/SA; FMAM = global FM MOD amount; shape shared with FM Mod Wave)
+      const EDIT_PARAM_COUNT = 55; // 55 = RATE..FCUT2 (FM modulator C: CR/CW/CD + static teeth: ST/SA; FMAM = global FM MOD amount; FCUT2 = 2nd-stage SVF wet 12->24 dB/oct)
       // Names in select_ order (kEditParamFirst = RATE_AMT, see osc.h). The
       // polyphonic 6-voice cluster: each new note gets its own voice (no
       // glide: notes start at their exact pitch with random per-voice phases).
@@ -94,6 +94,7 @@
         "Wave Mix LFO Rate", "Wave Mix LFO Depth",
         "Wave Mix LFO Shape", "Wave Mix LFO Gap",
         "FM Mod Rate", "FM Mod Wave", "FM Mod Depth", "FM Teeth", "FM Teeth Depth", "FM Amount",
+        "Cutoff 24dB",
       ];
 
       // Semantic groups of the 37 edit parameters (UI-only; the DSP enum order
@@ -139,7 +140,7 @@
         { title: "WANDER TGT", col: 1, items: [16, 21, 17, 18, 29, 30] },
         // ---- Column 2 ----
         { title: "VOLUME",     col: 2, items: [15, 22, 23, 24, 8, 9, 34] },
-        { title: "FILTER",     col: 2, items: [19, 20] },
+        { title: "FILTER",     col: 2, items: [19, 20, 54] },
         { title: "CLUSTER",    col: 2, items: [33] },
         { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52, 53] },
       ];
@@ -303,10 +304,13 @@
           return "0." + String(Math.max(1, Math.min(999, Math.round(hz * 1000)))).padStart(3, "0") + " H";
         }
         if (idx === 49) {
-          // FM Mod Wave (edit 49): SIN / SAW / SQR / NOISE (raw band).
-          if (raw < 512) return "SIN";
-          if (raw < 768) return "SAW";
-          if (raw < 870) return "SQR";
+          // FM Mod Wave (edit 49): SIN / TRI / SAW / SQR / NOISE (raw band,
+          // mirrors the DSP apply_edit_param FM_CW: 0..341 / 342..511 /
+          // 512..682 / 683..853 / 854..1023).
+          if (raw < 342) return "SIN";
+          if (raw < 512) return "TRI";
+          if (raw < 683) return "SAW";
+          if (raw < 854) return "SQR";
           return "NOISE";
         }
         if (idx === 51) {
@@ -596,16 +600,19 @@
           return;
         }
 
-        // ---- FM Mod Wave (edit 49): radio group SIN/SAW/SQR/NOISE -----------
+        // ---- FM Mod Wave (edit 49): radio group SIN/TRI/SAW/SQR/NOISE -------
         // Same pattern as the WAVE bank A..F radio group (index 13): one
         // <input type="radio" class="octave-join-item btn ..."> per shape.
         // No #editparam_49 slider is created; applyPresetRaw / fireRandom
         // special-case index 49 (they walk #editparam_<i> by index).
+        // raw values are the CENTER of each DSP band (apply_edit_param FM_CW:
+        // 0..341 / 342..511 / 512..682 / 683..853 / 854..1023).
         if (index === 49) {
           const shapes = [
-            { label: "SIN",   raw: 0    },
-            { label: "SAW",   raw: 640  },
-            { label: "SQR",   raw: 800  },
+            { label: "SIN",   raw: 100  },
+            { label: "TRI",   raw: 400  },
+            { label: "SAW",   raw: 600  },
+            { label: "SQR",   raw: 750  },
             { label: "NOISE", raw: 950  },
           ];
           const group = document.createElement("div");
@@ -623,12 +630,12 @@
           });
           container.appendChild(group);
           const setChecked = (shapeIdx) => {
-            const si = Math.max(0, Math.min(3, shapeIdx | 0));
+            const si = Math.max(0, Math.min(4, shapeIdx | 0));
             for (let i = 0; i < radios.length; i++) radios[i].checked = (i === si);
           };
           window._setFmModWaveChecked = setChecked;
           const initRaw = (Module.getEditParamValue) ? Module.getEditParamValue(index) : 0;
-          const initShape = initRaw < 512 ? 0 : (initRaw < 768 ? 1 : (initRaw < 870 ? 2 : 3));
+          const initShape = initRaw < 342 ? 0 : (initRaw < 512 ? 1 : (initRaw < 683 ? 2 : (initRaw < 854 ? 3 : 4)));
           setChecked(initShape);
           radios.forEach((radio, si) => {
             radio.onchange = () => apply(shapes[si].raw);
@@ -1088,8 +1095,8 @@
       // W2LR 0 / W2LD 1023 (stream-2 LFO off, full depth), WMIX 511 (50/50),
       // WLFS 0 (Sin) / WLFG 511 (~30 s), W2FS 0 / W2FG 511, WMXR 0 (wave-mix
       // LFO OFF — static mix), WMXD 1023 (100% swing), WMXS 0 (Sin), WMXG 511.
-      // (FOLD2 / DCK removed — 48 params total.)
-      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511];
+      // (FOLD2 / DCK removed — 55 params total, RATE..FCUT2.)
+      const DEFAULT_RAW = [0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0];
 
       // Full randomization of all 30 parameters. "Safe" (walk) parameters get
       // the full 0..1023 range; "critical" parameters are constrained to
@@ -1252,7 +1259,7 @@
         // FM Mod Rate: 0..~30% (raw 0..307) -- a slow vibrato; 0 (OFF) is a
         // valid draw (most re-rolls leave C off, a few add gentle motion).
         set("FM Mod Rate", rRange(0, 307));
-        // FM Mod Wave: any of the 4 shapes (raw 0..1023 spans SIN/SAW/SQR/NOISE).
+        // FM Mod Wave: any of the 5 shapes (raw 0..1023 spans SIN/TRI/SAW/SQR/NOISE).
         set("FM Mod Wave", rRange(0, 1023));
         // FM Mod Depth: 0..50% (raw 0..511) -- a subtle vibrato.
         set("FM Mod Depth", rRange(0, 511));
@@ -1262,6 +1269,12 @@
         // FM Teeth Depth: 25..100% (raw 256..1023) -- the tooth size; low values
         // are barely audible, so draw the upper half.
         set("FM Teeth Depth", rRange(256, 1023));
+        // FCUT2: 2nd-stage SVF wet (0 = 12 dB/oct, 100% = 24 dB/oct). Window
+        // 0..70% (raw 0..716) -- most re-rolls stay near a single 12 dB/oct
+        // stage (the factory default); a few add a steeper 24 dB/oct roll-off
+        // for taming FM upper sidebands. Full range would occasionally sound
+        // "muddy" at the top, so cap at 70%.
+        set("Cutoff 24dB", rRange(0, 716));
         return raws;
       }
 
@@ -1363,9 +1376,9 @@
               if (setter) setter(shapeIdx);
             } else if (i === 49) {
               // FM Mod Wave: no #editparam_49 slider exists (it is the
-              // SIN/SAW/SQR/NOISE radio group) — re-check the radio.
+              // SIN/TRI/SAW/SQR/NOISE radio group) — re-check the radio.
               const setter = window._setFmModWaveChecked;
-              const shapeIdx = raws[i] < 512 ? 0 : (raws[i] < 768 ? 1 : (raws[i] < 870 ? 2 : 3));
+              const shapeIdx = raws[i] < 342 ? 0 : (raws[i] < 512 ? 1 : (raws[i] < 683 ? 2 : (raws[i] < 854 ? 3 : 4)));
               if (setter) setter(shapeIdx);
             } else if (el) {
               el.value = raws[i];
@@ -1486,10 +1499,10 @@
             }
             if (i === 49) {
               // FM Mod Wave: no #editparam_49 slider exists (it is the
-              // SIN/SAW/SQR/NOISE radio group). Re-check the radio.
+              // SIN/TRI/SAW/SQR/NOISE radio group). Re-check the radio.
               const setter = window._setFmModWaveChecked;
               if (setter) {
-                const shapeIdx = v < 512 ? 0 : (v < 768 ? 1 : (v < 870 ? 2 : 3));
+                const shapeIdx = v < 342 ? 0 : (v < 512 ? 1 : (v < 683 ? 2 : (v < 854 ? 3 : 4)));
                 setter(shapeIdx);
                 dirty = true;
               }

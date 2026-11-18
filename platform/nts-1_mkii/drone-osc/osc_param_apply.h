@@ -165,7 +165,11 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         // Log sweep 80 Hz..12 kHz. fasterpowf (not libm powf) to avoid an
         // unresolved libm dynamic symbol on the device.
         const float freq = 80.f * fasterpowf(12000.f / 80.f, x);
-        svf_.updateCutoff(freq, 0.5f, kSampleRate);
+        // Q = 0.5 + 2.0 * svf_res (same as the RES knob). The cascade
+        // (24 dB/oct, see svf2_) mirrors the same coefficient: 2nd-order -> 24 dB/oct.
+        const float q = 0.5f + 2.0f * params_.svf_res;
+        svf_.updateCutoff(freq, q, kSampleRate);
+        svf2_.updateCutoff(freq, q, kSampleRate);
       }
       break;
     case RES:
@@ -174,7 +178,9 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
         const float x = param_10bit_to_f32(value);
         params_.svf_res = x;
         const float freq = 80.f * fasterpowf(12000.f / 80.f, params_.svf_cut);
-        svf_.updateCutoff(freq, 0.5f + 2.0f * x, kSampleRate);
+        const float q = 0.5f + 2.0f * x;
+        svf_.updateCutoff(freq, q, kSampleRate);
+        svf2_.updateCutoff(freq, q, kSampleRate);
       }
       break;
     case RW_FC:
@@ -476,17 +482,19 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
           : (float)(fasterpowf(10.f, 3.f * param_10bit_to_f32(value) - 3.f) * kFmCRateMaxHz);
       break;
     case FM_CW:
-      // Wave shape: 0..511 = SIN, 512..767 = SAW, 768..1023 = SQR. (NOISE is
-      // the 4th shape, drawn per-sample from osc_white() in the audio path; the
-      // display / randomize treat raw >= 768 & < 1024 as the noise zone. We
-      // keep the same 3-band convention as the wave-LFO shape knobs for the
-      // first three, and add NOISE as raw 1024+ -- but since the knob is 10-bit
-      // (max 1023), NOISE is the TOP band: 870..1023. See getParameterStrValue.)
+      // Wave shape (FIVE shapes): 0..341 = SIN, 342..511 = TRI (triangle),
+      // 512..682 = SAW, 683..853 = SQR, 854..1023 = NOISE. (NOISE is drawn
+      // per-sample from osc_white() in the audio path; the display / randomize
+      // use the same 5-band split. See getParameterStrValue.) TRI is the "soft"
+      // shape: a triangle's harmonics fall off as 1/n^2 (vs 1/n for SIN / SAW),
+      // so it draws the FEWEST upper sidebands of any periodic wave -- the
+      // go-to choice for "FM complex but not screechy".
       {
-        const uint8_t band = (value < 512) ? 0
-            : (value < 768) ? 1
-            : (value < 870) ? 2
-            : 3; // 870..1023 = NOISE
+        const uint8_t band = (value < 342) ? 0
+            : (value < 512) ? 1
+            : (value < 683) ? 2
+            : (value < 854) ? 3
+            : 4; // 854..1023 = NOISE
         params_.fm_c_wave = band;
       }
       break;
@@ -532,6 +540,17 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
     // FMCD/FMSA. It scales the deviation only, never the C/S rates or shapes.
     case FM_AMT:
       params_.fm_amt = param_10bit_to_f32(value); // raw 0..1 LINEAR
+      break;
+
+    // ---- FCUT2: cascaded 2nd-stage SVF dry/wet (12 -> 24 dB/oct) -----------
+    // The knob maps 0..1023 -> 0..1 (linear) and is written straight to
+    // params_.svf_wet2 (the 2nd-stage wet, consumed in osc_mix.h). The 2nd
+    // stage ALREADY shares the 1st stage's cutoff + resonance (set by the FCUT
+    // / RES cases above: svf2_.updateCutoff), so only the wet amount is new
+    // here -- no K-rate recompute. At 0 the cascade is transparent (regression-
+    // safe: a single 12 dB/oct SVF); at 1 it is a full 24 dB/oct LPF.
+    case FCUT2:
+      params_.svf_wet2 = param_10bit_to_f32(value); // raw 0..1 LINEAR
       break;
 
     default:

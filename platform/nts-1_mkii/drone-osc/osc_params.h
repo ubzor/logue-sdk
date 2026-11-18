@@ -84,7 +84,8 @@ struct OscParamsData
   // ---- Internal SVF (FCUT / RES): 12 dB/oct low-pass after the saturator --
   float svf_cut;      // 0.f .. 1.f, edit: FCUT knob (log-mapped 80 Hz .. 12 kHz)
   float svf_res;      // 0.f .. 1.f, edit: RES knob (linear 0.5 .. 2.5 Q)
-  float svf_wet;      // 0.f .. 1.f, edit: FCUT dry/wet (0 = raw, 1 = full LPF)
+  float svf_wet;      // 0.f .. 1.f, edit: FCUT dry/wet (0 = raw, 1 = full LPF) -- stage 1 (12 dB/oct)
+  float svf_wet2;     // 0.f .. 1.f, edit: FCUT2 dry/wet (0 = raw, 1 = full LPF) -- stage 2 (12->24 dB/oct)
   float rw_fc;        // 0.f .. 1.f, edit: random-walk depth on SVF cutoff (RWFC)
 
   // ---- Breath stream (PER-VOICE level wandering): RW_LVL / RW_LSP / RW_LSM ----
@@ -227,6 +228,7 @@ struct OscParamsData
                         // LPF is transparent, so the stock sound is preserved.
      svf_res = 0.f;      // default: Q = 0.5 (over-damped, no resonance peak)
      svf_wet = 0.f;      // default: 0% wet = the SVF is transparent (raw signal).
+     svf_wet2 = 0.f;     // default: 0% wet = the 2nd SVF stage is transparent (12 dB/oct).
      rw_fc = 0.f;        // default: walk off for the SVF cutoff
      // ---- Breath stream (voice-level wandering) ----
      rw_lvl = 0.f;       // default: breathing OFF (static voice levels, regression-safe)

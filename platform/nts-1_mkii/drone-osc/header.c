@@ -29,8 +29,8 @@ const __unit_header unit_header_t unit_header = {
         // See common/runtime.h for type enum and unit_param_t structure
 
         // ---- Fixed/direct UI parameters (slots 0/1) ----
-        // A knob (PARAM, slot 0): parameter selector, 0..34. The display
-        // shows the name of the selected parameter via unit_get_param_str_value().
+        // A knob (PARAM, slot 0): parameter selector, 0..54 (kEditParamCount-1 = 54; the display
+        // shows the name of the selected parameter via unit_get_param_str_value()).
         // Turning the B knob (VALUE, slot 1) then edits that parameter's raw value.
         //
         // Selectable parameters (A knob value = select_ index -> name -> default
@@ -82,6 +82,12 @@ const __unit_header unit_header_t unit_header = {
         //     0; default 341 = 0.1 Hz). Drives the WAVE-bank intra-bank morph.
         //   36: WLFD - internal wave-LFO morph depth (LINEAR 0..100%; default
         //     512 = 50%, a half-bank sweep). 0 = static wave (LFO off).
+        //   37..54: W2LR/W2LD/WMIX, wave-LFO shape/gap (WLFS/WLFG/W2FS/W2FG/
+        //     WMXS/WMXG/WMXR/WMXD), FM modulator C (FMCR/FMCW/FMCD), FM static
+        //     teeth (FMST/FMSA), FMAM (global FM MOD amount), and FCUT2 (the
+        //     2nd-stage SVF wet, 12 -> 24 dB/oct). The full list + defaults
+        //     lives in the README parameter table; the display names come from
+        //     Osc::getParameterStrValue (osc_param_display.h).
         // NOTE: WA3/CHRD/INT (chord wavetable / chord level / chord interval),
         // CH2D/CFLD/INT2 (second chord), and FLD2 (second cascaded wavefolder)
         // were REMOVED — the chord/interval concept is gone; DCK (sidechain-duck
@@ -90,7 +96,7 @@ const __unit_header unit_header_t unit_header = {
         // NOTE: the hardware's OSC-button RATE/SHAPE knobs (the platform
         // shape-LFO) are NO-OPs (setShapeLfo() is a stub); the wavetable morph
         // is driven by the INTERNAL wave-LFO (WLFR / WLFD) above instead.
-        {0, 36, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        {0, 54, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // B knob (VALUE, slot 1): raw 10-bit value (0..1023) of the selected
         // parameter. Each selected parameter maps 0..1023 onto its own range
@@ -110,7 +116,7 @@ const __unit_header unit_header_t unit_header = {
         // through the standard edit-parameter UI.
         //
         // Slot 2 (PARAM): parameter selector, 0..36. Identical to slot 0.
-        {0, 36, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
+        {0, 54, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"PARAM"}},
 
         // Slot 3 (VALUE): raw 10-bit value (0..1023) of the selected parameter.
         // Identical to slot 1.
