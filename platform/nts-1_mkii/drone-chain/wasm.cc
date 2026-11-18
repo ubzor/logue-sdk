@@ -642,7 +642,21 @@ void AudioWorkletProcessorCreated(EMSCRIPTEN_WEBAUDIO_T audioContext, bool succe
       "const ctx = emscriptenGetAudioObject($0); const node = new AudioWorkletNode(ctx, 'logue-chain', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { callback: $1, userData: 0, samplesPerChannel: emscriptenGetContextQuantumSize($0) } }); return emscriptenRegisterAudioObject(node);",
       ctxHandle, cbPtr);
 
-  EM_ASM({ setupWebAudioAndUI(emscriptenGetAudioObject($0), emscriptenGetAudioObject($1)); }, audioContext, wasmAudioWorklet);
+  // Вариант B (Svelte-страница — начальник audio): glue НЕ импортирует и не
+  // вызывает UI-wiring. Он публикует ready-сигнал window.__droneAudioReady,
+  // который Svelte-компонент AudioHost (websim/app/src/lib/audio/glue-bridge.ts
+  // -> initAudio в core.ts) дожидается и использует. Module — объект glue-модуля
+  // (embind: drone_ui-фактори + my_module функции, setEditParam/getEditParamValue/
+  // setFxParam/... на корне), передаётся в UI как есть.
+  // NOTE: the JS object literal contains commas, so per em_asm.h the whole
+  // code block must be wrapped in parentheses (see test_em_asm_2.cpp).
+  EM_ASM({ (function() {
+    window.__droneAudioReady = {
+      context: emscriptenGetAudioObject($0),
+      node: emscriptenGetAudioObject($1),
+      Module: Module,
+    };
+  })(); }, audioContext, wasmAudioWorklet);
 }
 
 void AudioThreadInitialized(EMSCRIPTEN_WEBAUDIO_T audioContext, bool success, void *userData)

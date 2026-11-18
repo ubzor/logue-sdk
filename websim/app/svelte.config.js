@@ -16,8 +16,8 @@ const config = {
 
 	kit: {
 		adapter: adapter({ out: 'build' })
-		// Static files (qwerty-hancock.js, index.js/.wasm glue, favicon) live
-		// in app/static/ and are served/copied by SvelteKit by default.
+		// Static files (index.js/.wasm glue, favicon) live in app/static/ and
+		// are served/copied by SvelteKit by default.
 	}
 };
 

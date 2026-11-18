@@ -1,27 +1,23 @@
 <script>
 	import OscPanel from '$lib/components/OscPanel.svelte';
 	import FxStack from '$lib/components/FxStack.svelte';
-	// Re-export the audio wiring so the built page node carries the
-	// setupWebAudioAndUI export for the emscripten glue (see scripts/
-	// relink-glue.mjs). The page itself never calls it in JS - the glue does,
-	// via EM_ASM.
-	import { setupWebAudioAndUI } from '$lib/audio/index.js';
-	export { setupWebAudioAndUI };
-
+	import AudioHost from '$lib/components/AudioHost.svelte';
+	import Keyboard from '$lib/components/Keyboard.svelte';
+	import { onMount } from 'svelte';
+	import { audioState, audioController, setVolume, setBpm, setOctave } from '$lib/audio/stores';
 	// Drone chain simulator page (SvelteKit port of the legacy
 	// websim/index.html shell). Layout: top row = title + all global controls
 	// + keyboard + scope (one line); main row = OSC parameters (2/3) +
 	// MOD/DEL/REV stack (1/3). Full width, no max-w (FHD target).
 	//
-	// The audio wiring (setupWebAudioAndUI, src/lib/audio/) is invoked by the
-	// emscripten glue (index.js) once the wasm worklet module is ready. It
-	// only talks to the DOM through the ids this template provides, so the
-	// markup here mirrors the legacy shell 1:1 (ids, data-* attributes, radio
-	// group names "Octave" / "HwFltType").
+	// Вариант B: AudioHost дожидается window.__droneAudioReady (glue из
+	// drone-chain/wasm.cc) и вызывает initAudio() из core.ts. Всё UI ходит
+	// через stores/bus. Keyboard — нативный Svelte-порт qwerty-hancock:
+	// ноты (noteOn/noteOff) + Z/X octave — единственный путь, играющий в DSP.
 	//
-	// qwerty-hancock (window.QwertyHancock) is a classic UMD script injected
-	// by the root layout (app/static/qwerty-hancock.js) before this page
-	// renders - setup-web-audio.js constructs the keyboard in #keyboard.
+	// Global controls (Volume/BPM/Octave) — привязаны к stores (bind:value +
+	// oninput/onchange -> store-хелперы). Legacy id=-wiring (setup-web-audio.js)
+	// более нет: core подписан на volume:set / bpm:set / octave:set.
 	//
 	// The ThemeSwitch mirrors the effective theme on load (the theme module in
 	// +layout.ts set document.documentElement.dataset.theme before first
@@ -34,14 +30,39 @@
 		// @ts-ignore
 		window.__onThemeSwitchChange?.(e);
 	}
+	// Octave radio: value = button 1..5 -> shift = value - 3 (-2..+2).
+	function onOctaveRadio(e) {
+		setOctave(Number(e.currentTarget.value) - 3, 'radio');
+	}
+
+	// Scope: два canvas-осциллографа (time-domain + FFT). Рефы через bind:this;
+	// подписываемся на $audioController — когда AudioHost опубликует
+	// контроллер (после initAudio), подключаем canvas'ы через
+	// controller.attachScope(wave, fft). core.ts сам запускает
+	// requestAnimationFrame-цикл drawScope и останавливает его при stop().
+	let canvasWave;
+	let canvasFFT;
+	onMount(() => {
+		const unsub = audioController.subscribe((c) => {
+			if (c && canvasWave && canvasFFT) {
+				c.attachScope(canvasWave, canvasFFT);
+			}
+		});
+		return unsub;
+	});
 </script>
 
 <div class="flex flex-col gap-2">
 
+	<!-- Audio: glue -> core.ts (Вариант B). Монтируется первым: дожидается
+	     window.__droneAudioReady, инициализирует core, раздаёт состояние
+	     по stores. Всё остальное UI ниже — через stores/bus. -->
+	<AudioHost />
+
 	<!-- ================= TOP ROW: controls + keyboard/scope ================ -->
 	<div class="flex flex-row gap-2">
 		<!-- Left column: title + all global controls + theme switch -->
-		<div class="flex flex-col gap-2 grow">
+		<div class="flex flex-col gap-2 shrink-0 w-72">
 			<div class="flex items-center gap-2">
 				<span
 					id="DroneIcon"
@@ -58,15 +79,14 @@
 					type="range"
 					min="0"
 					max="1"
-					value="1"
+					bind:value={$audioState.volume}
 					step="0.01"
-					id="VolumeSlider"
-					class="range range-primary range-sm flex-1"
+					class="range range-primary range-sm flex-1 min-w-0"
+					oninput={() => setVolume($audioState.volume)}
 				>
 				<span
-					id="VolumeLabel"
 					class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"
-				></span>
+				>{Math.round($audioState.volume * 100)}%</span>
 			</label>
 
 			<!-- BPM: simulator-only tempo control. Delivered to the DSP
@@ -83,15 +103,14 @@
 					type="range"
 					min="56"
 					max="240"
-					value="120"
+					bind:value={$audioState.bpm}
 					step="1"
-					id="BpmSlider"
-					class="range range-primary range-sm flex-1"
+					class="range range-primary range-sm flex-1 min-w-0"
+					oninput={() => setBpm($audioState.bpm)}
 				>
 				<span
-					id="BpmLabel"
 					class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"
-				></span>
+				>{$audioState.bpm}</span>
 			</label>
 
 			<!-- LFO F / LFO S: VESTIGIAL controls. The platform's OSC-button
@@ -111,11 +130,9 @@
 					max="30"
 					value="0"
 					step="0.01"
-					id="LfoFreq"
-					class="range range-primary range-sm flex-1"
+					class="range range-primary range-sm flex-1 min-w-0"
 				>
 				<span
-					id="LfoFreqLabel"
 					class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"
 				>0.00</span>
 			</label>
@@ -131,79 +148,48 @@
 					max="100"
 					value="0"
 					step="1"
-					id="LfoDepth"
-					class="range range-primary range-sm flex-1"
+					class="range range-primary range-sm flex-1 min-w-0"
 				>
 				<span
-					id="LfoDepthLabel"
 					class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-xs text-right"
 				>0%</span>
 			</label>
 		</div>
 
-		<!-- Right column: octave + keyboard + scope -->
-		<div class="flex flex-col gap-2 shrink-0">
-			<!-- Keyboard + Octave block (shared 507px width) + Scope -->
+		<!-- Right column: octave + scope -->
+		<div class="flex flex-col gap-2 grow min-w-0">
+			<!-- Octave block (507px width) + Scope -->
 			<div class="flex flex-row items-start gap-2" style="height:128px">
-				<!-- Octave + Keyboard: stacked vertically, shared 507px width -->
+				<!-- Octave: stacked vertically, shared 507px width -->
 				<div
 					class="flex flex-col shrink-0"
 					style="width:507px;height:128px;justify-content: space-between;"
 				>
+					<Keyboard />
 					<!-- Octave (FlyonUI "Join radio with btn style"): the .btn rule
 							 in flyonui button.css paints input[type=radio] via
 							 `&:after { content: attr(aria-label) }`, and
 							 input[type=radio]:checked flips --btn-bg to the primary
 							 color. .octave-join (app.css) provides the join geometry.
-							 JS (setOctaveShift in setup-web-audio.js) only applies the
-							 shift and mirrors the Z/X hotkeys into .checked. -->
+							 JS (setOctaveShift in core.ts) applies the shift and mirrors the
+							 Z/X hotkeys into the radio group state. -->
 					<div class="flex items-center gap-2">
 						<span class="text-xs font-medium w-10 shrink-0">Octave</span>
 						<div
 							class="octave-join drop-shadow"
 							title="Current octave shift of the whole keyboard range"
 						>
-							<input
-								class="octave-join-item btn btn-soft btn-primary btn-xs"
-								type="radio"
-								name="Octave"
-								value="1"
-								aria-label="1"
-								title="Down two octaves (A0..D2)"
-							>
-							<input
-								class="octave-join-item btn btn-soft btn-primary btn-xs"
-								type="radio"
-								name="Octave"
-								value="2"
-								aria-label="2"
-								title="Down one octave (A1..D3)"
-								checked
-							>
-							<input
-								class="octave-join-item btn btn-soft btn-primary btn-xs"
-								type="radio"
-								name="Octave"
-								value="3"
-								aria-label="3"
-								title="Base range (A2..D4)"
-							>
-							<input
-								class="octave-join-item btn btn-soft btn-primary btn-xs"
-								type="radio"
-								name="Octave"
-								value="4"
-								aria-label="4"
-								title="Up one octave (A3..D5)"
-							>
-							<input
-								class="octave-join-item btn btn-soft btn-primary btn-xs"
-								type="radio"
-								name="Octave"
-								value="5"
-								aria-label="5"
-								title="Up two octaves (A4..D6)"
-							>
+							{#each [1, 2, 3, 4, 5] as btn (btn)}
+								<input
+									class="octave-join-item btn btn-soft btn-primary btn-xs"
+									type="radio"
+									name="Octave"
+									value={btn}
+									checked={$audioState.octave === btn - 3}
+									aria-label={String(btn)}
+									onchange={onOctaveRadio}
+								>
+							{/each}
 						</div>
 						<input
 							type="checkbox"
@@ -213,10 +199,6 @@
 							{onThemeSwitch}
 						>
 					</div>
-					<!-- Keyboard (qwerty-hancock). Fixed 507px width, 96px height.
-							 window.QwertyHancock is injected by the root layout before
-							 the page renders (classic UMD script, app/static/). -->
-					<div id="keyboard" class="shrink-0" style="width:507px"></div>
 				</div>
 
 				<!-- Scope: time-domain oscilloscope + FFT histogram (native buffers
@@ -224,8 +206,8 @@
 						 Side by side in a row; the canvases carry their own
 						 --scope-bg background, so no card padding is needed. -->
 				<div class="flex flex-row gap-2 shrink-0">
-					<canvas id="TimeDomain" class="scope-canvas" width="512" height="128"></canvas>
-					<canvas id="FrequencyDomain" class="scope-canvas" width="512" height="128"></canvas>
+					<canvas bind:this={canvasWave} class="scope-canvas" width="512" height="128"></canvas>
+					<canvas bind:this={canvasFFT} class="scope-canvas" width="512" height="128"></canvas>
 				</div>
 			</div>
 		</div>

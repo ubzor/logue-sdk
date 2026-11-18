@@ -13,6 +13,15 @@
      (like the OSC panel), which saves border + 24px padding per block.
      .fx-params restores the full --color-base-content so the FX labels
      match the MAIN labels exactly. -->
+<script>
+	import {
+		audioState,
+		setHwfltType, setHwfltParam,
+		setFxmodTime, setFxmodDepth, setFxmodEdit, setFxmodTape,
+		setFxdel, setFxrev,
+		setStageBypass,
+	} from '$lib/audio/stores';
+</script>
 <div class="flex flex-col gap-4 min-w-0 flex-[1]">
 
 	<!-- ---- Filter block (web-sim only, emulates the NTS-1 physical filter
@@ -31,43 +40,43 @@
 		<div class="flex items-center justify-between">
 			<div class="text-xs uppercase tracking-wide opacity-60">Filter</div>
 		</div>
-		<div id="hwflt_body" class="flex flex-col gap-2 fx-params">
+		<div class="flex flex-col gap-2 fx-params">
 			<!-- Type: radio join (FlyonUI "Join radio with btn style", same as Octave) -->
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Type</span>
-				<div class="octave-join drop-shadow" id="hwflt_type" title="Filter type (thru = out of the path)">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="0" aria-label="Off" title="Filter off (dry wire)" checked>
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="1" aria-label="HP 4" title="High-pass, 24 dB/oct">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="2" aria-label="HP 2" title="High-pass, 12 dB/oct">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="3" aria-label="BP 4" title="Band-pass, 24 dB/oct">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="4" aria-label="BP 2" title="Band-pass, 12 dB/oct">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="5" aria-label="LP 4" title="Low-pass, 24 dB/oct">
-					<input class="octave-join-item btn btn-soft btn-primary btn-xs" type="radio" name="HwFltType" value="6" aria-label="LP 2" title="Low-pass, 12 dB/oct">
+				<span class="w-28 text-sm font-medium shrink-0">Type</span>
+				<div class="octave-join drop-shadow" title="Filter type (thru = out of the path)">
+					{#each ['Off','HP 4','HP 2','BP 4','BP 2','LP 4','LP 2'] as label, idx (idx)}
+						<button type="button"
+							class="octave-join-item btn btn-soft btn-xs {$audioState.radios.HwFltType === idx ? 'btn-primary' : 'btn-ghost'}"
+							onclick={() => setHwfltType(idx)}>
+							{label}
+						</button>
+					{/each}
 				</div>
 			</div>
 			<!-- Cutoff: raw 0..1023 (log 1 Hz .. 20 kHz), default 0 -->
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Cutoff</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="hwflt_cutoff" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="hwflt_cutoff_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+				<span class="w-24 text-sm font-medium shrink-0">Cutoff</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.hwflt.cutoff} oninput={() => setHwfltParam(0, $audioState.hwflt.cutoff)}>
+				{Math.round(($audioState.hwflt.cutoff / 1023) * 100)}%
 			</div>
 			<!-- Resonance: raw 0..1023 (linear Q 0.5 .. 2.5), default 0 -->
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Resonance</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="hwflt_res" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="hwflt_res_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+				<span class="w-24 text-sm font-medium shrink-0">Resonance</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.hwflt.res} oninput={() => setHwfltParam(1, $audioState.hwflt.res)}>
+				{Math.round(($audioState.hwflt.res / 1023) * 100)}%
 			</div>
 			<!-- Sweep F: 0..30 Hz (step 0.01), default 0 = sweep off -->
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Sweep F</span>
-				<input type="range" min="0" max="30" value="0" step="0.01" id="hwflt_sweepf" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="hwflt_sweepf_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+				<span class="w-24 text-sm font-medium shrink-0">Sweep F</span>
+				<input type="range" min="0" max="30" step="0.01" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.hwflt.sweepF} oninput={() => setHwfltParam(2, Math.round($audioState.hwflt.sweepF * 1000))}>
+				{$audioState.hwflt.sweepF.toFixed(2)} Hz
 			</div>
 			<!-- Sweep Amt: -100..+100 (UI), default 0. Raw = (amt+100)*5.115. -->
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Sweep Amt</span>
-				<input type="range" min="-100" max="100" value="0" step="1" id="hwflt_sweepamt" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="hwflt_sweepamt_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right"></span>
+				<span class="w-24 text-sm font-medium shrink-0">Sweep Amt</span>
+				<input type="range" min="-100" max="100" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.hwflt.sweepAmt} oninput={() => setHwfltParam(3, Math.round(($audioState.hwflt.sweepAmt + 100) * 5.115))}>
+				{($audioState.hwflt.sweepAmt > 0 ? '+' : '') + $audioState.hwflt.sweepAmt + '%'}
 			</div>
 		</div><!-- /hwflt_body -->
 	</div>
@@ -77,48 +86,48 @@
 		<div class="flex items-center justify-between">
 			<div class="text-xs uppercase tracking-wide opacity-60">Mod</div>
 			<label class="flex items-center gap-1.5 cursor-pointer select-none">
-				<input type="checkbox" id="fxmod_bypass" class="switch switch-primary switch-xs" checked>
+				<input type="checkbox" class="switch switch-primary switch-xs" checked={$audioState.bypass[0] === 0} onchange={(e) => setStageBypass(0, e.currentTarget.checked ? 0 : 1)}>
 			</label>
 		</div>
-		<div id="fxmod_body" class="flex flex-col gap-2 fx-params">
+		<div class="flex flex-col gap-2 fx-params">
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Time</span>
-				<input type="range" min="0" max="1023" value="512" step="1" id="fxmod_time" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">25%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Time</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxmod.time} oninput={() => setFxmodTime($audioState.fxmod.time)}>
+				{Math.round(($audioState.fxmod.time / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Depth</span>
-				<input type="range" min="0" max="1023" value="511" step="1" id="fxmod_depth" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">50%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Depth</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxmod.depth} oninput={() => setFxmodDepth($audioState.fxmod.depth)}>
+				{Math.round(($audioState.fxmod.depth / 1023) * 100)}%
 			</div>
 			<!-- ===== MODULATION group (first PARAM/VALUE multiplexer, slots 2/3) -->
 			<!-- idx 0..4 = DRIFT / CMODE / CHOR / FLNGR / ENSMBL, driven through
 				 Module.modSetEditParam(idx, raw) (atomic PARAM_SEL+PARAM_VAL). -->
 			<div class="text-xs uppercase tracking-wide opacity-60 mt-1">Modulation</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Drift</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_drift" data-modedit="0" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_drift_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Drift</span>
+				<input type="range" min="0" max="1023" step="1" data-i="0" data-kind="edit" bind:value={$audioState.fxmod.edit[0]} oninput={() => setFxmodEdit(0, $audioState.fxmod.edit[0])}>
+				{Math.round(($audioState.fxmod.edit[0] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Chorus Mode</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_cmode" data-modedit="1" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_cmode_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">I</span>
+				<span class="w-28 text-sm font-medium shrink-0">Chorus Mode</span>
+				<input type="range" min="0" max="1023" step="1" data-i="1" data-kind="edit" bind:value={$audioState.fxmod.edit[1]} oninput={() => setFxmodEdit(1, $audioState.fxmod.edit[1])}>
+				{Math.round(($audioState.fxmod.edit[1] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Chorus</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_chorus" data-modedit="2" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_chorus_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Chorus</span>
+				<input type="range" min="0" max="1023" step="1" data-i="2" data-kind="edit" bind:value={$audioState.fxmod.edit[2]} oninput={() => setFxmodEdit(2, $audioState.fxmod.edit[2])}>
+				{Math.round(($audioState.fxmod.edit[2] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Flanger</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_flanger" data-modedit="3" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_flanger_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Flanger</span>
+				<input type="range" min="0" max="1023" step="1" data-i="3" data-kind="edit" bind:value={$audioState.fxmod.edit[3]} oninput={() => setFxmodEdit(3, $audioState.fxmod.edit[3])}>
+				{Math.round(($audioState.fxmod.edit[3] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Ensemble</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_ensemble" data-modedit="4" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_ensemble_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Ensemble</span>
+				<input type="range" min="0" max="1023" step="1" data-i="4" data-kind="edit" bind:value={$audioState.fxmod.edit[4]} oninput={() => setFxmodEdit(4, $audioState.fxmod.edit[4])}>
+				{Math.round(($audioState.fxmod.edit[4] / 1023) * 100)}%
 			</div>
 
 			<!-- ===== TAPE group (second PARAM/VALUE multiplexer, slots 4/5) -->
@@ -126,29 +135,29 @@
 				 through Module.modSetTapeParam(idx, raw) (atomic TPARAM+TVALUE). -->
 			<div class="text-xs uppercase tracking-wide opacity-60 mt-1">Tape</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Noise</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_noise" data-modtape="0" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_noise_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Noise</span>
+				<input type="range" min="0" max="1023" step="1" data-i="0" data-kind="tape" bind:value={$audioState.fxmod.tape[0]} oninput={() => setFxmodTape(0, $audioState.fxmod.tape[0])}>
+				{Math.round(($audioState.fxmod.tape[0] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">N Rate</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_nrate" data-modtape="1" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_nrate_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">N Rate</span>
+				<input type="range" min="0" max="1023" step="1" data-i="1" data-kind="tape" bind:value={$audioState.fxmod.tape[1]} oninput={() => setFxmodTape(1, $audioState.fxmod.tape[1])}>
+				{Math.round(($audioState.fxmod.tape[1] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Tape Wob</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_tapwob" data-modtape="2" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_tapwob_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Tape Wob</span>
+				<input type="range" min="0" max="1023" step="1" data-i="2" data-kind="tape" bind:value={$audioState.fxmod.tape[2]} oninput={() => setFxmodTape(2, $audioState.fxmod.tape[2])}>
+				{Math.round(($audioState.fxmod.tape[2] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Hiss</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_hiss" data-modtape="3" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_hiss_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Hiss</span>
+				<input type="range" min="0" max="1023" step="1" data-i="3" data-kind="tape" bind:value={$audioState.fxmod.tape[3]} oninput={() => setFxmodTape(3, $audioState.fxmod.tape[3])}>
+				{Math.round(($audioState.fxmod.tape[3] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-32 text-sm font-medium shrink-0">Warp</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxmod_warp" data-modtape="4" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxmod_warp_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="w-28 text-sm font-medium shrink-0">Warp</span>
+				<input type="range" min="0" max="1023" step="1" data-i="4" data-kind="tape" bind:value={$audioState.fxmod.tape[4]} oninput={() => setFxmodTape(4, $audioState.fxmod.tape[4])}>
+				{Math.round(($audioState.fxmod.tape[4] / 1023) * 100)}%
 			</div>
 		</div><!-- /fxmod_body -->
 	</div>
@@ -166,24 +175,24 @@
 			<div class="flex items-center justify-between">
 				<div class="text-xs uppercase tracking-wide opacity-60">Del</div>
 				<label class="flex items-center gap-1.5 cursor-pointer select-none">
-					<input type="checkbox" id="fxdel_bypass" class="switch switch-primary switch-xs" checked>
+					<input type="checkbox" class="switch switch-primary switch-xs" checked={$audioState.bypass[1] === 0} onchange={(e) => setStageBypass(1, e.currentTarget.checked ? 0 : 1)}>
 				</label>
 			</div>
-			<div id="fxdel_body" class="flex flex-col gap-2 fx-params">
+			<div class="flex flex-col gap-2 fx-params">
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Time</span>
-				<input type="range" min="0" max="1023" value="0" step="1" id="fxdel_time" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxdel_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Time</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxdel.time} oninput={() => setFxdel(0, $audioState.fxdel.time)}>
+				{Math.round(($audioState.fxdel.time / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Depth</span>
-				<input type="range" min="0" max="1023" value="512" step="1" id="fxdel_depth" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxdel_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">50%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Depth</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxdel.depth} oninput={() => setFxdel(1, $audioState.fxdel.depth)}>
+				{Math.round(($audioState.fxdel.depth / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Mix</span>
-				<input type="range" min="-1000" max="1000" value="-1000" step="1" id="fxdel_mix" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxdel_mix_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Mix</span>
+				<input type="range" min="-1000" max="1000" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxdel.mix} oninput={() => setFxdel(2, $audioState.fxdel.mix)}>
+				{Math.round(($audioState.fxdel.mix + 1000) / 20)}%
 			</div>
 			</div><!-- /fxdel_body -->
 		</div>
@@ -193,24 +202,24 @@
 			<div class="flex items-center justify-between">
 				<div class="text-xs uppercase tracking-wide opacity-60">Rev</div>
 				<label class="flex items-center gap-1.5 cursor-pointer select-none">
-					<input type="checkbox" id="fxrev_bypass" class="switch switch-primary switch-xs" checked>
+					<input type="checkbox" class="switch switch-primary switch-xs" checked={$audioState.bypass[2] === 0} onchange={(e) => setStageBypass(2, e.currentTarget.checked ? 0 : 1)}>
 				</label>
 			</div>
-			<div id="fxrev_body" class="flex flex-col gap-2 fx-params">
+			<div class="flex flex-col gap-2 fx-params">
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Time</span>
-				<input type="range" min="0" max="1023" value="512" step="1" id="fxrev_time" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxrev_time_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">50%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Time</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxrev.time} oninput={() => setFxrev(0, $audioState.fxrev.time)}>
+				{Math.round(($audioState.fxrev.time / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Depth</span>
-				<input type="range" min="0" max="1023" value="512" step="1" id="fxrev_depth" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxrev_depth_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">50%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Depth</span>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxrev.depth} oninput={() => setFxrev(1, $audioState.fxrev.depth)}>
+				{Math.round(($audioState.fxrev.depth / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
-				<span class="w-16 text-sm font-medium shrink-0">Mix</span>
-				<input type="range" min="-1000" max="1000" value="-1000" step="1" id="fxrev_mix" class="range range-primary range-sm flex-1 min-w-0">
-				<span id="fxrev_mix_val" class="badge badge-soft badge-primary badge-sm font-mono shrink-0 min-w-14 text-right">0%</span>
+				<span class="text-sm font-medium shrink-0 whitespace-nowrap">Mix</span>
+				<input type="range" min="-1000" max="1000" step="1" class="range range-primary range-sm flex-1 min-w-0" bind:value={$audioState.fxrev.mix} oninput={() => setFxrev(2, $audioState.fxrev.mix)}>
+				{Math.round(($audioState.fxrev.mix + 1000) / 20)}%
 			</div>
 			</div><!-- /fxrev_body -->
 		</div>

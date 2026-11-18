@@ -1,9 +1,10 @@
 // Root layout: theme init before first paint + the single global stylesheet.
 //
-// The emscripten glue (index.js, injected by the drone-chain build) creates
-// the AudioContext lazily on the first user gesture (setup-web-audio.js wires
-// auto-resume on click/keypress), so no audio runs during SSR/hydration -
-// `ssr: true` is fine and faster.
+// Вариант B: glue (index.js, injected by the drone-chain build) публикует
+// window.__droneAudioReady после инициализации audio worklet. AudioHost
+// (src/lib/components/AudioHost.svelte) дожидается этого сигнала и вызывает
+// initAudio() из core.ts. AudioContext создаётся glue lazily на первом
+// user gesture (auto-resume on click/keypress), так что `ssr: true` — ок.
 //
 // Theme: the legacy websim/scripts/entry.js ran as a deferred module script
 // and set <html data-theme> before first paint. Here we do the same from the
@@ -13,7 +14,9 @@
 
 import { browser } from '$app/environment';
 import { initTheme, onThemeSwitchChange } from '../lib/theme.js';
-import '../app.css';
+// NB: the global stylesheet is imported in +layout.svelte (NOT here) — SvelteKit
+// only links CSS imported in a .svelte component into <head>; a .ts import
+// builds the asset but never links it (range sliders stayed unstyled).
 
 if (browser) {
 	// The layout module runs in the browser before the component tree renders,
