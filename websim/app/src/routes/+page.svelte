@@ -26,6 +26,13 @@
 	// window by +layout.ts).
 	// @ts-ignore - the theme bridge is a plain window property (set by
 	// +layout.ts); no TS in this Svelte script block.
+	//
+	// ВАЖНО: attribute — `onchange={onThemeSwitch}` (Svelte 5 event-handler
+	// syntax, как у octave-radio ниже). НЕ `{onThemeSwitch}`: bare function
+	// в `{...}`-атрибути Svelte 5 интерпретирует как listener на событие с
+	// именем `ThemeSwitch` ($.event('ThemeSwitch', ...)) — browser такого
+	// события не генерирует, handler молча не срабатывает, тема не
+	// переключается (баг, исправлен 2026-11-19).
 	function onThemeSwitch(e) {
 		// @ts-ignore
 		window.__onThemeSwitchChange?.(e);
@@ -48,6 +55,13 @@
 				c.attachScope(canvasWave, canvasFFT);
 			}
 		});
+		// Синхронизировать switch с effective theme (initTheme в +layout.ts
+		// уже применил data-theme до first paint; switch в разметке не имеет
+		// начального checked — без этого он всегда показывал OFF, даже при
+		// тёмной ОС-теме).
+		const t = document.documentElement.dataset.theme;
+		const sw = document.querySelector('#ThemeSwitch');
+		if (sw) sw.checked = (t === 'luxury');
 		return unsub;
 	});
 </script>
@@ -60,7 +74,7 @@
 	<AudioHost />
 
 	<!-- ================= TOP ROW: controls + keyboard/scope ================ -->
-	<div class="flex flex-row gap-2">
+	<div class="flex flex-row gap-2 top-row">
 		<!-- Left column: title + all global controls + theme switch -->
 		<div class="flex flex-col gap-2 shrink-0 w-72">
 			<div class="flex items-center gap-2">
@@ -165,7 +179,6 @@
 					class="flex flex-col shrink-0"
 					style="width:507px;height:128px;justify-content: space-between;"
 				>
-					<Keyboard />
 					<!-- Octave (FlyonUI "Join radio with btn style"): the .btn rule
 							 in flyonui button.css paints input[type=radio] via
 							 `&:after { content: attr(aria-label) }`, and
@@ -196,16 +209,17 @@
 							id="ThemeSwitch"
 							class="switch switch-primary switch-xs ml-auto"
 							title="Toggle dark theme (VSCode) / light theme (Valorant)"
-							{onThemeSwitch}
+							onchange={onThemeSwitch}
 						>
 					</div>
+					<Keyboard />
 				</div>
 
 				<!-- Scope: time-domain oscilloscope + FFT histogram (native buffers
 						 512x128, CSS .scope-canvas fixes the render at 512px, see app.css).
 						 Side by side in a row; the canvases carry their own
 						 --scope-bg background, so no card padding is needed. -->
-				<div class="flex flex-row gap-2 shrink-0">
+				<div class="flex flex-row gap-2 scope-row">
 					<canvas bind:this={canvasWave} class="scope-canvas" width="512" height="128"></canvas>
 					<canvas bind:this={canvasFFT} class="scope-canvas" width="512" height="128"></canvas>
 				</div>

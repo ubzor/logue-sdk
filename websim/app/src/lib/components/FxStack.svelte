@@ -106,27 +106,27 @@
 			<div class="text-xs uppercase tracking-wide opacity-60 mt-1">Modulation</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Drift</span>
-				<input type="range" min="0" max="1023" step="1" data-i="0" data-kind="edit" bind:value={$audioState.fxmod.edit[0]} oninput={() => setFxmodEdit(0, $audioState.fxmod.edit[0])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="0" data-kind="edit" bind:value={$audioState.fxmod.edit[0]} oninput={() => setFxmodEdit(0, $audioState.fxmod.edit[0])}>
 				{Math.round(($audioState.fxmod.edit[0] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Chorus Mode</span>
-				<input type="range" min="0" max="1023" step="1" data-i="1" data-kind="edit" bind:value={$audioState.fxmod.edit[1]} oninput={() => setFxmodEdit(1, $audioState.fxmod.edit[1])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="1" data-kind="edit" bind:value={$audioState.fxmod.edit[1]} oninput={() => setFxmodEdit(1, $audioState.fxmod.edit[1])}>
 				{Math.round(($audioState.fxmod.edit[1] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Chorus</span>
-				<input type="range" min="0" max="1023" step="1" data-i="2" data-kind="edit" bind:value={$audioState.fxmod.edit[2]} oninput={() => setFxmodEdit(2, $audioState.fxmod.edit[2])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="2" data-kind="edit" bind:value={$audioState.fxmod.edit[2]} oninput={() => setFxmodEdit(2, $audioState.fxmod.edit[2])}>
 				{Math.round(($audioState.fxmod.edit[2] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Flanger</span>
-				<input type="range" min="0" max="1023" step="1" data-i="3" data-kind="edit" bind:value={$audioState.fxmod.edit[3]} oninput={() => setFxmodEdit(3, $audioState.fxmod.edit[3])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="3" data-kind="edit" bind:value={$audioState.fxmod.edit[3]} oninput={() => setFxmodEdit(3, $audioState.fxmod.edit[3])}>
 				{Math.round(($audioState.fxmod.edit[3] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Ensemble</span>
-				<input type="range" min="0" max="1023" step="1" data-i="4" data-kind="edit" bind:value={$audioState.fxmod.edit[4]} oninput={() => setFxmodEdit(4, $audioState.fxmod.edit[4])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="4" data-kind="edit" bind:value={$audioState.fxmod.edit[4]} oninput={() => setFxmodEdit(4, $audioState.fxmod.edit[4])}>
 				{Math.round(($audioState.fxmod.edit[4] / 1023) * 100)}%
 			</div>
 
@@ -136,27 +136,27 @@
 			<div class="text-xs uppercase tracking-wide opacity-60 mt-1">Tape</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Noise</span>
-				<input type="range" min="0" max="1023" step="1" data-i="0" data-kind="tape" bind:value={$audioState.fxmod.tape[0]} oninput={() => setFxmodTape(0, $audioState.fxmod.tape[0])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="0" data-kind="tape" bind:value={$audioState.fxmod.tape[0]} oninput={() => setFxmodTape(0, $audioState.fxmod.tape[0])}>
 				{Math.round(($audioState.fxmod.tape[0] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">N Rate</span>
-				<input type="range" min="0" max="1023" step="1" data-i="1" data-kind="tape" bind:value={$audioState.fxmod.tape[1]} oninput={() => setFxmodTape(1, $audioState.fxmod.tape[1])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="1" data-kind="tape" bind:value={$audioState.fxmod.tape[1]} oninput={() => setFxmodTape(1, $audioState.fxmod.tape[1])}>
 				{Math.round(($audioState.fxmod.tape[1] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Tape Wob</span>
-				<input type="range" min="0" max="1023" step="1" data-i="2" data-kind="tape" bind:value={$audioState.fxmod.tape[2]} oninput={() => setFxmodTape(2, $audioState.fxmod.tape[2])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="2" data-kind="tape" bind:value={$audioState.fxmod.tape[2]} oninput={() => setFxmodTape(2, $audioState.fxmod.tape[2])}>
 				{Math.round(($audioState.fxmod.tape[2] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Hiss</span>
-				<input type="range" min="0" max="1023" step="1" data-i="3" data-kind="tape" bind:value={$audioState.fxmod.tape[3]} oninput={() => setFxmodTape(3, $audioState.fxmod.tape[3])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="3" data-kind="tape" bind:value={$audioState.fxmod.tape[3]} oninput={() => setFxmodTape(3, $audioState.fxmod.tape[3])}>
 				{Math.round(($audioState.fxmod.tape[3] / 1023) * 100)}%
 			</div>
 			<div class="flex items-center gap-3">
 				<span class="w-28 text-sm font-medium shrink-0">Warp</span>
-				<input type="range" min="0" max="1023" step="1" data-i="4" data-kind="tape" bind:value={$audioState.fxmod.tape[4]} oninput={() => setFxmodTape(4, $audioState.fxmod.tape[4])}>
+				<input type="range" min="0" max="1023" step="1" class="range range-primary range-sm flex-1 min-w-0" data-i="4" data-kind="tape" bind:value={$audioState.fxmod.tape[4]} oninput={() => setFxmodTape(4, $audioState.fxmod.tape[4])}>
 				{Math.round(($audioState.fxmod.tape[4] / 1023) * 100)}%
 			</div>
 		</div><!-- /fxmod_body -->

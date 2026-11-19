@@ -173,6 +173,18 @@ body {
 	-webkit-font-smoothing: subpixel-antialiased;
 }
 
+/* Top row: the only place on the page where a fixed-width block (the
+ * scope row) can outgrow the viewport on narrow screens. Clip the overflow
+ * HERE (not on <html>): the document keeps its single h-scrollbar, the
+ * clipped overflow is unreachable (content is lost on the right, not on
+ * the left, so the octave/keyboard columns always stay visible), and the
+ * scope row itself remains wheel-scrollable — at any scroll offset the
+ * FFT canvas comes fully into view (row is the last item, row's max
+ * scroll-left puts its right edge at the viewport right edge). */
+.top-row {
+	overflow-x: clip;
+}
+
 /* Octave radio group ("Join radio with btn style", FlyonUI docs pattern,
  * verbatim from the legacy app.css): the .btn rule in flyonui/components/
  * button.css already paints input[type=radio] via
@@ -237,5 +249,16 @@ body {
 	 * accent follows the active theme. */
 	--scope-fg: var(--color-primary);
 	background: var(--scope-bg);
+}
+
+/* Scope row (two 512px canvases side by side, ~1032px + 8px gap fixed):
+ * the row is the last shrinkable item in the top row, so the canvases
+ * shrink below their native width when the viewport is narrower than the
+ * whole row needs (left column 288px + octave 507px + scope 1032px +
+ * gaps). On FHD (1920) there is slack: the row keeps its full 1032px and
+ * the canvases stay at the native 512px. */
+.scope-row {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 

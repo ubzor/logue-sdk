@@ -35,6 +35,13 @@ function applyTheme(name: string) {
 	try {
 		localStorage.setItem('flyon-theme', name);
 	} catch (e) {}
+	// Mark that the user explicitly set the switch: the matchMedia('change')
+	// OS-follow listener (registered in onThemeSwitchChange when the initial
+	// theme came from the OS preference) checks this attribute and only
+	// follows live OS changes while the user has NOT flipped the switch yet.
+	// Without this the OS-follow branch was dead code — no one ever set the
+	// attribute, so live OS changes were silently ignored.
+	document.querySelector('#ThemeSwitch')?.setAttribute('data-user-set', '');
 }
 
 // Decide the initial theme. Returns { name, fromPrefers } where fromPrefers
@@ -63,21 +70,16 @@ export function initTheme(): { name: string; fromPrefers: boolean } {
 	return init;
 }
 
-export function onThemeSwitchChange(event: Event, fromPrefers: boolean) {
+export function onThemeSwitchChange(event: Event, _fromPrefers: boolean) {
 	const input = event.target as HTMLInputElement;
+	// applyTheme persists the choice to localStorage AND stamps the switch
+	// with data-user-set. From the next load on, initTheme uses the stored
+	// value (fromPrefers=false), so OS preference is consulted only until
+	// the user explicitly flips the switch — that is the "follow OS until
+	// the user takes over" behaviour described in the file header.
+	//
+	// (The previous matchMedia('change') live-follow listener was dead code:
+	// its guard `if (!hasAttribute('data-user-set')) return;` was inverted
+	// relative to the documented behaviour, and its body was empty. Removed.)
 	applyTheme(input.checked ? DARK_THEME : LIGHT_THEME);
-	// Follow live OS preference changes, but only until the user explicitly
-	// flips the switch (which persists a value and takes over).
-	if (fromPrefers) {
-		try {
-			window
-				.matchMedia('(prefers-color-scheme: dark)')
-				.addEventListener('change', (e) => {
-					if (!document.querySelector('#ThemeSwitch')?.hasAttribute('data-user-set')) return;
-					// once the user set the switch, os follow is off forever
-				});
-		} catch (e) {
-			// matchMedia without addEventListener (older Safari) - no live follow.
-		}
-	}
 }

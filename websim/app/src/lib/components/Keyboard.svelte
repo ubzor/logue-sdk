@@ -100,7 +100,11 @@
 
 <!-- 11 white keys (flex row); 7 black keys (absolute, on the boundaries).
      Pointer events drive mouse + touch uniformly (1:1 qwerty-hancock). -->
-<div class="kbd" style="height:96px;width:507px" aria-label="Drone keyboard">
+<!-- Container class is `kbd-box` (NOT `kbd`): the plain `.kbd` utility class
+     from flyonui kbd.css (keyboard-shortcut badge: padding .5em, border,
+     background, inline-flex) would otherwise hit this container and inject
+     padding/box around the keys. -->
+<div class="kbd-box" style="height:96px;width:507px" aria-label="Drone keyboard">
 	{#each KEYS.filter((k) => !k.black) as k (k.note)}
 		<button
 			type="button"
@@ -110,36 +114,35 @@
 			onpointerdown={(e) => { e.preventDefault(); press(k.note); }}
 			onpointerup={(e) => { e.preventDefault(); release(k.note); }}
 			onpointerleave={() => { if (held[k.note]) release(k.note); }}>
-			<span class="kbd-key__lbl">{shiftNote(k.note, shift)}</span>
 		</button>
 	{/each}
 	{#each KEYS.filter((k) => k.black) as k (k.note)}
 		<button
 			type="button"
 			class="kbd-key kbd-key--black {held[k.note] ? 'kbd-key--on' : ''}"
-			style="left:calc((100% / {WHITE_COUNT}) * {k.white} + (100% / {WHITE_COUNT}) * 0.20)"
+			style="left:calc((100% / {WHITE_COUNT}) * {k.white} + (100% / {WHITE_COUNT}) * 0.69)"
 			data-note={k.note}
 			aria-label={shiftNote(k.note, shift)}
 			onpointerdown={(e) => { e.preventDefault(); press(k.note); }}
 			onpointerup={(e) => { e.preventDefault(); release(k.note); }}
 			onpointerleave={() => { if (held[k.note]) release(k.note); }}>
-			<span class="kbd-key__lbl">{shiftNote(k.note, shift)}</span>
 		</button>
 	{/each}
 </div>
 
 <style>
-	.kbd {
+	.kbd-box {
 		position: relative;
 		display: flex;
 		flex-direction: row;
 		user-select: none;
 		touch-action: none;
+		padding: 0; /* explicit: container must have no padding around keys */
 		--kbd-white: oklch(97% 0.01 70);
 		--kbd-black: oklch(16% 0.02 65);
 	}
-	:global([data-theme="luxury"]) .kbd { --kbd-white: oklch(88% 0.02 70); --kbd-black: oklch(12% 0.02 65); }
-	:global([data-theme="luxury-light"]) .kbd { --kbd-white: oklch(99% 0.005 70); --kbd-black: oklch(20% 0.03 65); }
+	:global([data-theme="luxury"]) .kbd-box { --kbd-white: oklch(88% 0.02 70); --kbd-black: oklch(12% 0.02 65); }
+	:global([data-theme="luxury-light"]) .kbd-box { --kbd-white: oklch(99% 0.005 70); --kbd-black: oklch(20% 0.03 65); }
 	.kbd-key {
 		border: none;
 		cursor: pointer;
