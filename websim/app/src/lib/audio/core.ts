@@ -691,18 +691,21 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
       x += delta_x;
     }
     canvasWaveContext.stroke();
-    analyser.getByteFrequencyData(dataByte);
+    analyser.getFloatFrequencyData(data);
     canvasFFTContext.clearRect(0, 0, canvasFFT.width, canvasFFT.height);
-    // Downsample: 2048 bins -> 512 bars (every 4th bin) so each bar is 1px wide.
-    // getByteFrequencyData returns 0..255; map to pixel height directly.
-    const step = Math.max(1, Math.floor(dataByte.length / canvasFFT.width));
+    // 1:1 legacy: getFloatFrequencyData returns dB values (typically -100..0).
+    // barHeight = dB + canvasHeight shifts the scale so -128dB -> 0px and
+    // 0dB -> 2*canvasHeight (clamped). Each of the 2048 bins is 0.25px wide
+    // (512px canvas), giving the legacy anti-aliased log-scale histogram.
+    const deltaX = canvasFFT.width / data.length;
     let posX = 0;
-    for (let i = 0; i < dataByte.length; i += step) {
-      let barHeight = dataByte[i]; // 0..255 -> 0..255px (clamp to canvas height)
+    for (let i = 0; i < data.length; i++) {
+      let barHeight = data[i] + canvasFFT.height;
+      if (barHeight < 0) barHeight = 0;
       if (barHeight > canvasFFT.height) barHeight = canvasFFT.height;
       canvasFFTContext.fillStyle = scopeFg;
-      canvasFFTContext.fillRect(posX, canvasFFT.height - barHeight, 1, barHeight);
-      posX += 1;
+      canvasFFTContext.fillRect(posX, canvasFFT.height - barHeight, deltaX, barHeight);
+      posX += deltaX;
     }
     scopeRafId = requestAnimationFrame(drawScope);
   }
@@ -752,6 +755,10 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
   const offHwfltType = bus.on('hwflt:type', ({ t }) => {
     state.hwflt.type = t;
     if (Module.setHwFilterType) Module.setHwFilterType(t);
+    // Mirror the checked state back to the UI store (FxStack Filter Type is
+    // now a <input type=radio> join group keyed on $audioState.radios.HwFltType,
+    // same pattern as Octave / the OSC wave banks). radio:ext is UI-only.
+    bus.emit('radio:ext', { group: 'HwFltType', idx: t });
   });
 
   const offHwfltParam = bus.on('hwflt:param', ({ slot, raw }) => {
