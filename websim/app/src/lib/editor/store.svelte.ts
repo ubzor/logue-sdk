@@ -94,36 +94,58 @@ function moveWarpInList(list: WarpList, id: string, dir: -1 | 1): void {
 export class EditorStore {
 	/** The full document: 16 waves. Deeply reactive. */
 	waves: WaveConfig[] = $state(createDefaultWaves());
+	/**
+	 * Revision counter: incremented on every mutation so that external
+	 * consumers (e.g. the 3D view's $effect in +page.svelte) can react to
+	 * changes without having to read every nested field manually.
+	 */
+	revision = $state(0);
+
+	/** Bump the revision (call at the end of every mutating method). */
+	private bump(): void {
+		this.revision += 1;
+	}
 
 	// ---- document -----------------------------------------------------------
 
 	/** Replace the whole document with a freshly generated default one. */
 	reset(): void {
 		this.waves = createDefaultWaves();
+		this.bump();
 	}
 
 	/** Randomize every wave (sources, combine, modifiers, warps). */
 	randomize(): void {
 		this.waves = createRandomWaves();
+		this.bump();
 	}
 
 	// ---- wave-level ---------------------------------------------------------
 
 	setWaveName(waveIndex: number, name: string): void {
 		const w = this.waves[waveIndex];
-		if (w) w.name = name;
+		if (w) {
+			w.name = name;
+			this.bump();
+		}
 	}
 
 	// ---- source-level -------------------------------------------------------
 
 	setSourceEnabled(waveIndex: number, srcIndex: number, enabled: boolean): void {
 		const s = this.waves[waveIndex]?.sources[srcIndex];
-		if (s) s.enabled = enabled;
+		if (s) {
+			s.enabled = enabled;
+			this.bump();
+		}
 	}
 
 	setSourceType(waveIndex: number, srcIndex: number, type: SourceType): void {
 		const s = this.waves[waveIndex]?.sources[srcIndex];
-		if (s) s.type = type;
+		if (s) {
+			s.type = type;
+			this.bump();
+		}
 	}
 
 	setSourceParam(
@@ -133,19 +155,28 @@ export class EditorStore {
 		value: number
 	): void {
 		const s = this.waves[waveIndex]?.sources[srcIndex];
-		if (s) s[key] = value;
+		if (s) {
+			s[key] = value;
+			this.bump();
+		}
 	}
 
 	// ---- combine / modifiers ------------------------------------------------
 
 	setCombine(waveIndex: number, mode: CombineMode): void {
 		const w = this.waves[waveIndex];
-		if (w) w.combine = mode;
+		if (w) {
+			w.combine = mode;
+			this.bump();
+		}
 	}
 
 	setModifier(waveIndex: number, key: keyof CombineModifiers, value: boolean): void {
 		const w = this.waves[waveIndex];
-		if (w) w.modifiers[key] = value;
+		if (w) {
+			w.modifiers[key] = value;
+			this.bump();
+		}
 	}
 
 	// ---- warp stacks --------------------------------------------------------
@@ -161,12 +192,14 @@ export class EditorStore {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		const item = newWarp(type);
 		addToWarpList(list, item);
+		this.bump();
 		return item;
 	}
 
 	removeWarp(waveIndex: number, target: 'output' | 'source', id: string, srcIndex = 0): void {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		removeWarpFromList(list, id);
+		this.bump();
 	}
 
 	/**
@@ -180,13 +213,17 @@ export class EditorStore {
 		if (w) {
 			w.type = type;
 			w.params = defaultWarpParams(type);
+			this.bump();
 		}
 	}
 
 	setWarpEnabled(waveIndex: number, target: 'output' | 'source', id: string, enabled: boolean, srcIndex = 0): void {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		const w = list.find((x) => x.id === id);
-		if (w) w.enabled = enabled;
+		if (w) {
+			w.enabled = enabled;
+			this.bump();
+		}
 	}
 
 	setWarpParam(
@@ -199,7 +236,10 @@ export class EditorStore {
 	): void {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		const w = list.find((x) => x.id === id);
-		if (w) w.params[key] = value;
+		if (w) {
+			w.params[key] = value;
+			this.bump();
+		}
 	}
 
 	/** Replace a warp item's params (shallow-merged). */
@@ -212,7 +252,10 @@ export class EditorStore {
 	): void {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		const w = list.find((x) => x.id === id);
-		if (w) w.params = { ...w.params, ...params };
+		if (w) {
+			w.params = { ...w.params, ...params };
+			this.bump();
+		}
 	}
 
 	/** Reorder a warp within its stack (dir = -1 up, +1 down). */
@@ -225,6 +268,7 @@ export class EditorStore {
 	): void {
 		const list = this.warpList(waveIndex, target, srcIndex);
 		moveWarpInList(list, id, dir);
+		this.bump();
 	}
 }
 

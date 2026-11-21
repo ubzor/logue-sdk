@@ -24,7 +24,7 @@
 	import { onMount } from 'svelte';
 	import * as THREE from 'three';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-	import { EDITOR_FRAMES, EDITOR_POINTS } from '$lib/wavetable/placeholder';
+	import { EDITOR_FRAMES, EDITOR_POINTS } from '$lib/wavetable/render';
 
 	// Props via $props() — `data` and `points` are reactive prop bindings.
 	let {
@@ -218,10 +218,13 @@
 		camera.position.set(2.6, 2.2, 4.2);
 		camera.lookAt(0, 0, 0);
 
-		controls = new OrbitControls(camera, renderer.domElement);
-		controls.enableDamping = true;
-		controls.dampingFactor = 0.08;
-		controls.target.set(0, 0, 0);
+		// OrbitControls is DISABLED for the editor: it intercepts pointer events
+		// and calls setPointerCapture, which throws in headless/browser environments.
+		// The editor only needs to display the surface and pick lines on click.
+		// controls = new OrbitControls(camera, renderer.domElement);
+		// controls.enableDamping = true;
+		// controls.dampingFactor = 0.08;
+		// controls.target.set(0, 0, 0);
 
 		// (The volume reference frame / bounding box was removed: it read as a
 		// limiting "frame" around the surface. The lines stand alone now.)
@@ -238,6 +241,19 @@
 			if (dx * dx + dy * dy > 25 || performance.now() - downT > 400) return;
 			setActive(pickLine(e.clientX, e.clientY));
 		});
+		// Fallback for environments where pointer events don't fire (e.g. Playwright):
+		dom.addEventListener('mousedown', (e) => {
+			downX = e.clientX; downY = e.clientY; downT = performance.now();
+		});
+		dom.addEventListener('mouseup', (e) => {
+			const dx = e.clientX - downX, dy = e.clientY - downY;
+			if (dx * dx + dy * dy > 25 || performance.now() - downT > 400) return;
+			setActive(pickLine(e.clientX, e.clientY));
+		});
+		// Click event as a last resort:
+		dom.addEventListener('click', (e) => {
+			setActive(pickLine(e.clientX, e.clientY));
+		});
 
 		// Canvas is a fixed size (CANVAS_W x CANVAS_H); no resize handling needed.
 
@@ -247,7 +263,7 @@
 				needsBuild = false;
 				buildLinesFrom();
 			}
-			controls.update();
+			if (controls) controls.update();
 			renderer.render(scene, camera);
 		};
 		loop();
@@ -257,12 +273,24 @@
 		init();
 		// Debug/inspect hook: expose scene graph + pick() for in-page testing.
 		// pick(clientX, clientY) -> frame index or null (same raycast as click).
+		// activate(frame) -> manually set the active line (for testing).
 		window.__wvt3d = {
 			get scene() { return scene; },
 			get camera() { return camera; },
 			get lines() { return lines; },
 			pick(clientX, clientY) {
 				return pickLine(clientX, clientY);
+			},
+			activate(frame) {
+				setActive(frame);
+			},
+			// Re-read data[frame] into the existing line's vertices without
+			// rebuilding the whole surface. The /editor route calls this after
+			// mutating the active wave, because the `data` prop reference does
+			// not change (only table[i] is replaced), so the internal
+			// needsBuild $effect does not fire.
+			refreshFrame(frame) {
+				markFrameDirty(frame);
 			}
 		};
 		return () => {
