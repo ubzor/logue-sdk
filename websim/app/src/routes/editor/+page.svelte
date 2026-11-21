@@ -1,12 +1,15 @@
 <!-- Wave Table Editor — 3D preview of the DRONE procedural wavetable.
      Standalone route (no audio): it only renders the surface and lets you
-     select a frame (line). The data is a placeholder (see lib/wavetable/
-     placeholder.ts) until the real ProcTable/seed generator is wired in.
-     Layout mirrors the simulator: a card wrapping the 3D view + a status
-     line showing the active frame. -->
+     select a frame (line). Clicking a line makes it ACTIVE and opens the
+     source-editing panel below. The 3D surface is still placeholder data
+     (see lib/wavetable/placeholder.ts) until the real renderer is wired in;
+     the editing panel is already driven by the editor store.
+     Layout: a card wrapping the 3D view + a status line + the SourceEdit
+     panel. -->
 <script>
 	import { onMount } from 'svelte';
 	import WaveTableView3D from '$lib/components/WaveTableView3D.svelte';
+	import SourceEdit from '$lib/components/SourceEdit.svelte';
 	import { defaultWavetable, EDITOR_FRAMES, EDITOR_POINTS } from '$lib/wavetable/placeholder';
 
 	let active = $state(null);
@@ -43,4 +46,7 @@
 			<div class="grid place-items-center text-xs opacity-60" style="width:640px;height:480px">Loading…</div>
 		{/if}
 	</div>
+
+	<!-- Source editing panel (disabled until a wave is active) -->
+	<SourceEdit active={active} />
 </div>
