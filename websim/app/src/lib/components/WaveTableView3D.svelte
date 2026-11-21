@@ -218,13 +218,18 @@
 		camera.position.set(2.6, 2.2, 4.2);
 		camera.lookAt(0, 0, 0);
 
-		// OrbitControls is DISABLED for the editor: it intercepts pointer events
-		// and calls setPointerCapture, which throws in headless/browser environments.
-		// The editor only needs to display the surface and pick lines on click.
-		// controls = new OrbitControls(camera, renderer.domElement);
-		// controls.enableDamping = true;
-		// controls.dampingFactor = 0.08;
-		// controls.target.set(0, 0, 0);
+		// OrbitControls: left-drag orbits, wheel zooms, right-drag pans. It
+		// calls setPointerCapture on pointerdown, which is fine in real
+		// browsers. Picking a line on a STATIONARY click still works: we track
+		// the pointerdown point/time ourselves and only call pickLine on
+		// pointerup if the pointer barely moved (< ~5px) and was held < 400ms.
+		// A drag (orbit) therefore never triggers a pick.
+		controls = new OrbitControls(camera, renderer.domElement);
+		controls.enableDamping = true;
+		controls.dampingFactor = 0.08;
+		controls.target.set(0, 0, 0);
+		// Disable pan so right-drag / two-finger doesn't fight the layout:
+		controls.enablePan = false;
 
 		// (The volume reference frame / bounding box was removed: it read as a
 		// limiting "frame" around the surface. The lines stand alone now.)
@@ -239,19 +244,6 @@
 		dom.addEventListener('pointerup', (e) => {
 			const dx = e.clientX - downX, dy = e.clientY - downY;
 			if (dx * dx + dy * dy > 25 || performance.now() - downT > 400) return;
-			setActive(pickLine(e.clientX, e.clientY));
-		});
-		// Fallback for environments where pointer events don't fire (e.g. Playwright):
-		dom.addEventListener('mousedown', (e) => {
-			downX = e.clientX; downY = e.clientY; downT = performance.now();
-		});
-		dom.addEventListener('mouseup', (e) => {
-			const dx = e.clientX - downX, dy = e.clientY - downY;
-			if (dx * dx + dy * dy > 25 || performance.now() - downT > 400) return;
-			setActive(pickLine(e.clientX, e.clientY));
-		});
-		// Click event as a last resort:
-		dom.addEventListener('click', (e) => {
 			setActive(pickLine(e.clientX, e.clientY));
 		});
 

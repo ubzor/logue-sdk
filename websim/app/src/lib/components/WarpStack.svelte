@@ -21,10 +21,13 @@
 	// renders this when a wave is active, so this is always a valid index).
 	let { waveIndex, target, srcIndex = 0 } = $props();
 
-	// The ordered list we render. Calling the getter inside the component body
-	// makes the read reactive: Svelte tracks the accessed store properties and
-	// re-renders when they change.
-	const stack: WarpItem[] = editor.warpList(waveIndex, target, srcIndex);
+	// The ordered list we render. Using $derived (not a plain `const`) makes
+	// the read reactive to `waveIndex`/`target`/`srcIndex` changes: when the
+	// parent switches the active wave, this re-evaluates and returns the NEW
+	// wave's list instead of sticking to the one captured at first render.
+	const stack: WarpItem[] = $derived.by(
+		() => editor.warpList(waveIndex, target, srcIndex)
+	);
 
 	// Which string-enum a param belongs to (for the <select> options).
 	function enumOptions(key: string, p: ParamSpec): readonly string[] {

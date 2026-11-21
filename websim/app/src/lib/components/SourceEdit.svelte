@@ -58,8 +58,14 @@
 		</button>
 	</div>
 
-	<!-- Source slots (single horizontal row, one active wave) -->
+	<!-- Source slots (single horizontal row, one active wave).
+	     {#key active} forces the WHOLE panel (source cards + their warp
+	     stacks + the CombineEdit column) to be torn down and rebuilt whenever
+	     the active wave changes. This guarantees every child re-reads
+	     editor.waves[active] from scratch, so no per-wave state (warp stacks,
+	     combine type, modifiers) leaks from one frame to another. -->
 	{#if active !== null}
+		{#key active}
 		<div class="src-row">
 			{#each editor.waves[active].sources as src, sIdx (sIdx)}
 				<div class="src-card flex flex-col gap-1.5"
@@ -121,6 +127,7 @@
 		<!-- 5th column: combine settings for the active wave -->
 		<CombineEdit waveIndex={active} />
 		</div>
+		{/key}
 	{/if}
 </div>
 

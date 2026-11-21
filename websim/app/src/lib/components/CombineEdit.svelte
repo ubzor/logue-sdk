@@ -13,8 +13,10 @@
 	// The active wave index (the parent only renders this when a wave is active).
 	let { waveIndex } = $props();
 
-	// Live view of the active wave (reactive via $state).
-	const wave = editor.waves[waveIndex];
+	// Live view of the active wave. $derived keeps this reactive to `waveIndex`
+	// so switching frames re-reads the NEW wave's combine/modifiers (a plain
+	// const would stick to the list captured at first render).
+	const wave = $derived.by(() => editor.waves[waveIndex]);
 
 	function onCombine(e: Event) {
 		editor.setCombine(waveIndex, (e.currentTarget as HTMLSelectElement).value as CombineMode);
