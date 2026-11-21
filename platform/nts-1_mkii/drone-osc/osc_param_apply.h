@@ -553,6 +553,41 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.svf_wet2 = param_10bit_to_f32(value); // raw 0..1 LINEAR
       break;
 
+    // ---- Procedural wavetable voice (PMORPH..PLEV) ---------------------------
+    // See osc_procedural.h for the spectral surface. PMORPH/PLEV are
+    // runtime-only (no table regen); PDECAY/PDENS/PSKEW/PORG set the dirty
+    // flag so blockPrepass re-renders the 8x256 frames at K-rate.
+    // PMORPH: LINEAR 0..100% -> 0..7 (fractional frame position, closed..open).
+    case PMORPH:
+      params_.proc_morph = 7.f * param_10bit_to_f32(value);
+      break;
+    // PDECAY: LINEAR 0..100% -> n^(-0.5 .. -4.0) spectral tilt (glassy..deep).
+    case PDECAY:
+      params_.proc_decay = 0.5f + 3.5f * param_10bit_to_f32(value);
+      proc_.dirty = true;
+      break;
+    // PDENS: LINEAR 0..100% -> 2..16 partials (the LUT's usable band).
+    case PDENS:
+      params_.proc_dens = param_10bit_to_f32(value); // 0..1 -> 2..16 in the table
+      proc_.dirty = true;
+      break;
+    // PSKEW: BIPOLAR -100%..+100% (raw 0..1023 centered at 511) -> -1..+1
+    // even/odd partial modulation (0 = symmetric).
+    case PSKEW:
+      params_.proc_skew = (param_10bit_to_f32(value) - 0.5f) * 2.f;
+      proc_.dirty = true;
+      break;
+    // PORG: LINEAR 0..100% -> 0..1 organic per-partial jitter depth.
+    case PORG:
+      params_.proc_org = param_10bit_to_f32(value);
+      proc_.dirty = true;
+      break;
+    // PLEV: LINEAR 0..100% -> 0..1 procedural voice level (0 = silent).
+    // Runtime-only (the mix gain in osc_mix.h); no table regen.
+    case PLEV:
+      params_.proc_level = param_10bit_to_f32(value);
+      break;
+
     default:
       break;
   }

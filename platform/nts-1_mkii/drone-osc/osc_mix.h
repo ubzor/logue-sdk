@@ -687,7 +687,28 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // loop above: each voice's A/B phasors are advanced with + fm_c_offset, so
     // `mix` already carries the C vibrato. When C is OFF, fm_c_offset == 0 and
     // this is bit-identical to the pre-FM-C sound.)
-    const float mix  = kMixOsc * (sum_main * env_comp_);
+    //
+    // PROCEDURAL WAVETABLE VOICE: a single procedurally-generated wavetable
+    // bank (8 morph frames x 256 points, 16-bit; osc_procedural.h) is read by
+    // the shared proc_ph phasor (anchor rate, advanced in the sub-bass block
+    // below) and ADDED to the A+B sum HERE, i.e. BEFORE the common post-stage
+    // (FOLD/SATU/SVF/formant/comb). So the procedural voice is "driven" by the
+    // same drive chain as the main voice. PLEV (proc_level) is its own gain
+    // (independent of MAIN): at 0 (default) the term is 0 and the stock sound
+    // is bit-identical. PMORPH (proc_morph, 0..7) is the fractional frame
+    // position; the lookup crossfades the two adjacent frames (bilinear).
+    // The phasor/lookup live below (after the sub-bass block advances proc_ph
+    // and sub_anchor_w0 is valid); proc_out is computed there and added to
+    // mix via the line immediately below that block.
+    // The procedural voice's contribution is kept in proc_mix (a member, so it
+    // persists across samples for the MAIN-duck bookkeeping below). At the
+    // start of each sample it is 0; if PLEV > 0 it is filled after the
+    // sub-bass block (where proc_ph advances). `mix` is rebuilt each sample as
+    // A+B + proc_mix so the MAIN knob can duck ONLY the A+B part (see the
+    // "MAIN ducks only A+B" note near the final mix). At PLEV = 0 proc_mix
+    // stays 0 and `mix` == the old A+B-only value (bit-identical regression).
+    proc_mix = 0.f;
+    float mix  = kMixOsc * (sum_main * env_comp_);
     // RMOD: A*B ring-mod DERIVED voice (summed per-voice), MAIN-ducked.
     const float ring_out = rmod_active ? (sum_ring * env_comp_) * p.ring_mix * p.main_level : 0.f;
 
@@ -749,6 +770,14 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // SUB2 (f/4) phasor: stable low-end anchor.
       sub_ph2 += sub_anchor_w0 * 0.25f;
       sub_ph2 -= fast_floorf(sub_ph2);
+      // PROCEDURAL phasor: the shared procedural wavetable voice reads at the
+      // ANCHOR rate (the same pitch as the shared sub bass, one-pole relaxed)
+      // so it is one continuous texture under/over the whole cluster, not N
+      // per-voice copies. At proc_level = 0 (default) the lookup result is
+      // multiplied by 0 in `mix` below, but the phasor still advances (cheap,
+      // and keeps the phase continuous so a PLEV raise doesn't click).
+      proc_ph += sub_anchor_w0;
+      proc_ph -= fast_floorf(proc_ph);
     }
     // Sub-octave / sub-2 (ONE shared pair; the SUBB breath gain modulates the
     // level, the anchor modulates the pitch; scaled by their levels in the mix).
@@ -757,6 +786,26 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // .process() call.
     const float sub    = osc_sinf(sub_ph) * sub_breath_gain;
     const float sub2_out = sub2.process(sub_ph2, sub_anchor_w0, sub_breath_gain);
+
+    // ---- PROCEDURAL WAVETABLE VOICE: lookup + add to `mix` ------------------
+    // Read the procedural frame bank at (PMORPH, proc_ph) -- a bilinear
+    // crossfade of the two adjacent frames (by the fractional part of PMORPH)
+    // and the two adjacent phase points (by the fractional part of proc_ph *
+    // 256). The result ([-1,+1]) is scaled by PLEV (proc_level, its own gain,
+    // independent of MAIN) and added to `mix` BEFORE the common post-stage,
+    // so the procedural voice is driven by the same FOLD/SATU/SVF/formant/
+    // comb chain as the A+B main voice. At PLEV = 0 (default) the term is 0
+    // (bit-identical stock sound). The phasor proc_ph was advanced at the
+    // anchor rate in the sub-bass block above.
+    if (p.proc_level > 0.f)
+    {
+      const float proc_out = ProcTable::lookup(proc_.frames_, p.proc_morph, proc_ph);
+      // Keep the procedural voice's contribution ISOLATED in proc_mix (a
+      // member) so the MAIN knob below can duck ONLY the A+B part. `mix` is
+      // rebuilt as A+B + proc_mix right after this block.
+      proc_mix = kMixOsc * proc_out * p.proc_level;
+      mix += proc_mix;
+    }
 
     // The COMMON post-stage input is `mix` (the per-voice A+B sum, computed in
     // the loop above as kMixOsc * sum_main). It is then run through the SINGLE
@@ -1019,7 +1068,15 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // shared sub bass is NOT env_comp_ scaled, it is ONE pair). A single
       // note -> env = its own level (mono exact); N notes -> each note
       // contributes its own envelope, no shared-dip on the 1→2 boundary.
+      // MAIN ducks ONLY the A+B voice (y_filt) and its RMOD byproduct — the
+      // procedural voice (proc_mix, isolated in a member above) is NOT
+      // MAIN-ducked: it is driven by PLEV only, so MAIN=0 mutes A+B but the
+      // proc texture (if PLEV > 0) keeps sounding. Same for the constant
+      // sidechain duck: the low end sinks A+B, not the proc voice. At
+      // PLEV = 0 proc_mix == 0 and `raw` is bit-identical to the pre-proc
+      // sound (regression-safe).
       const float raw = (y_filt * p.main_level * duck_gain
+                       + proc_mix
                        + sub * p.sub_level * kMixSub
                        + sub2_out * p.sub2_level * kMixSub2
                        + ring_out * kMixRing * duck_gain) * kOutDrive;
@@ -1078,4 +1135,12 @@ inline void Osc::blockPrepass(uint32_t frames)
   // (All pitch glide / portamento was removed in the polyphonic build: each
   //  cluster note starts at its exact pitch with a random per-voice start
   //  phase, so blockPrepass advances no glide.)
+
+  // ---- Procedural wavetable: K-rate re-render (dirty flag) -----------------
+  // If a shape param (PDECAY/PDENS/PSKEW/PORG) changed since the last block,
+  // re-render the 8x256 int16 frames HERE (K-rate, libm allowed) -- never in
+  // the per-sample audio path. procRegen() copies params_.proc_* into the
+  // ProcTable cache and calls regen() only when the dirty flag is set, so a
+  // block with no shape change is a single branch (zero cost).
+  procRegen();
 }

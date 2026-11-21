@@ -193,6 +193,24 @@ struct OscParamsData
   // used, so a single note = constant gain, no flutter).
   float subb_depth;   // 0.f .. 1.f, edit SUBB (sub-bass breath depth)
 
+  // ---- Procedural wavetable voice (PMORPH/PDECAY/PDENS/PSKEW/PORG/PLEV) ------
+  // A single procedurally-generated wavetable bank (8 morph frames x 256
+  // points, 16-bit) synthesized from 16 additive partials (see
+  // osc_procedural.h). It is a NEW parallel voice: its output is added to
+  // the A+B sum BEFORE the common post-stage (FOLD/SATU/SVF/formant/comb),
+  // so it is "driven" by the same drive chain as the main voice. PLEV is its
+  // own level (independent of MAIN). All four shape params (PDECAY/PDENS/
+  // PSKEW/PORG) set a dirty flag -> the tables are re-rendered at K-rate in
+  // blockPrepass (never in the audio path). PMORPH and PLEV are runtime-only
+  // (no regen). At PLEV = 0 (default) the voice is silent and the stock
+  // sound is bit-identical (regression-safe).
+  float proc_morph;   // 0.f .. 7.f, edit PMORPH: morph position across the 8 frames (0=closed..7=open)
+  float proc_level;   // 0.f .. 1.f, edit PLEV: procedural voice level (0 = silent, default)
+  float proc_decay;   // 0.5f .. 4.0f, edit PDECAY: spectral tilt n^(-p) (glassy..deep)
+  float proc_dens;    // 0.f .. 1.f, edit PDENS: normalized partial count (2..16)
+  float proc_skew;    // -1.f .. +1.f, edit PSKEW: even/odd partial modulation (0 = symmetric)
+  float proc_org;     // 0.f .. 1.f, edit PORG: organic per-partial jitter depth
+
   // (GLIDE removed: no glide_raw field)
 
   void reset()
@@ -265,6 +283,18 @@ struct OscParamsData
       comb_fb      = 0.f;   // default: comb resonator off
       subb_depth   = 0.3f;  // default: ~30% (d ~= 0.18) — the shared sub bass gently
                             // follows the breath-focus note (see the SUBB comment)
+      // ---- Procedural wavetable voice defaults (SILENT, regression-safe) ----
+      // PLEV = 0 keeps the voice muted at the factory preset, so the stock
+      // sound is bit-identical until the user raises PLEV. The shape params
+      // are set to sensible midpoints so the FIRST time PLEV is raised the
+      // voice already has an audible, musical shape (mid morph, a gentle
+      // saw-ish tilt, full partials, symmetric, no jitter).
+      proc_morph   = 3.5f;  // default: mid morph (between frames 3 and 4)
+      proc_level   = 0.f;   // default: SILENT (the stock sound is unchanged)
+      proc_decay   = 1.5f;  // default: gentle tilt (saw-ish, n^-1.5)
+      proc_dens    = 1.f;   // default: full 16 partials (the LUT's band)
+      proc_skew    = 0.f;   // default: symmetric (no even/odd modulation)
+      proc_org     = 0.f;   // default: no organic jitter (deterministic/clinical)
   }
 
   OscParamsData() { reset(); }
