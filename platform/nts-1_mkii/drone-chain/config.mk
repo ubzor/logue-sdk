@@ -34,7 +34,8 @@ WASMSRC_C := $(PROJECT_ROOT)/header.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-c.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-d.c \
              $(PROJECT_ROOT)/../../../websim/dsp/waves-e.c \
-             $(PROJECT_ROOT)/../../../websim/dsp/waves-f.c
+             $(PROJECT_ROOT)/../../../websim/dsp/waves-f.c \
+             $(PROJECT_ROOT)/../common/compress/miniz_tinfl.c
 WASMSRC_CXX := $(PROJECT_ROOT)/wasm.cc $(PROJECT_ROOT)/chain.cc
 
 ##############################################################################
@@ -49,7 +50,8 @@ UINCDIR  = $(PROJECT_ROOT) \
            $(PROJECT_ROOT)/../drone-osc \
            $(PROJECT_ROOT)/../drone-modfx \
            $(PROJECT_ROOT)/../drone-delfx \
-           $(PROJECT_ROOT)/../drone-revfx
+           $(PROJECT_ROOT)/../drone-revfx \
+           $(PROJECT_ROOT)/../common/compress
 
 ##############################################################################
 # ARM placeholders (unused - this project is web-only). Keep the variables so

@@ -279,7 +279,7 @@ export const editor = new EditorStore();
 // Send the document to the WASM OSC (debounced)
 // ---------------------------------------------------------------------------
 
-import { serializeWteDoc } from './serialize';
+import { compressWteDoc } from './wte_compress';
 import { audioReady } from '../audio/glue-bridge';
 
 let _sendTimer: ReturnType<typeof setTimeout> | null = null;
@@ -300,17 +300,36 @@ export function scheduleSendToUnit(): void {
     _sendPending = false;
     _sendTimer = null;
     try {
-      const { Module } = await audioReady;
-      const buf = serializeWteDoc(editor.waves);
-      // embind does NOT auto-convert JS arrays to std::vector<float> —
-      // we must construct an embind FloatArray instance (registered via
-      // register_vector<float>("FloatArray") in wasm.cc) and fill it.
-      const FA = (Module as any).FloatArray;
-      if (typeof FA !== 'function') throw new Error('FloatArray embind class not found');
-      const fa = new FA();
-      fa.resize(buf.length);
-      for (let i = 0; i < buf.length; i++) fa.set(i, buf[i]);
-      Module.setWteDocument(fa);
+      const { Module, HEAPU8, wasmExports } = await audioReady as any;
+      // Raw wasm export route (NOT embind): copy the compressed packet into
+      // emscripten linear memory and call setWteDocumentImpl(ptr, len)
+      // directly. embind's std::vector<uint8_t> by-value converter is dropped
+      // at finalize on this toolchain (see wasm.cc), so the embind binding
+      // would silently never resolve; the raw export + HEAPU8 path is the
+      // supported channel (bytes land in shared memory, SHARED_MEMORY=1, the
+      // worklet sees them on its next block).
+      const fn = wasmExports?.setWteDocumentImpl;
+      const malloc = wasmExports?.malloc;
+      const free = wasmExports?.free;
+      if (typeof fn !== 'function' || typeof malloc !== 'function' || !HEAPU8) {
+        console.warn('[wte] wasm exports setWteDocumentImpl/malloc/HEAPU8 missing — packet not sent');
+        return;
+      }
+      const packet = compressWteDoc(editor.waves);
+      // Allocate in the wasm heap (returns a byte offset), not in JS-heap:
+      // the pointer must index into the wasm linear memory that setWteDocumentImpl
+      // reads. The raw exports malloc/free come from the wasm module (exposed
+      // via the EM_ASM bridge as wasmExports), NOT from Module._malloc (which
+      // is absent on this embind build).
+      const ptr = malloc(packet.length);
+      try {
+        HEAPU8.set(packet, ptr);
+        fn(ptr, packet.length);
+      } finally {
+        // Free the staging buffer: the decoder is synchronous (it copies into
+        // a static WTEDoc before returning), so the bytes are no longer needed.
+        if (typeof free === 'function') free(ptr);
+      }
     } catch (e) {
       console.warn('[wte] setWteDocument failed:', e);
     }
