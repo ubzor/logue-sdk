@@ -16,7 +16,7 @@ import { bus } from './bus';
 
 // ============================ Constants (1:1 legacy) ========================
 
-export const EDIT_PARAM_COUNT = 61; // 61 = RATE..PLEV (см. legacy, osc.h kEditParamCount)
+export const EDIT_PARAM_COUNT = 57; // 57 = RATE..PLEV (см. legacy, osc.h kEditParamCount)
 
 export const EDIT_PARAM_NAMES = [
   "Rate", "Detune",
@@ -38,10 +38,10 @@ export const EDIT_PARAM_NAMES = [
   "Wave Mix LFO Shape", "Wave Mix LFO Gap",
   "FM Mod Rate", "FM Mod Wave", "FM Mod Depth", "FM Teeth", "FM Teeth Depth", "FM Amount",
   "Cutoff 24dB",
-  "Proc Morph", "Proc Decay", "Proc Dens", "Proc Skew", "Proc Org", "Proc Level",
+  "Proc Morph", "Proc Level",
 ];
 if (EDIT_PARAM_NAMES.length !== EDIT_PARAM_COUNT) {
-  throw new Error('EDIT_PARAM_NAMES.length must equal EDIT_PARAM_COUNT (61)');
+  throw new Error('EDIT_PARAM_NAMES.length must equal EDIT_PARAM_COUNT (57)');
 }
 
 export interface ParamGroup {
@@ -71,7 +71,7 @@ export const PARAM_GROUPS: ParamGroup[] = [
   { title: "FILTER",     col: 2, items: [19, 20, 54] },
   { title: "CLUSTER",    col: 2, items: [33] },
   { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52, 53] },
-  { title: "PROC WAVET", col: 1, items: [60, 55, 56, 57, 58, 59], divider: true },
+  { title: "PROC WAVET", col: 1, items: [56, 55], divider: true },
 ];
 
 // ---- WAVE bank (edit 13 WAV1 / 14 WAV2) ------------------------------------
@@ -153,8 +153,8 @@ export function formatParamValue(idx: number, raw: number): string {
     const bank = Math.round((raw / 1023) * 5.999);
     return "ABCDEF".charAt(Math.max(0, Math.min(5, bank)));
   }
-  if (idx === 11 || idx === 39 || idx === 58) {
-    // ASYM / WAVE MIX / PROC SKEW: symmetric -100..+100% (511 = 0).
+  if (idx === 11 || idx === 39) {
+    // ASYM / WAVE MIX: symmetric -100..+100% (511 = 0).
     const pct = Math.round((raw * 200) / 1023) - 100;
     return (pct >= 0 ? "+" : "") + pct + "%";
   }
@@ -250,19 +250,13 @@ export function formatParamValue(idx: number, raw: number): string {
     return (Math.floor(teeth * 10) / 10).toFixed(2); // 0.NN
   }
   if (idx === 55) {
-    // PROC MORPH: fractional frame position 0..7 (closed..open), 1 decimal.
-    const m = (raw / 1023) * 7;
+    // PROC MORPH: fractional frame position 0..15 (the 16 editor frames), 1 decimal.
+    const m = (raw / 1023) * 15;
     return m.toFixed(1);
   }
   if (idx === 56) {
-    // PROC DECAY: spectral tilt n^(-p), p = 0.5 + (raw/1023)*3.5 (0.5..4.0).
-    const p = 0.5 + (raw / 1023) * 3.5;
-    return p.toFixed(1);
-  }
-  if (idx === 57) {
-    // PROC DENS: partial count 2..16 (raw/1023 -> 2 + 14*x).
-    const n = 2 + (raw / 1023) * 14;
-    return String(Math.round(n));
+    // PROC LEVEL: 0..100% (raw/1023 -> 0..100).
+    return Math.round((raw * 100) / 1023) + "%";
   }
   // Every other index formats as 0..100%:
   // 0..7 (RATE, SPD1..SMT3), 8..9 (SUB1/SUB2), 12 (FOLD), 15 (MAIN),
@@ -333,11 +327,10 @@ export const DEFAULT_RAW = [
   0, 0, 0, 511, 511, 0, 0, 0, 0, 0,
   0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511,
   0, 511, 0, 511, 0, 1023, 0, 511, 0, 0,
-  0, 0, 1023, 1023, 0,
-  511, 511, 1023, 511, 0, 0,
+  0, 0, 1023, 1023, 0, 511, 0,
 ];
 if (DEFAULT_RAW.length !== EDIT_PARAM_COUNT) {
-  throw new Error('DEFAULT_RAW.length must equal EDIT_PARAM_COUNT (61)');
+  throw new Error('DEFAULT_RAW.length must equal EDIT_PARAM_COUNT (57)');
 }
 
 // ============================ Randomize (1:1 legacy) =========================
@@ -413,18 +406,13 @@ export function randomizeAllRaw(): number[] {
   set("FM Teeth", rRange(0, 614));
   set("FM Teeth Depth", rRange(256, 1023));
   set("Cutoff 24dB", rRange(0, 716));   // 0..70%
-  // ---- Procedural wavetable voice (55..60) ----------------------------------
-  // Randomize the procedural voice into a musical, audible range: a moderate
-  // level (15..50%) so Random always yields a sound that includes the proc
-  // texture, a mid morph, a gentle tilt, full-ish partials, mild skew, a
-  // touch of organic jitter. (The shape params set the dirty flag -> the web
-  // sim re-renders the frames at K-rate in blockPrepass, same as hardware.)
-  set("Proc Morph", rRange(102, 921));  // ~10..90% morph
-  set("Proc Decay", rRange(102, 819));  // ~10..80% tilt
-  set("Proc Dens", rRange(511, 1023));  // ~50..100% partials
-  set("Proc Skew", rRange(256, 767));   // +/-50%
-  set("Proc Org", rRange(0, 511));      // 0..50% jitter
+  // ---- Editor-wavetable voice (55..56) --------------------------------------
+  // Randomize the editor-wavetable voice into a musical, audible range: a
+  // moderate level (15..50%) so Random always yields a sound that includes the
+  // editor texture, a mid morph. (The document itself is set by the editor UI;
+  // randomization only touches the level + morph position.)
   set("Proc Level", rRange(153, 511));  // 15..50% level
+  set("Proc Morph", rRange(102, 921));  // ~10..90% morph
   return raws;
 }
 

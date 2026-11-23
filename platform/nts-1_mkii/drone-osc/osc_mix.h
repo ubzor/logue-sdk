@@ -688,19 +688,20 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // `mix` already carries the C vibrato. When C is OFF, fm_c_offset == 0 and
     // this is bit-identical to the pre-FM-C sound.)
     //
-    // PROCEDURAL WAVETABLE VOICE: a single procedurally-generated wavetable
-    // bank (8 morph frames x 256 points, 16-bit; osc_procedural.h) is read by
+    // EDITOR WAVETABLE VOICE: a 16 morph-frame x 256-point wavetable bank
+    // (16-bit; osc_wte.h, rendered from the /editor document — 16 waves of
+    // sources/warps/combine, see osc_wte_doc.h / osc_wte_render.h) is read by
     // the shared proc_ph phasor (anchor rate, advanced in the sub-bass block
     // below) and ADDED to the A+B sum HERE, i.e. BEFORE the common post-stage
-    // (FOLD/SATU/SVF/formant/comb). So the procedural voice is "driven" by the
+    // (FOLD/SATU/SVF/formant/comb). So the editor voice is "driven" by the
     // same drive chain as the main voice. PLEV (proc_level) is its own gain
     // (independent of MAIN): at 0 (default) the term is 0 and the stock sound
-    // is bit-identical. PMORPH (proc_morph, 0..7) is the fractional frame
+    // is bit-identical. PMORPH (proc_morph, 0..15) is the fractional frame
     // position; the lookup crossfades the two adjacent frames (bilinear).
     // The phasor/lookup live below (after the sub-bass block advances proc_ph
     // and sub_anchor_w0 is valid); proc_out is computed there and added to
     // mix via the line immediately below that block.
-    // The procedural voice's contribution is kept in proc_mix (a member, so it
+    // The editor voice's contribution is kept in proc_mix (a member, so it
     // persists across samples for the MAIN-duck bookkeeping below). At the
     // start of each sample it is 0; if PLEV > 0 it is filled after the
     // sub-bass block (where proc_ph advances). `mix` is rebuilt each sample as
@@ -799,7 +800,7 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // anchor rate in the sub-bass block above.
     if (p.proc_level > 0.f)
     {
-      const float proc_out = ProcTable::lookup(proc_.frames_, p.proc_morph, proc_ph);
+      const float proc_out = WteTable::lookup(wte_.frames_, p.proc_morph, proc_ph);
       // Keep the procedural voice's contribution ISOLATED in proc_mix (a
       // member) so the MAIN knob below can duck ONLY the A+B part. `mix` is
       // rebuilt as A+B + proc_mix right after this block.
@@ -1136,11 +1137,11 @@ inline void Osc::blockPrepass(uint32_t frames)
   //  cluster note starts at its exact pitch with a random per-voice start
   //  phase, so blockPrepass advances no glide.)
 
-  // ---- Procedural wavetable: K-rate re-render (dirty flag) -----------------
-  // If a shape param (PDECAY/PDENS/PSKEW/PORG) changed since the last block,
-  // re-render the 8x256 int16 frames HERE (K-rate, libm allowed) -- never in
-  // the per-sample audio path. procRegen() copies params_.proc_* into the
-  // ProcTable cache and calls regen() only when the dirty flag is set, so a
-  // block with no shape change is a single branch (zero cost).
-  procRegen();
+  // ---- Editor wavetable: K-rate re-render (dirty flag) ----------------------
+  // If the web simulator sent a new /editor document since the last block
+  // (wteSetDocument -> wte_.set_doc raised the dirty flag), re-render the
+  // 16x256 int16 frames HERE (K-rate, fast-math allowed) -- never in the
+  // per-sample audio path. wteRegen() calls regen() only when the dirty flag
+  // is set, so a block with no new document is a single branch (zero cost).
+  wteRegen();
 }

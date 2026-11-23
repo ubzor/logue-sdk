@@ -59,37 +59,22 @@ if [ "${#MODULES[@]}" -eq 0 ]; then
   esac
 fi
 
-# ---- FlyonUI (Tailwind v4) web assets (Vite) ---------------------------------
-# The web-simulator CSS/JS are built once from the shared websim/ project
-# (only needed when the drone-chain simulator is built in this run). Always
-# rebuild (no stale-check): the assets can drift independently and Vite is
-# fast (~1 s).
-SANDBOX_DIR="$(cd "$PLATFORM_DIR/../../websim" && pwd)"
-NEED_VITE=0
+# ---- Web simulator assets: no separate step ----------------------------------
+# The FlyonUI/Tailwind asset pipeline is NOT a separate Vite build any more:
+# it lives inside the SvelteKit app (websim/app/) -- the flyonuiRepair() +
+# @tailwindcss/vite + sveltekit() plugins in websim/app/vite.config.js run as
+# part of the app's own `npm run build` (see serve.sh there). The legacy
+# top-level websim/ Vite project (package.json + vite.config.js at the
+# websim/ root) was removed, so there is nothing to build here. drone-chain's
+# `make wasm` only emits the emscripten glue/wasm and syncs them into
+# websim/app/static/ -- it does not touch the CSS/JS assets.
+# BUILD_SIM: build the drone-chain wasm worklet only for sim/both runs
+# (an ARM-only run does not need it).
+BUILD_SIM=0
 for MOD in "${MODULES[@]}"; do
-  [ "$MOD" = "$CHAIN_MODULE" ] && NEED_VITE=1
+  [ "$MOD" = "$CHAIN_MODULE" ] && BUILD_SIM=1
 done
-# The Vite assets and the chain simulator are built only for sim/both runs:
-# an ARM-only run needs no web assets, and an explicit ARM module list does
-# not imply the web simulator either.
-if [ "$TARGET" = "arm" ] || [ "$NEED_VITE" -eq 0 ]; then
-  BUILD_SIM=0
-else
-  BUILD_SIM=1
-fi
-if [ "$BUILD_SIM" -eq 1 ]; then
-  echo "============================================"
-  echo "Building FlyonUI assets (Vite) in $SANDBOX_DIR"
-  echo "============================================"
-  (cd "$SANDBOX_DIR" && {
-    if [ ! -d node_modules ]; then
-      echo "node_modules missing - running npm install..."
-      npm install --no-audit --no-fund
-    fi
-    npx vite build
-  })
-  echo ""
-fi
+[ "$TARGET" = "arm" ] && BUILD_SIM=0
 
 # ---- Build each ARM unit -----------------------------------------------------
 BUILD_OK=1

@@ -276,6 +276,57 @@ export class EditorStore {
 export const editor = new EditorStore();
 
 // ---------------------------------------------------------------------------
+// Send the document to the WASM OSC (debounced)
+// ---------------------------------------------------------------------------
+
+import { serializeWteDoc } from './serialize';
+import { audioReady } from '../audio/glue-bridge';
+
+let _sendTimer: ReturnType<typeof setTimeout> | null = null;
+let _sendPending = false;
+
+/**
+ * Schedule a send of the current editor document to the WASM OSC.
+ * Debounced: at most one setWteDocument call per 100 ms. The actual
+ * 16x256 table regeneration happens at K-rate in blockPrepass (audio
+ * thread), so the main thread only does the (cheap) serialization +
+ * one embind call.
+ */
+export function scheduleSendToUnit(): void {
+  if (_sendPending) return;
+  _sendPending = true;
+  if (_sendTimer) clearTimeout(_sendTimer);
+  _sendTimer = setTimeout(async () => {
+    _sendPending = false;
+    _sendTimer = null;
+    try {
+      const { Module } = await audioReady;
+      const buf = serializeWteDoc(editor.waves);
+      // embind does NOT auto-convert JS arrays to std::vector<float> —
+      // we must construct an embind FloatArray instance (registered via
+      // register_vector<float>("FloatArray") in wasm.cc) and fill it.
+      const FA = (Module as any).FloatArray;
+      if (typeof FA !== 'function') throw new Error('FloatArray embind class not found');
+      const fa = new FA();
+      fa.resize(buf.length);
+      for (let i = 0; i < buf.length; i++) fa.set(i, buf[i]);
+      Module.setWteDocument(fa);
+    } catch (e) {
+      console.warn('[wte] setWteDocument failed:', e);
+    }
+  }, 100);
+}
+
+/**
+ * Call this from the UI whenever the editor document changes (e.g. in a
+ * $effect watching editor.revision). It debounces and sends the whole
+ * document in one shot.
+ */
+export function onDocChange(): void {
+  scheduleSendToUnit();
+}
+
+// ---------------------------------------------------------------------------
 // Randomization (for `randomize()`)
 // ---------------------------------------------------------------------------
 

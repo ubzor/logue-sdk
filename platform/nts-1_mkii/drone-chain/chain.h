@@ -268,6 +268,7 @@ public:
     return osc_.getParameterStrValue(id, value);
   }
   void simRndRequest(uint8_t mode) { osc_.simRndRequest(mode); }
+  void wteSetDocument(const WTEDoc &d) { osc_.wteSetDocument(d); }
   void stableSync() { osc_.stableSync(); }
   uint8_t getRndMode() const { return osc_.getRndMode(); }
   void setRndMode(uint8_t mode) { osc_.setRndMode(mode); }

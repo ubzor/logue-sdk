@@ -3,8 +3,27 @@
 	import FxStack from '$lib/components/FxStack.svelte';
 	import AudioHost from '$lib/components/AudioHost.svelte';
 	import Keyboard from '$lib/components/Keyboard.svelte';
+	import WaveTableView3D from '$lib/components/WaveTableView3D.svelte';
+	import SourceEdit from '$lib/components/SourceEdit.svelte';
 	import { onMount } from 'svelte';
 	import { audioState, audioController, setVolume, setBpm, setOctave } from '$lib/audio/stores';
+	import { editor, onDocChange } from '$lib/editor/store.svelte';
+	import { renderWave, EDITOR_FRAMES, EDITOR_POINTS } from '$lib/wavetable/render';
+
+	// ---- Wave Table Editor (inlined into the main page, bottom) ------------
+	// Clicking a line in the 3D view makes it ACTIVE; editing that wave in
+	// SourceEdit re-renders ONLY that line. Every mutation bumps
+	// editor.revision, which the $effect below turns into a debounced
+	// setWteDocument call into the WASM OSC (the 16x256 bank re-renders at
+	// K-rate inside blockPrepass; the audio path is untouched).
+	let wteActive = $state(null);
+	let wteTable = $derived(editor.waves.map((w, i) => renderWave(w, EDITOR_POINTS, i)));
+
+	$effect(() => {
+		// react to any editor mutation (revision increments on every change)
+		void editor.revision;
+		onDocChange();
+	});
 	// Drone chain simulator page (SvelteKit port of the legacy
 	// websim/index.html shell). Layout: top row = title + all global controls
 	// + keyboard + scope (one line); main row = OSC parameters (2/3) +
@@ -231,6 +250,40 @@
 	<div class="flex gap-4 items-stretch">
 		<OscPanel />
 		<FxStack />
+	</div>
+
+	<!-- ================= WAVE TABLE EDITOR (bottom) ========================== -->
+	<!-- The /editor page inlined: 3D preview of the 16-frame wavetable (each
+	     frame = one editor wave, live from the store) + the source/combine/
+	     warp editing panel for the ACTIVE frame. Every change re-serializes
+	     the document into the WASM OSC (debounced), where the 16x256 bank
+	     re-renders at K-rate; PMORPH/PLEV (OSC panel, "PROC WAVET" group)
+	     select the frame and the level of the editor voice. -->
+	<div class="flex flex-col gap-3">
+		<div class="flex items-center gap-3">
+			<span class="text-sm font-semibold tracking-wide">Wave Table Editor</span>
+			<span class="badge badge-soft badge-primary badge-sm font-mono text-xs">
+				{EDITOR_FRAMES} × {EDITOR_POINTS}
+			</span>
+			<span class="text-xs opacity-60">
+				{#if wteActive === null}
+					Click a line to make it active
+				{:else}
+					Frame <span class="font-mono">{wteActive + 1}</span> / {EDITOR_FRAMES} active
+				{/if}
+			</span>
+		</div>
+
+		<div class="card p-2 w-fit">
+			{#if wteTable}
+				<WaveTableView3D data={wteTable} bind:active={wteActive} onActiveChange={(i) => wteActive = i} />
+			{:else}
+				<div class="grid place-items-center text-xs opacity-60" style="width:640px;height:480px">Loading…</div>
+			{/if}
+		</div>
+
+		<!-- Source/combine/warp editing panel (disabled until a wave is active) -->
+		<SourceEdit active={wteActive} />
 	</div>
 
 </div>

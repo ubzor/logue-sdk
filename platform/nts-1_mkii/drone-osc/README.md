@@ -89,26 +89,24 @@ SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
      is currently loudest). At 1 note sub_env_focus = that note's A-H-R, so
      the low end swells with the attack and sinks on the release.
 
-PROCEDURAL WAVETABLE VOICE (osc_procedural.h; ONE shared phasor, after the sub block):
-  A procedurally-generated wavetable bank (8 morph frames × 256 points, 16-bit
-  int16, 4 KB) synthesized from 16 additive partials. The 8 frames are 8 slices
-  of ONE spectral surface:
-    A[n](m) = window(n, DENS(m)) * n^(-DECAY(m)) * (1 + SKEW*cos(pi*n))
-              * (1 + ORG * rnd(n, seed(m)))
-  where n = 1..16 (partials), m = 0..7 (frame). The morph sweeps the surface
-  "closed -> open": frame 0 emphasizes the LOW partials (a warm, closed body),
-  frame 7 the HIGH partials (an open, dense body). The frames are re-rendered
-  at K-rate in blockPrepass ONLY when a shape param (PDECAY/PDENS/PSKEW/PORG)
-  sets the dirty flag (libm there, never in the audio path; ~sub-millisecond
-  for all 8 frames on the STM32H725 hard-FPU).
+EDITOR WAVETABLE VOICE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; ONE shared phasor, after the sub block):
+  A 16 morph-frame × 256-point wavetable bank (16-bit int16, 8 KB) generated
+  from the /editor document: each of the 16 waves is a WaveConfig recipe (4
+  sources × 30 shapes + warp stacks + combine + modifiers) — the FULL /editor
+  mechanism ported 1:1 from the web editor (docs/editor-model.md,
+  src/lib/wavetable/render.ts). The document is sent WHOLE (all 16 waves, all
+  parameters, one call) from the web simulator via Osc::wteSetDocument (->
+  wte_.set_doc, dirty flag) and the 16×256 frames are re-rendered at K-rate in
+  blockPrepass (wteRegen, never in the audio path; sub-millisecond on the
+  STM32H725 hard-FPU).
   In the audio path ONE shared phasor (proc_ph) advances at the ANCHOR rate
-  (sub_anchor_w0, the same pitch as the shared sub bass) so the procedural
-  voice is one continuous texture under/over the whole cluster (not N
-  per-voice copies). Each sample reads the bank at (PMORPH, proc_ph) via a
-  bilinear crossfade (two adjacent frames × two adjacent phase points, pure
-  shifts/masks — no libm). The result ([-1,+1]) is scaled by PLEV (the proc
+  (sub_anchor_w0, the same pitch as the shared sub bass) so the editor voice
+  is one continuous texture under/over the whole cluster (not N per-voice
+  copies). Each sample reads the bank at (PMORPH, proc_ph) via a bilinear
+  crossfade (two adjacent frames × two adjacent phase points, pure
+  shifts/masks — no libm). The result ([-1,+1]) is scaled by PLEV (the editor
   voice's OWN level, independent of MAIN) and ADDED to `mix` BEFORE the common
-  post-stage, so the procedural voice is "driven" by the same FOLD/SATU/SVF/
+  post-stage, so the editor voice is "driven" by the same FOLD/SATU/SVF/
   formant/comb chain as the A+B main voice. At PLEV = 0 (default) the term is
   0 -> the stock sound is bit-identical (regression-safe).
 
@@ -135,7 +133,7 @@ PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
 
 COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   mix  = kMixOsc * (sum_main * env_comp)
-         + kMixOsc * proc_out * PLEV          (the procedural voice, PLEV = 0 -> 0)
+         + kMixOsc * proc_out * PLEV          (the editor-wavetable voice, PLEV = 0 -> 0)
   -> FLD (wavefolder, FLD)
   -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)   [ x kMixOsc ]
   -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
@@ -144,7 +142,7 @@ COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   = y_main
 
 out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK
-            + PROC*PLEV                          (the proc voice; NOT MAIN/ducked)
+            + WTE*PLEV                          (the editor-wavetable voice; NOT MAIN/ducked)
             + sub*SUB1 + sub2_out*SUB2
             + (sum_ring*env_comp)*RMOD*MAIN*DUCK ) )
   where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
@@ -517,12 +515,8 @@ default and effect:
 | 52 | FMSA | % | 0..100% (LINEAR) -> 0..0.05 cycles peak | 100% | **FM static depth (tooth size)**: the AMPLITUDE (peak swing) of each S tooth — how strongly each tooth bends the (A+B) sum's phase. The effective per-tooth offset is FMSA × 0.05 cycles (5% of the carrier at full scale). The tooth SHAPE is shared with the C modulator (FM Mod Wave / FMCW: SIN/TRI/SAW/SQR/NOISE). 0 = no static FM (bit-identical); 100% (default) = full tooth size. |
 | 53 | FMAM | % | 0..100% (LINEAR) | 100% | **FM MOD amount (global master)**: how strongly the WHOLE FM MOD block is applied — a single multiplier on BOTH the C (vibrato) and S (static teeth) phase offsets before they are added to the A/B phasors. 100% (default) = full C+S exactly as set by FMCD/FMSA (bit-identical regression-safe); 0% = the whole FM MOD block is OFF (both offsets are exactly 0, the (A+B) sum is unmodulated) regardless of the individual C/S settings. It scales the DEVIATION only, never the C/S rates (FMCR/FMST) or shapes (FMCW) — turning FMAM down fades the modulation out smoothly while the modulator keeps running in phase. |
 | 54 | FCUT2 | % | 0..100% (LINEAR) | 0% (12 dB/oct) | **Cascaded 2nd-stage SVF wet** (the "Cutoff 24dB" slider in the web sim): the dry/wet of the SECOND (cascaded) `Svf::State` (`svf2_`). It shares the SAME cutoff (CUT) and resonance (RES) as the 1st stage — only the wet amount is settable. 0% (default) = the 2nd stage is transparent → a single 12 dB/oct SVF (bit-identical to the factory preset); 100% = a full 2nd-stage LPF → 24 dB/oct total. Raising FCUT2 gives a steeper top-end roll-off for taming FM upper sidebands (the "FM complex but not screechy" recipe). |
-| 55 | PMORPH | 0.0..7.0 | 0..100% (LINEAR) -> 0..7 frames | 50% (mid, frame 3.5) | **Procedural wavetable MORPH position**: the fractional frame index (0..7) of the procedurally-generated wavetable bank (8 morph frames × 256 points, 16-bit; `osc_procedural.h`). Frame 0 = "closed" (low partials emphasized, warm body), frame 7 = "open" (high partials, dense body). The audio path crossfades the two adjacent frames (bilinear, like the Korg-bank morph). Runtime-only (no table regen). |
-| 56 | PDECAY | 0.5..4.0 (p) | 0..100% (LINEAR) -> n^(-0.5..-4.0) | ~50% (n^-1.5) | **Procedural spectral TILT**: the decay exponent `p` of the partial amplitudes `A[n] ∝ n^(-p)` — the main timbre knob. p=0.5 = glassy/resonant (slow rolloff), p=4.0 = deep/sine-like (steep rolloff). Sets a dirty flag → the frames re-render at K-rate in blockPrepass. |
-| 57 | PDENS | 2..16 (partials) | 0..100% (LINEAR) -> 2..16 partials | 100% (16) | **Procedural partial COUNT**: how many additive partials (2..16) the surface uses (a 3-point taper window at the edge avoids an aliasing cliff). Fewer = thinner body, more = denser. Sets a dirty flag → K-rate re-render. |
-| 58 | PSKEW | -100..+100% | bipolar (511 = 0) -> -1..+1 | 0% (symmetric) | **Procedural even/odd MODULATION**: multiplies the partial amplitudes by `(1 + skew·cos(π·n))` — tilts the spectrum toward even or odd partials, morphing the form from symmetric (saw-like) to asymmetric (hollow/round organic shapes). 0 = symmetric. Sets a dirty flag → K-rate re-render. |
-| 59 | PORG | 0..100% | 0..100% (LINEAR) | 0% (clinical) | **Procedural ORGANIC jitter**: a deterministic per-partial/per-frame amplitude jitter (splitmix32 PRNG, fixed seed → stable across re-gens, no flicker) that de-correlates the partials so the texture reads as "alive" instead of "clinical". 0 = no jitter (deterministic); 100% = full ±100% per-partial swing. Sets a dirty flag → K-rate re-render. |
-| 60 | PLEV | 0..100% | 0..100% (LINEAR) | **0% (SILENT)** | **Procedural voice LEVEL**: the gain of the procedural wavetable voice. It is a NEW parallel voice added to the A+B sum BEFORE the common post-stage (FOLD/SATU/SVF/formant/comb), so it is "driven" by the same drive chain as the main voice, but with its OWN level (independent of MAIN). MAIN ducks only the A+B voice (and RMOD) — the proc texture keeps sounding even at MAIN = 0 (driven solely by PLEV). 0% (default) = the voice is muted → the stock sound is bit-identical (regression-safe). |
+| 55 | PLEV | % | 0..100% (LINEAR) | **0% (SILENT)** | **Editor-wavetable voice LEVEL**: the gain of the editor-wavetable voice. It is a NEW parallel voice added to the A+B sum BEFORE the common post-stage (FOLD/SATU/SVF/formant/comb), so it is "driven" by the same drive chain as the main voice, but with its OWN level (independent of MAIN). MAIN ducks only the A+B voice (and RMOD) — the editor texture keeps sounding even at MAIN = 0 (driven solely by PLEV). 0% (default) = the voice is muted → the stock sound is bit-identical (regression-safe). |
+| 56 | PMORPH | 0..15 | 0..100% (LINEAR) -> 0..15 frames | 50% (mid, frame 7.5) | **Editor-wavetable MORPH position**: the fractional frame index (0..15) of the 16-frame editor-wavetable bank (16 morph frames × 256 points, 16-bit; `osc_wte.h`). Frame 0 = first wave, frame 15 = last wave. The audio path crossfades the two adjacent frames (bilinear, like the Korg-bank morph). Runtime-only (no table regen). |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /

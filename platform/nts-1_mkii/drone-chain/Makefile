@@ -150,7 +150,9 @@ DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/../drone-osc/osc_param_display.h \
                $(PROJECT_ROOT)/../drone-osc/osc_constants.h \
                $(PROJECT_ROOT)/../drone-osc/osc_waves.h \
-               $(PROJECT_ROOT)/../drone-osc/osc_procedural.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_wte_doc.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_wte_render.h \
+               $(PROJECT_ROOT)/../drone-osc/osc_wte.h \
                $(PROJECT_ROOT)/../drone-osc/osc_saturator.h \
                $(PROJECT_ROOT)/../drone-osc/osc_svf.h \
                $(PROJECT_ROOT)/../drone-osc/osc_envelope.h \

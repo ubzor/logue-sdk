@@ -196,7 +196,7 @@ $(COBJS) : $(OBJDIR)/%.o : %.c Makefile config.mk
 # ARM C++ objects depend on the DSP headers: unit.cc (the only .cc in CXXSRC)
 # includes them, so any change must force a recompile. (The WASM build already
 # tracks them separately — see the WASMOBJDIR rule below.)
-$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk osc.h osc_params.h osc_constants.h osc_waves.h osc_envelope.h osc_saturator.h osc_random_walk.h osc_randomize.h osc_sub2.h osc_detune.h osc_param_apply.h osc_param_display.h osc_mix.h osc_lifecycle.h osc_lfo_sim.h osc_rnd.h osc_svf.h
+$(CXXOBJS) : $(OBJDIR)/%.o : %.cc Makefile config.mk osc.h osc_params.h osc_constants.h osc_waves.h osc_envelope.h osc_saturator.h osc_random_walk.h osc_randomize.h osc_sub2.h osc_detune.h osc_param_apply.h osc_param_display.h osc_mix.h osc_lifecycle.h osc_lfo_sim.h osc_rnd.h osc_svf.h osc_wte_doc.h osc_wte_render.h osc_wte.h
 	@echo Compiling $(<F)
 	@$(CXXC) -c $(CXXFLAGS) -I. $(INCDIR) $< -o $@
 

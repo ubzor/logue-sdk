@@ -60,7 +60,8 @@ inline float one_minus_expf(float x);
 #include "osc_detune.h"       // Detune: w0 detuning / factor (4th-order Taylor)
 #include "osc_lfo_sim.h"      // LfoSim: web-sim-only shape-LFO synthesizer
 #include "osc_constants.h"    // global-scope tuning constants (kSatuMax, kMix*, ...)
-#include "osc_procedural.h"   // ProcTable: procedural wavetable generator + lookup
+#include "osc_wte_doc.h"      // WTEDoc: /editor document model (16 waves)
+#include "osc_wte.h"          // WteTable: 16x256 editor wavetable (regen + lookup)
 
 // Fast float->float floor used for modular phasor wrap (x - fast_floorf(x)).
 // We must NOT call libm floorf(): it is emitted as a dynamic UND symbol that
@@ -293,26 +294,26 @@ public:
     // sidebands (the "FM complex but not screechy" recipe).
     FCUT2,          // 2nd-stage SVF dry/wet (LINEAR 0..100%, default 0% = 12 dB/oct)
     // ---- Procedural wavetable voice (PMORPH..PLEV) ----------------------------
-    // A single procedurally-generated wavetable bank (8 morph frames x 256
-    // points, 16-bit) synthesized from 16 additive partials (see
-    // osc_procedural.h). It is a NEW parallel voice added to the A+B sum
-    // BEFORE the common post-stage (FOLD/SATU/SVF/formant/comb), so it is
-    // "driven" by the same drive chain as the main voice. PLEV is its own
-    // level (independent of MAIN). PDECAY/PDENS/PSKEW/PORG set a dirty flag
-    // -> the tables re-render at K-rate in blockPrepass. At PLEV = 0
-    // (default) the voice is silent (bit-identical stock sound).
-    PMORPH,         // procedural morph position (LINEAR 0..100% -> 0..7 frames; default 50% = mid)
-    PDECAY,         // procedural spectral tilt (LINEAR 0..100% -> n^(-0.5..-4.0); default ~50%)
-    PDENS,          // procedural partial count (LINEAR 0..100% -> 2..16 partials; default 100% = 16)
-    PSKEW,          // procedural even/odd modulation (BIPOLAR -100%..+100%, 0 = symmetric; default 0)
-    PORG,           // procedural organic per-partial jitter (LINEAR 0..100%; default 0 = clinical)
+    // A 16 morph-frame x 256-point wavetable (16-bit) generated from the
+    // /editor document (16 WaveConfig recipes: 4 sources x 30 shapes + warp
+    // stacks + combine + modifiers; see osc_wte_doc.h / osc_wte_render.h /
+    // osc_wte.h). It is a NEW parallel voice added to the A+B sum BEFORE the
+    // common post-stage (FOLD/SATU/SVF/formant/comb), so it is "driven" by
+    // the same drive chain as the main voice. PLEV is its own level
+    // (independent of MAIN). The document is sent WHOLE (all 16 waves, all
+    // their parameters, one call) from the web simulator (Osc::wteSetDocument
+    // -> set_doc) and the 16x256 frames are re-rendered at K-rate in
+    // blockPrepass (wteRegen, never in the audio path). PMORPH is the
+    // fractional frame position 0..15. At PLEV = 0 (default) the voice is
+    // silent (bit-identical stock sound).
+    PMORPH,         // morph position (LINEAR 0..100% -> 0..15 frames; default 50% = frame 7.5)
     PLEV,           // procedural voice level (LINEAR 0..100%; default 0% = SILENT)
     NUM_PARAMS
   };
 
   // ---- Multiplexer constants -----------------------------------------------
   // Number of editable DSP parameters (RATE_AMT..PLEV).
-  static constexpr uint8_t kEditParamCount = 61; // RATE_AMT..PLEV
+  static constexpr uint8_t kEditParamCount = 57; // RATE_AMT..PLEV
   // The first editable enum value. The UI (header.c PARAM slot, 0..33) expects
   // this order (select_ index -> parameter), 34 parameters total:
   //   0 RATE (RATE_AMT, shared depth ceiling)  1 DET (DETUNE)
@@ -350,8 +351,8 @@ public:
   //   46 WMXS (WMIX_LFO_SHAPE: wave-mix LFO shape, 0=SIN/1=S/2=WALK)
   //   47 WMXG (WMIX_LFO_GAP: wave-mix WALK mean gap, log 1..300 s)
   // PARAM_SEL / PARAM_VAL are the two multiplexer knobs (not editable params).
-  // kEditParamCount = 61 = (PLEV - RATE_AMT + 1);
-  // select_ 0..60 -> RATE_AMT..PLEV.
+  // kEditParamCount = 57 = (PLEV - RATE_AMT + 1);
+  // select_ 0..56 -> RATE_AMT..PLEV.
   // kEditParamFirst = RATE_AMT so RATE leads the multiplexer (select_ 0).
   static constexpr uint8_t kEditParamFirst = RATE_AMT;
   // ---- Runtime DSP parameter struct (see osc_params.h) ---------------------
@@ -381,7 +382,7 @@ public:
   // identical waves is bit-identical to the old single-stream sound.
   // Order = select_ order (kEditParamFirst = RATE_AMT): index 0 = RATE (0 =
   // off), index 1 = DET (511 = 0 c). RATE leads the multiplexer.
-  // 61 values (kEditParamCount = 61, RATE_AMT..PLEV): indices 0..53
+  // 57 values (kEditParamCount = 57, RATE_AMT..PLEV): indices 0..53
   // keep the old values (13 (WAV1) = 0 bank A, 14 (WAV2) = 128 bank A, 35 (WLFR)
   // = 0, 36 (WLFD) = 1023); 37 (W2LFR) = 0 (stream-2 LFO off); 38 (W2LFD) =
   // 1023 (100%); 39 (WMIX) = 511 (50/50); 40 (WLFS) = 0 (Sin, default);
@@ -393,17 +394,17 @@ public:
   // 51 (FM_ST) = 0 (S OFF); 52 (FM_SA) = 1023 (100%, full tooth size — with
   // FMST = 0 the offset is 0 anyway); 53 (FM_AMT) = 1023 (100% — the global FM
   // MOD master is fully open, so C/S behave exactly as set, bit-identical);
-  // 54 (FCUT2) = 0 (0% wet — the 2nd SVF stage is transparent, a single 12 dB/oct).
-  // 55 (PMORPH) = 511 (50% -> mid morph, frame 3.5); 56 (PDECAY) = 511 (~50%
-  // -> n^-1.5 tilt); 57 (PDENS) = 1023 (100% -> 16 partials, the LUT's band);
-  // 58 (PSKEW) = 511 (0 = symmetric); 59 (PORG) = 0 (clinical, no jitter);
-  // 60 (PLEV) = 0 (SILENT — the procedural voice is muted at the factory
-  // preset, so the stock sound is bit-identical until PLEV is raised).
+  // 54 (FCUT2) = 0 (0% wet — the 2nd SVF stage is transparent, a single 12 dB/oct);
+  // 55 (PMORPH) = 511 (50% -> frame 7.5, mid table); 56 (PLEV) = 0 (SILENT —
+  // the editor-wavetable voice is muted at the factory preset, so the stock
+  // sound is bit-identical until PLEV is raised). The four old shape params
+  // (PDECAY/PDENS/PSKEW/PORG) were REMOVED: the wavetable is now the full
+  // /editor mechanism (16 waves from sources/warps, see osc_wte*.h).
   // At the factory preset the wave-mix LFO is OFF (rate = 0 Hz), so the
   // crossfade stays at the static WMIX value — bit-identical to the pre-LFO
   // sound; and FM modulator C is OFF (rate = 0), so the sum is bit-identical
   // to the pre-FM-C sound.
-  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0, 511, 511, 1023, 511, 0, 0};
+  int32_t edit_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0, 511, 0};
 
   // Last STABLE state (RndM = ORBI reference): a raw-value snapshot of the
   // sound that every ORBI re-roll develops from. It is set by init() (factory
@@ -414,7 +415,7 @@ public:
   // PARAM/VALUE edits do NOT affect it (a manual tweak is not a "stable
   // state" until an All/Part re-roll or reset confirms it). Keep the default
   // list in sync with edit_value_ above.
-  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0, 511, 511, 1023, 511, 0, 0};
+  int32_t stable_value_[kEditParamCount] = {0, 511, 511, 511, 511, 511, 511, 511, 511, 410, 341, 511, 0, 0, 128, 1023, 0, 0, 0, 921, 0, 0, 0, 511, 511, 0, 0, 0, 0, 0, 0, 511, 0, 0, 307, 0, 1023, 0, 1023, 511, 0, 511, 0, 511, 0, 1023, 0, 511, 0, 0, 0, 0, 1023, 1023, 0, 511, 0};
 
   // Currently selected parameter (0..kEditParamCount-1), i.e.
   // edit_value_[select_] is what PARAM_VAL edits. 0 = RATE (default, the
@@ -708,27 +709,43 @@ public:
   float      sub_breath_gain = 1.f;  // one-pole relaxed SUBB breath gain (1.0 = static)
   float      fm_c_ph = 0.f;   // FM modulator C phasor (0..1): independent LFO-style oscillator that phase-FMs the (A+B) sum
   float      fm_s_ph = 0.f;   // FM modulator S phasor (0..1): carrier-locked "static teeth" oscillator (N teeth per A cycle) that phase-FMs the (A+B) sum
-  // ---- Procedural wavetable voice state ------------------------------------
-  // proc_ holds the 8x256 int16 frame bank (4 KB) plus the cached generation
-  // params and the dirty flag. proc_ph is the SHARED phasor (0..1) that reads
-  // the table; it advances at the cluster's ENV-WEIGHTED ANCHOR rate
-  // (sub_anchor_w0, the same pitch that drives the shared sub bass) so the
-  // procedural voice is one continuous texture under/over the whole cluster,
-  // not N per-voice copies. procRegen() re-renders the frames at K-rate when
-  // a shape param (PDECAY/PDENS/PSKEW/PORG) sets the dirty flag (called from
-  // blockPrepass, never in the audio path).
-  ProcTable  proc_;
-  float      proc_ph = 0.f;   // shared procedural phasor (0..1), anchor-rate
-  float      proc_mix = 0.f;  // procedural voice's share of `mix` (0..1 of mix magnitude); isolated so MAIN only ducks A+B, not the proc texture
-  // Re-render the procedural frames from the current params_ (K-rate).
-  void procRegen()
+  // ---- Editor-wavetable voice state (WTE: 16 waves from the /editor doc) ----
+  // wte_ holds the 16x256 int16 frame bank (8 KB) — the FULL /editor
+  // mechanism: each of the 16 morph frames is rendered from a WaveConfig
+  // recipe (4 sources x 30 shapes + warp stacks + combine + modifiers) held
+  // in the WteTable's cached WTEDoc (see osc_wte_doc.h / osc_wte_render.h).
+  // proc_ph is the SHARED phasor (0..1) that reads the table; it advances at
+  // the cluster's ENV-WEIGHTED ANCHOR rate (sub_anchor_w0, the same pitch
+  // that drives the shared sub bass) so the editor voice is one continuous
+  // texture under/over the whole cluster, not N per-voice copies. The
+  // document is set WHOLE by the web simulator (wteSetDocument, one call with
+  // all 16 waves' parameters) and the frames re-render at K-rate when the
+  // dirty flag is set (wteRegen, called from blockPrepass, never in the
+  // audio path). PMORPH (0..15) is the fractional frame position; PLEV is
+  // the voice's level.
+  WteTable   wte_;
+  float      proc_ph = 0.f;   // shared phasor (0..1), anchor-rate (kept the name: it drives the editor wavetable voice)
+  float      proc_mix = 0.f;  // editor voice's share of `mix` (0..1 of mix magnitude); isolated so MAIN only ducks A+B, not the editor texture
+  // Re-render the editor-wavetable frames from the cached document (K-rate,
+  // dirty flag only — a block with no new document is a single branch check).
+  void wteRegen()
   {
-    proc_.decay = params_.proc_decay;
-    proc_.dens  = params_.proc_dens;
-    proc_.skew  = params_.proc_skew;
-    proc_.org   = params_.proc_org;
-    if (proc_.dirty)
-      proc_.regen();
+    if (wte_.dirty)
+      wte_.regen();
+  }
+  // ---- Web-sim channel: store a WHOLE /editor document (all 16 waves, all
+  // their parameters, one call). Main-thread (UI) safe: only copies the doc
+  // and raises the dirty flag; the actual 16x256 re-render happens at K-rate
+  // in blockPrepass (wteRegen) on the audio thread. The main-thread and
+  // worklet-thread processors are SEPARATE COPIES (see wasm.cc setEditParam
+  // comment) — the web sim calls this on the shared main-thread processor,
+  // and the worklet sees the new doc on its next block (same 32-bit/word
+  // visibility argument as the edit-parameter channel; a multi-word copy is a
+  // benign data race at worst — the worst case is one 2.9 ms block of the old
+  // table, inaudible).
+  void wteSetDocument(const WTEDoc &d)
+  {
+    wte_.set_doc(d);
   }
   Voice voice_[kVoiceCount];
   // Shared K-rate static-detune FACTORS (the DETU knob, applied per-voice in

@@ -468,6 +468,86 @@ extern "C" void rndTrigger()
   processor.simRndRequest(static_cast<uint8_t>(processor.getRndMode()));
 }
 
+// ---- Editor-wavetable document (the 16 WaveConfig recipes) -------------------
+// Store a WHOLE /editor document into the OSC's 16x256 wavetable in ONE call:
+// all 16 waves, all their sources/warps/combine, ALL their parameters. This is
+// the web-sim channel for the editor (moved to the main page): the UI sends
+// the complete document after every (debounced) edit; the OSC caches it and
+// re-renders the 16 frames at K-rate in blockPrepass (never in the audio
+// path). The main-thread and worklet-thread processors are SEPARATE COPIES
+// (shared linear memory, SHARED_MEMORY=1): the write is visible to the
+// worklet on its next block (a benign multi-word data race at worst -- one
+// 2.9 ms block of the old table, inaudible; same argument as setEditParam).
+//
+// Flat array layout (row-major, one call):
+//   per wave (16 x):
+//     combine (1) | invert (1) | mirror (1)
+//     per source slot (4 x):
+//       enabled (1) | type (1) | harmonic (1) | phase (1) | gain (1) | bias (1)
+//       psr_count (1)
+//       per warp (psr_count x 8): type (1) | enabled (1) | p0..p8 (9)
+//     out_count (1)
+//     per warp (out_count x 8): type (1) | enabled (1) | p0..p8 (9)
+// Total: 16 * (3 + 4 * (7 + 8 * 11 + 1) + 8 * 11) = 16 * 390 = 6240 floats.
+extern "C" void setWteDocument(std::vector<float> doc)
+{
+  const float *ptr = doc.data();
+  int count = static_cast<int>(doc.size());
+  if (ptr == nullptr || count <= 0) return;
+  const float kMax = 16 * (3 + 4 * (7 + 8 * 11 + 1) + 8 * 11); // 6240
+  if (count > kMax) count = kMax;
+  static WTEDoc d;
+  wte_default_doc(&d);
+  uint32_t i = 0;
+  for (uint32_t f = 0; f < WTE_WAVE_COUNT; f++)
+  {
+    WTEWaveDoc *w = &d.waves[f];
+    if (i + 3 > (uint32_t)count) break;
+    w->combine = (uint8_t)(ptr[i++] + 0.5f);
+    w->invert  = (uint8_t)(ptr[i++] + 0.5f);
+    w->mirror  = (uint8_t)(ptr[i++] + 0.5f);
+    for (uint32_t s = 0; s < WTE_SOURCES_PER_WAVE; s++)
+    {
+      WTESourceDoc *src = &w->sources[s];
+      if (i + 7 > (uint32_t)count) { src->enabled = 0; break; }
+      src->enabled  = (uint8_t)(ptr[i++] + 0.5f);
+      src->type     = (uint8_t)(ptr[i++] + 0.5f);
+      src->harmonic = ptr[i++];
+      src->phase    = ptr[i++];
+      src->gain     = ptr[i++];
+      src->bias     = ptr[i++];
+      uint32_t pc = (uint32_t)(ptr[i++] + 0.5f);
+      if (pc > WTE_MAX_WARPS_PER_STACK) pc = WTE_MAX_WARPS_PER_STACK;
+      w->psr_cnt[s] = (uint8_t)pc;
+      for (uint32_t k = 0; k < pc; k++)
+      {
+        if (i + 11 > (uint32_t)count) { w->psr_cnt[s] = (uint8_t)k; break; }
+        WTEWarpDoc *wr = &w->psr[s][k];
+        wr->type        = (uint8_t)(ptr[i++] + 0.5f);
+        wr->enabled     = (uint8_t)(ptr[i++] + 0.5f);
+        wr->param_count = WTE_MAX_WARP_PARAMS;
+        for (uint32_t p = 0; p < WTE_MAX_WARP_PARAMS; p++)
+          wr->params[p] = ptr[i++];
+      }
+    }
+    if (i + 1 > (uint32_t)count) break;
+    uint32_t oc = (uint32_t)(ptr[i++] + 0.5f);
+    if (oc > WTE_MAX_WARPS_PER_STACK) oc = WTE_MAX_WARPS_PER_STACK;
+    w->out_cnt = (uint8_t)oc;
+    for (uint32_t k = 0; k < oc; k++)
+    {
+      if (i + 11 > (uint32_t)count) { w->out_cnt = (uint8_t)k; break; }
+      WTEWarpDoc *wr = &w->out[k];
+      wr->type        = (uint8_t)(ptr[i++] + 0.5f);
+      wr->enabled     = (uint8_t)(ptr[i++] + 0.5f);
+      wr->param_count = WTE_MAX_WARP_PARAMS;
+      for (uint32_t p = 0; p < WTE_MAX_WARP_PARAMS; p++)
+        wr->params[p] = ptr[i++];
+    }
+  }
+  processor.wteSetDocument(d);
+}
+
 extern "C" int getRndMode()
 {
   return static_cast<int>(processor.getRndMode());
@@ -507,6 +587,7 @@ EMSCRIPTEN_BINDINGS(my_module)
       .field("name", &AudioWorkletParameter::name);
 
   register_vector<AudioWorkletParameter>("ParameterList");
+  register_vector<float>("FloatArray");
 
   function("getValidParameters", &getValidParameters);
 
@@ -533,6 +614,7 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("setRndRun", &setRndRun);
   emscripten::function("stableSync", &stableSync);
   emscripten::function("getMorphActive", &getMorphActive);
+  emscripten::function("setWteDocument", &setWteDocument);
 
   // FX parameters (MOD / DEL / REV x TIME / DEPTH).
   emscripten::function("setFxParam", &setFxParam);

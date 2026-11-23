@@ -44,7 +44,7 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
       "W2FS", "W2FG",
       "WMXR", "WMXD", "WMXS", "WMXG",
       "FMCR", "FMCW", "FMCD", "FMST", "FMSA", "FMAM", "FCUT2",
-      "PMORPH", "PDECAY", "PDENS", "PSKEW", "PORG", "PLEV"};
+      "PMORPH", "PLEV"};
   const bool is_param_sel = (id == PARAM_SEL || id == PARAM_SEL + 2U);
   const bool is_param_val = (id == PARAM_VAL || id == PARAM_VAL + 2U);
   if (is_param_sel)
@@ -383,11 +383,16 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     v = (int)((raw - kRawMid) * (int)kDetuneMaxCents / kRawMid); // -kDetuneMaxCents..+kDetuneMaxCents cents (multiply before divide)
   else if (k == SATU)
     v = (int)(param_10bit_to_f32(raw) * (kSatuMax * 100.f)); // 0..300 (per-voice drive)
+  else if (k == PMORPH)
+    // PMORPH: frame position 0..15 (the 16 editor frames). Show the frame
+    // index (raw/1023 * 15, rounded) as a bare number "N".
+    v = (int)(param_10bit_to_f32(raw) * 15.f + 0.5f);
   else
     v = (int)((raw * 100) / kRawMax);
 
-  // FLD formats as 0..100% (the default branch). SATU shows a bare 0..300 number.
-  const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE);
+  // FLD formats as 0..100% (the default branch). SATU shows a bare 0..300
+  // number; PMORPH shows a bare frame index 0..15.
+  const bool percent = (k != WAV1 && k != WAV2 && k != SATU && k != DETUNE && k != PMORPH);
   int n = 0;
   if (v < 0)
     buf[n++] = '-';
