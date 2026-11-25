@@ -12,35 +12,32 @@
 		savePreset, deletePreset,
 	} from '$lib/audio/stores';
 	import {
-		PARAM_GROUPS, EDIT_PARAM_NAMES, WAVE_BANKS, LFO_SHAPES, FM_MOD_WAVES,
+		PARAM_GROUPS, EDIT_PARAM_NAMES, LFO_SHAPES, FM_MOD_WAVES,
 		formatParamValue,
 	} from '$lib/audio/core';
 
-	// Radio-индексы edit-параметров (1:1 legacy).
-	const RADIO_IDX = new Set([13, 14, 40, 42, 46, 49]);
+	// Radio-индексы edit-параметров. (The old 13/14 (WaveBank/WaveBank2) and
+	// 42/46 (LfoShape2/3) groups are gone with the stock banks / stream 2 —
+	// the WTE wavetable is the sole source; its morph LFO shape is the single
+	// live group, 40.)
+	const RADIO_IDX = new Set([40, 49]);
 	// edit-idx -> radio group name.
 	const IDX_TO_GROUP = {
-		13: 'WaveBank', 14: 'WaveBank2',
-		40: 'LfoShape1', 42: 'LfoShape2', 46: 'LfoShape3',
+		40: 'LfoShape1',
 		49: 'FmModWave',
 	};
 	// Radio-группа -> edit-индекс (для setParam).
 	const GROUP_TO_IDX = {
-		WaveBank: 13, WaveBank2: 14,
-		LfoShape1: 40, LfoShape2: 42, LfoShape3: 46,
+		LfoShape1: 40,
 		FmModWave: 49,
 	};
 
-	// Radio-группа -> список подписей кнопок (1:1 legacy createEditableParam):
-	// WAVE / WAVE 2 — банки A..F (WAVE_BANKS), Wave LFO Shape 1/2/3 — Sin/S/Walk
-	// (LFO_SHAPES), FM Mod Wave — SIN/TRI/SAW/SQR/NOISE (FM_MOD_WAVES).
+	// Radio-группа -> список подписей кнопок:
+	// Wave LFO Shape (the WTE-morph LFO) — Sin/S/Walk (LFO_SHAPES),
+	// FM Mod Wave — SIN/TRI/SAW/SQR/NOISE (FM_MOD_WAVES).
 	// Ключи — те же, что в IDX_TO_GROUP.
 	const RADIO_OPTS = {
-		WaveBank: WAVE_BANKS,
-		WaveBank2: WAVE_BANKS,
 		LfoShape1: LFO_SHAPES.map((s) => s.label),
-		LfoShape2: LFO_SHAPES.map((s) => s.label),
-		LfoShape3: LFO_SHAPES.map((s) => s.label),
 		FmModWave: FM_MOD_WAVES.map((s) => s.label),
 	};
 	const radioOpts = (group) => RADIO_OPTS[group] ?? [];

@@ -14,11 +14,13 @@
  *  parameters at once), the 16x256 int16 frame bank is re-rendered at K-rate
  *  in blockPrepass (never in the audio path).
  *
- *  The audio path reads the table with the SAME phasor and lookup the old
- *  procedural voice used (see osc_mix.h): a shared proc_ph phasor at the
- *  anchor rate, PMORPH as the fractional frame position (now 0..15 instead of
- *  0..7), bilinear crossfade of the two adjacent frames + two adjacent phase
- *  points. PLEV is the voice's level (independent of MAIN).
+ *  The audio path reads the table from the A+B cluster's OWN per-voice
+ *  phasors at a SHARED morph position (see the "WTE wavetable morph" /
+ *  "Wavetable samples (WTE)" blocks in osc_mix.h): wte_morph = 7.5 + lfo *
+ *  7.5, driven by the internal wave-LFO 1 (the Wave LFO Rate/Depth/Shape
+ *  edit params), bilinear crossfade of the two adjacent frames + two
+ *  adjacent phase points. The table IS the main voice: its level is MAIN
+ *  and the old PMORPH/PLEV edit params are no-ops (superseded).
  *
  *  MEMORY
  *  ------

@@ -22,8 +22,9 @@ import type { AudioController } from './core';
 const initialState = () => ({
   params: Array.from(DEFAULT_RAW),
   radios: {
-    WaveBank: 0, WaveBank2: 0,
-    LfoShape1: 0, LfoShape2: 0, LfoShape3: 0,
+    // (WaveBank/WaveBank2 and LfoShape2/LfoShape3 removed with the stock
+    // banks / stream 2 — see RadioGroupKey in bus.ts.)
+    LfoShape1: 0,
     FmModWave: 0, HwFltType: 0, Octave: 2,
   } as Record<RadioGroupKey, number>,
   volume: 1,

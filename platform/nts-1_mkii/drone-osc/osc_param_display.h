@@ -172,15 +172,15 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
     return buf;
   }
 
-  // WAVE_LFO_RATE (internal wave-LFO frequency): show Hz on the same LOG
-  // scale the apply path uses (raw 0 = 0 Hz / OFF; else 10^(3*raw/1023 - 3),
-  // 0.001..1 Hz across 3 decades). raw 0 is displayed "0 H" (LFO off); raw
+  // WAVE_LFO_RATE (internal wave-LFO frequency = the WTE editor-wavetable
+  // morph LFO): show Hz on the same LOG scale the apply path uses (raw 0 =
+  // 0 Hz / OFF; else 10^(3*raw/1023 - 3), 0.001..1 Hz across 3 decades). raw
+  // 0 is displayed "0 H" (LFO off, the table is static at frame 7.5); raw
   // 1023 is "1 H" (the max); below 0.1 Hz it is shown as millihertz "0.NNN H"
   // (3 fixed frac digits, e.g. 0.01 Hz -> "0.010 H"); at/above 0.1 Hz it is
   // shown as "0.N H" (1 fixed frac digit, e.g. 0.1 Hz -> "0.1 H"). buf[8] is
-  // large enough ("0.999H\0" = 6 chars).
-  // WAVE2_LFO_RATE (stream-2 wave-LFO frequency) shares the EXACT same LOG Hz
-  // formatting as WAVE_LFO_RATE (stream 1) — the two LFOs use identical scales.
+  // large enough ("0.999H\0" = 6 chars). (The WAVE2_LFO_RATE / WMIX_LFO_RATE
+  // no-ops share this formatting for the legacy multiplexer display.)
   if (k == WAVE_LFO_RATE || k == WAVE2_LFO_RATE || k == WMIX_LFO_RATE)
   {
     if (raw == 0)
@@ -362,9 +362,11 @@ inline const char *Osc::getParameterStrValue(uint8_t id, int32_t value) const
   int v;
   if (k == WAV1 || k == WAV2)
   {
-    // WAVE (WAV1) / WAVE 2 (WAV2) each show their stream's bank letter (A..F).
-    // raw 0..1023 -> bank 0..5 (WAV2 was deprecated when A/B shared one wave;
-    // it is now the 2D-morph stream-2 bank, see WAVE_MIX).
+    // (LEGACY, no-op params) WAVE (WAV1) / WAVE 2 (WAV2) each showed their
+    // stream's bank letter (A..F); the stock banks are gone (superseded by
+    // the WTE wavetable, see osc_param_apply.h), but the legacy PARAM/VALUE
+    // multiplexer may still address them, so the display keeps the old
+    // bank-letter format.
     int bank = (int)(param_10bit_to_f32(raw) * 5.999f);
     if (bank < 0) bank = 0;
     if (bank > 5) bank = 5;

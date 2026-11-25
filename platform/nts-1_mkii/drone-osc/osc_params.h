@@ -54,23 +54,19 @@ struct OscParamsData
   float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
   float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
   float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
-  float wave_pos;     // 0.f .. 5.f, edit WAVE: bank index (A=0..F=5)
-                      // The LFO drives the intra-bank morph position centered
-                      // on the bank (see WaveTable::resolve_wave / bank_center).
-  float wave_pos2;    // 0.f .. 5.f, edit WAV2: second wave stream's bank index
-                      // (A=0..F=5). Wave-LFO 2 (lfo_sim2_) drives the intra-bank
-                      // morph position centered on this bank, INDEPENDENTLY of
-                      // stream 1. The audio path crossfades stream 1 and stream
-                      // 2 by wave_mix (see WaveTable::resolve_wave / the
-                      // "2D wave crossfade" block in osc_mix.h).
-  float wave_mix;     // -1.f .. +1.f, edit WAVE_MIX: the wave 1 <-> wave 2
-                      // crossfade weight. The audio path computes
-                      // x = 0.5 * (1 + wave_mix): x = 0 (mix = -1) -> stream 1
-                      // only, x = 0.5 (mix = 0) -> equal 50/50 blend, x = 1
-                      // (mix = +1) -> stream 2 only. default 0 = 50/50.
+  float wave_pos;     // DEAD (superseded by the WTE wavetable): the old WAVE
+                      // bank index (A=0..F=5). WAV1 is a no-op now (see the
+                      // WAVE_LFO_RATE comment in osc_param_apply.h / the
+                      // "WTE wavetable morph" block in osc_mix.h).
+  float wave_pos2;    // DEAD (superseded by the WTE wavetable): the old WAV2
+                      // stream-2 bank index. WAV2 is a no-op now.
+  float wave_mix;     // DEAD (superseded by the WTE wavetable): the old
+                      // WAVE_MIX stream 1 <-> stream 2 crossfade weight.
+                      // WAVE_MIX is a no-op now (stream 2 is gone).
   // ---- MAIN: level of the "main" voice (the A+B mixed output) --------------
-  // The "main" voice is the result of mixing oscillators A and B (WAV1 + WAV2)
-  // and running them through the folder/saturator/SVF chain — i.e. the
+  // The "main" voice is the result of mixing oscillators A and B (both read
+  // the WTE editor wavetable, see osc_mix.h) and running them through the
+  // folder/saturator/SVF chain — i.e. the
   // `y_filt` branch of the final mix (NOT the sub-octave, sub-2, or chord
   // voices, which are mixed in parallel and bypass the soft-clip). At the
   // default (A+B) this voice usually dominates the drone, so MAIN gives it its
@@ -193,21 +189,16 @@ struct OscParamsData
   // used, so a single note = constant gain, no flutter).
   float subb_depth;   // 0.f .. 1.f, edit SUBB (sub-bass breath depth)
 
-  // ---- Editor-wavetable voice (PMORPH/PLEV) ----------------------------------
-  // A 16 morph-frame x 256-point wavetable (16-bit) generated from the
-  // /editor document (see osc_wte_doc.h / osc_wte_render.h / osc_wte.h). The
-  // 16 frames are re-rendered at K-rate in blockPrepass when the web sim
-  // sends a new document (Osc::wteSetDocument -> wte_.set_doc, dirty flag).
-  // It is a NEW parallel voice: its output is added to the A+B sum BEFORE
-  // the common post-stage (FOLD/SATU/SVF/formant/comb), so it is "driven" by
-  // the same drive chain as the main voice. PLEV is its own level
-  // (independent of MAIN). PMORPH and PLEV are runtime-only (no regen). At
-  // PLEV = 0 (default) the voice is silent and the stock sound is
-  // bit-identical (regression-safe). The four old shape params (PDECAY/
-  // PDENS/PSKEW/PORG) were removed: the table shape is now fully described by
-  // the editor document.
-  float proc_morph;   // 0.f .. 15.f, edit PMORPH: morph position across the 16 frames (0..15)
-  float proc_level;   // 0.f .. 1.f, edit PLEV: editor-wavetable voice level (0 = silent, default)
+  // ---- Editor-wavetable voice (PMORPH/PLEV) — SUPERSEDED (dead fields) ------
+  // The WTE table (16 morph frames x 256 points, 16-bit; see osc_wte_doc.h /
+  // osc_wte_render.h / osc_wte.h) is NO LONGER a separate parallel voice: the
+  // A+B voices read it DIRECTLY (see the "Wavetable samples (WTE)" block in
+  // osc_mix.h). Its morph position is the Wave LFO 1 (lfo_sim_) and its level
+  // is MAIN, so the old PMORPH (frame position) and PLEV (voice level) edit
+  // params are no-ops (superseded). These fields are dead (kept for the
+  // struct layout); they are never read by the audio path any more.
+  float proc_morph;   // DEAD (superseded): the old PMORPH frame position (0..15)
+  float proc_level;   // DEAD (superseded): the old PLEV editor-voice level (0..1)
 
   // (GLIDE removed: no glide_raw field)
 
@@ -229,11 +220,9 @@ struct OscParamsData
     sub2_level = 0.4f;  // default: ~40% f/4 sub (a clearly audible low-end anchor)
     fold_depth = 0.f;   // default: wavefolder off
     asym = 0.f;         // default: symmetric saturator
-    wave_pos = 0.f;     // default: bank A (LFO sweeps within bank A)
-    wave_pos2 = 0.f;    // default: stream-2 bank A (SAME as stream 1 at factory)
-    wave_mix = 0.f;     // default: 50/50 crossfade; with stream 2 = bank A and
-                        // its LFO off, the blend of two identical waves is
-                        // bit-identical to the old single-stream sound
+    wave_pos = 0.f;     // vestigial (no-op, superseded by the WTE wavetable)
+    wave_pos2 = 0.f;    // vestigial (no-op, superseded by the WTE wavetable)
+    wave_mix = 0.f;     // vestigial (no-op, superseded by the WTE wavetable)
     main_level = 1.0f;  // default: main (A+B) voice at full level (stock sound)
     rw_wav = 0.f;       // default: walk off for wavetable morph
     rw_drv = 0.f;       // default: walk off for drive
@@ -281,14 +270,12 @@ struct OscParamsData
       comb_fb      = 0.f;   // default: comb resonator off
       subb_depth   = 0.3f;  // default: ~30% (d ~= 0.18) — the shared sub bass gently
                             // follows the breath-focus note (see the SUBB comment)
-      // ---- Editor-wavetable voice defaults (SILENT, regression-safe) --------
-      // PLEV = 0 keeps the voice muted at the factory preset, so the stock
-      // sound is bit-identical until the user raises PLEV. PMORPH sits at the
-      // table midpoint (frame 7.5 of 16): the first document the web sim
-      // sends is rendered into wte_ and the voice reads from it the moment
-      // PLEV is raised.
-      proc_morph   = 7.5f;   // default: mid morph (between frames 7 and 8 of 16)
-      proc_level   = 0.f;    // default: SILENT (the stock sound is unchanged)
+      // ---- Editor-wavetable defaults (vestigial no-ops) ----------------------
+      // The WTE table IS the main voice now (morph = Wave LFO 1, level =
+      // MAIN); the old PMORPH/PLEV edit params are no-ops. The values are
+      // vestigial (never read by the audio path).
+      proc_morph   = 7.5f;   // vestigial (the live morph = Wave LFO 1)
+      proc_level   = 1.f;    // vestigial (the live level = MAIN)
   }
 
   OscParamsData() { reset(); }

@@ -64,22 +64,18 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
 
   const bool rw_active = p.rw_amount > 0.f;
 
-  // Wavetable (2D morph): the WAVE knob selects a BANK for STREAM 1 (0..5, A..F)
-  // and the WAV2 knob selects a BANK for STREAM 2. Each stream's internal LFO
-  // (lfo_sim_ / lfo_sim2_) drives the intra-bank morph position centered on its
-  // bank (see WaveTable::resolve_wave / bank_center): at LFO=0 the position is
-  // the bank center, and at LFO=+/-100% it sweeps from the first to the last
-  // table of the bank, covering every wave. The two LFOs run INDEPENDENTLY
-  // (independent phases), so with two incommensurate frequencies the (stream 1,
-  // stream 2) trajectory in the 2D texture space never repeats. The FINAL wave
-  // fed to the A/B oscillators is a CROSSFADE of the two resolved streams
-  // (weight x from WAVE_MIX, computed below at the LFO block); the A/B DETUNE
-  // (det_f_a_/det_f_b_) still provides the width. The bank boundary is hard:
-  // each stream's morph never crosses into its next bank.
-  uint32_t wave_bank = (uint32_t)p.wave_pos;
-  if (wave_bank > 5U) wave_bank = 5U;
-  uint32_t wave_bank2 = (uint32_t)p.wave_pos2;
-  if (wave_bank2 > 5U) wave_bank2 = 5U;
+  // Wavetable (WTE): the A+B cluster reads the 16x256 EDITOR wavetable
+  // (wte_.frames_, osc_wte.h — rendered from the /editor document sent by the
+  // web simulator, or from the 16-wave default on hardware) as its SOLE
+  // wavetable source. The old stock banks (WAV1/WAV2 A..F, the WAVE_MIX
+  // stream-2 crossfade) are gone: WAV1/WAV2/WMIX/W2*/WMIX* edit params are
+  // no-ops now (see osc_param_apply.h). The morph position across the 16
+  // frames is driven by the internal wave-LFO 1 (lfo_sim_ — the Wave LFO
+  // Rate/Depth/Shape edit params), centered on the table middle (frame 7.5,
+  // the former PMORPH default): at depth = 0 the position is static at 7.5,
+  // and at depth = +/-100% it sweeps the full 0..15 range. PMORPH/PLEV are
+  // no-ops (superseded: the table is the main voice, level = MAIN, morph =
+  // the LFO). The A/B DETUNE (det_f_a_/det_f_b_) still provides the width.
   if (rw_active)
   {
     // Recompute each stream's interval / tracking from its own SPDx/SMTx
@@ -121,7 +117,8 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
   //   Density (rw_[2]) -> drive + wavefolder depth
   // The scaled values must be recomputed every sample (not cached per-block)
   // because rw_[i].advance() moves dev_a/b on every sample.
-  // (RW_WAV is now handled by the LFO intra-bank sweep — see lfo_morph below.)
+  // (RW_WAV is now handled by the wave-LFO WTE-table sweep — see wte_morph
+  //  at the "WTE wavetable morph" block below.)
   const bool rw_drv_active = rw_active && p.rw_drv > 0.f;
   const bool rw_fld_active = rw_active && p.rw_fld > 0.f;
   // ---- Phase-FM (FM1/FM2 = STATIC index + RFM walk): per-block cache ----
@@ -210,9 +207,9 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       //  voice's own w0 + the shared det_f_a_/det_f_b_ factors + these walks.)
     }
     // Timbre stream (rw_[1]): the wavetable-morph target (RW_WAV) is now
-    // handled by the LFO (intra-bank sweep). The rw_[1] stream still drives
-    // the SVF cutoff (RWFC) — see the FCUT modulation below. The old
-    // rw_dev_a_tables / rw_dev_b_tables are removed.
+    // handled by the wave-LFO (the WTE-table sweep, see wte_morph below). The
+    // rw_[1] stream still drives the SVF cutoff (RWFC) — see the FCUT
+    // modulation below. The old rw_dev_a_tables / rw_dev_b_tables are removed.
     // Density stream (rw_[2]): saturator drive + wavefolder depth.
     const float rw_dev_drive    = rw_drv_active ? rw_[2].dev_a * rw_amt * kRwDriveScale : 0.f;
     // Multiplicative: eff_fold = p.fold_depth * (1 + dev_b * p.rw_fld * rw_amt).
@@ -344,49 +341,23 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         voice_[vi].breath_dev = 1.f;
     }
 
-    // ---- 2D wave morph: two independent internal LFOs + crossfade -------------
-    // The wavetable intra-bank morph is driven by TWO INTERNAL LFOs
-    // (lfo_sim_ for stream 1, lfo_sim2_ for stream 2, see osc_lfo_sim.h), NOT
-    // the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are
-    // NO-OPs -- setShapeLfo() is a stub). Each LFO's frequency / depth are set
-    // by its own edit parameters (WAVE_LFO_RATE / WAVE_LFO_DEPTH for stream 1,
-    // WAVE2_LFO_RATE / WAVE2_LFO_DEPTH for stream 2, via apply_edit_param). All
-    // voices share both LFOs. Each LFO value (sin * morph_amt) is in [-1, +1];
-    // at morph_amt=0 it is 0 (that stream's wave stays at its bank center,
-    // static). The two LFOs advance their OWN phases, so they are never
-    // phase-locked.
+    // ---- WTE wavetable morph (the internal wave-LFO 1) -------------------------
+    // The A+B voices read the EDITOR wavetable (wte_.frames_, 16x256 — see the
+    // file-header WTE comment and osc_wte.h). The morph position across the 16
+    // frames is driven by the INTERNAL wave-LFO 1 (lfo_sim_, see osc_lfo_sim.h;
+    // the hardware's OSC-button RATE/SHAPE knobs remain NO-OPs -- setShapeLfo()
+    // is a stub). The LFO's frequency / depth / shape are set by the Wave LFO
+    // Rate / Depth / Shape edit parameters (apply_edit_param, lfo_sim_). All
+    // voices share the LFO. Its value (sin * morph_amt) is in [-1, +1]; at
+    // depth=0 it is 0 (the table is static at the middle). The position is
+    // CENTERED on the table middle (frame 7.5, the former PMORPH default --
+    // keeps the initial document render click-free) and spans the FULL table:
+    // at depth = +/-100% the morph sweeps 0..15 (all 16 frames).
+    // Stream 2 (the old WAV2 bank + WAVE2_LFO + WAVE_MIX crossfade + wave-mix
+    // LFO, lfo_sim2_ / lfo_mix_) is gone with the stock banks -- those edit
+    // params are no-ops and those LFOs no longer process.
     const float lfo_ = lfo_sim_.process();
-    const float lfo2_ = lfo_sim2_.process();
-    const float lfo_mixv = lfo_mix_.process(); // wave-mix balance LFO (see below)
-    // Per-stream intra-bank LFO morph: each LFO drives the position within its
-    // selected bank, centered on the bank (see WaveTable::resolve_wave /
-    // bank_center). The base position is the bank center; the LFO adds +/-half
-    // the (size-1) span, so at 100% depth the morph sweeps from the first to
-    // the last table of the bank (clamped to [0, bank_size-1] inside
-    // resolve_wave).
-    const float lfo_morph =
-        WaveTable::bank_center(wave_bank) + lfo_ * WaveTable::lfo_morph_depth(wave_bank);
-    const float lfo_morph2 =
-        WaveTable::bank_center(wave_bank2) + lfo2_ * WaveTable::lfo_morph_depth(wave_bank2);
-    // Crossfade weight between stream 1 and stream 2. The STATIC WAVE_MIX knob
-    // (params_.wave_mix, -1..+1) is the CENTER; the wave-mix LFO (lfo_mix_,
-    // the THIRD internal ShapeLfoSim, see osc_lfo_sim.h) is the SWING around
-    // it: lfo_mixv = (shape * depth) in [-1, +1], driven by the WMIX_LFO_RATE
-    // / WMIX_LFO_DEPTH / WMIX_LFO_SHAPE / WMIX_LFO_GAP edit parameters.
-    // mix_eff = clamp(WMIX + LFO, -1, +1); x = 0.5*(1+mix_eff):
-    // x = 0 (stream 1 only) .. 0.5 (50/50) .. 1 (stream 2 only).
-    // The clamp only bites when the static WMIX is off-center (|WMIX| > 0) and
-    // the LFO would push the weight past a stream-only extreme (the balance
-    // "parks" at the edge until the LFO swings back). At the factory default
-    // (WMXR = 0, LFO OFF -> lfo_mixv = 0) mix_eff = WMIX exactly, and with
-    // stream 2 == stream 1 (bank A, LFO 2 off) any x blends two identical
-    // waves -> bit-identical to the old single-stream sound.
-    float wave_mix_eff = p.wave_mix + lfo_mixv;
-    if (wave_mix_eff > 1.f)
-      wave_mix_eff = 1.f;
-    else if (wave_mix_eff < -1.f)
-      wave_mix_eff = -1.f;
-    const float wave_mix_x = 0.5f * (1.f + wave_mix_eff);
+    const float wte_morph = 7.5f + lfo_ * 7.5f; // 0..15 (clamped inside lookup)
 
     // ---- Per-voice loop: phasors, wavetables, ring-mod -----------------------
     // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its
@@ -586,46 +557,16 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
         v.ph_a -= fast_floorf(v.ph_a);
         v.ph_b -= fast_floorf(v.ph_b);
 
-        // ---- SUPERSAW (GRIMM-style: single 7-saw stack instead of wavetables) ---
-        // TEMPORARY: replaced wavetable lookup with a GRIMM-style supersaw:
-        // 7 saw oscillators detuned symmetrically around the note (+/-60c total
-        // spread, ~17c between neighbors). All 7 saws share the same base phasor
-        // v.ph_a but each is offset by a fixed random-like phase spread to
-        // de-correlate. Saw = 2*ph - 1 (range [-1,1]). The 7 saws are summed
-        // and normalized by 1/7 so the output amplitude matches a single saw.
-        // This tests whether the polyphonic howl is a wavetable artifact or
-        // a fundamental issue with coherent summing of 2-3 voices.
-        //
-        // GRIMM supersaw: 7 saws at -60, -40, -20, 0, +20, +40, +60 cents
-        // (symmetric spread). Each saw's phasor is offset from v.ph_a by a
-        // fixed amount proportional to its detune: ph_i = ph_a + offset_i,
-        // where offset_i = detune_cents_i / 1200.0 (in cycles, since 1200
-        // cents = 1 octave = 1 cycle ratio... actually 1200 cents = 2x freq,
-        // so a cent offset shifts the phasor increment, not the phase itself.
-        // For a STATIC test we use fixed phase offsets that approximate the
-        // steady-state phase drift of detuned oscillators over ~100 ms).
-        //
-        // Simpler approach: use v.ph_a as the base and add fixed phase offsets
-        // that spread the 7 saws across one cycle (like GRIMM's random phase
-        // initialization). This gives a static spread that de-correlates the
-        // harmonics without per-sample detune computation.
-        // ---- Wavetable samples (2D morph: two streams, crossfaded) -----------
-        // Each A/B phasor samples BOTH streams at its own phase; the FINAL wave
-        // is the WAVE_MIX crossfade of the two resolved streams (wave_mix_x):
-        //   stream 1 = resolve_wave(wave_bank,  lfo_morph,  ph)  (WAV1 bank + LFO 1)
-        //   stream 2 = resolve_wave(wave_bank2, lfo_morph2, ph)  (WAV2 bank + LFO 2)
-        //   wav      = stream1 * (1 - x) + stream2 * x
-        // The A/B detune (w0_a/w0_b, computed above) provides the width; the
-        // two independent LFOs provide the 2D timbre movement. Each stream's
-        // bank boundary is hard: its morph never crosses into the next bank.
-        // At the factory preset (stream 2 == stream 1) the crossfade is of two
-        // identical waves -> bit-identical to the old single-stream sound.
-        const float s1a = WaveTable::resolve_wave(wave_bank,  lfo_morph,  v.ph_a);
-        const float s1b = WaveTable::resolve_wave(wave_bank,  lfo_morph,  v.ph_b);
-        const float s2a = WaveTable::resolve_wave(wave_bank2, lfo_morph2, v.ph_a);
-        const float s2b = WaveTable::resolve_wave(wave_bank2, lfo_morph2, v.ph_b);
-        const float wav_a = s1a * (1.f - wave_mix_x) + s2a * wave_mix_x;
-        const float wav_b = s1b * (1.f - wave_mix_x) + s2b * wave_mix_x;
+        // ---- Wavetable samples (WTE: the editor wavetable, LFO-morphed) -------
+        // Each A/B phasor reads the 16x256 EDITOR wavetable (wte_.frames_) at
+        // its own phase and the SHARED morph position wte_morph (driven by the
+        // internal wave-LFO 1, computed above): bilinear crossfade of the two
+        // adjacent frames (by the fractional part of wte_morph) and the two
+        // adjacent phase points (see WteTable::lookup). The A/B detune
+        // (w0_a/w0_b, computed above) provides the width; the LFO provides the
+        // timbre movement across the whole table.
+        const float wav_a = WteTable::lookup(wte_.frames_, wte_morph, v.ph_a);
+        const float wav_b = WteTable::lookup(wte_.frames_, wte_morph, v.ph_b);
         v.prev_wav_a = wav_a; // FM lookback cache (next sample's modulator)
         v.prev_wav_b = wav_b;
 
@@ -688,27 +629,13 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // `mix` already carries the C vibrato. When C is OFF, fm_c_offset == 0 and
     // this is bit-identical to the pre-FM-C sound.)
     //
-    // EDITOR WAVETABLE VOICE: a 16 morph-frame x 256-point wavetable bank
-    // (16-bit; osc_wte.h, rendered from the /editor document — 16 waves of
-    // sources/warps/combine, see osc_wte_doc.h / osc_wte_render.h) is read by
-    // the shared proc_ph phasor (anchor rate, advanced in the sub-bass block
-    // below) and ADDED to the A+B sum HERE, i.e. BEFORE the common post-stage
-    // (FOLD/SATU/SVF/formant/comb). So the editor voice is "driven" by the
-    // same drive chain as the main voice. PLEV (proc_level) is its own gain
-    // (independent of MAIN): at 0 (default) the term is 0 and the stock sound
-    // is bit-identical. PMORPH (proc_morph, 0..15) is the fractional frame
-    // position; the lookup crossfades the two adjacent frames (bilinear).
-    // The phasor/lookup live below (after the sub-bass block advances proc_ph
-    // and sub_anchor_w0 is valid); proc_out is computed there and added to
-    // mix via the line immediately below that block.
-    // The editor voice's contribution is kept in proc_mix (a member, so it
-    // persists across samples for the MAIN-duck bookkeeping below). At the
-    // start of each sample it is 0; if PLEV > 0 it is filled after the
-    // sub-bass block (where proc_ph advances). `mix` is rebuilt each sample as
-    // A+B + proc_mix so the MAIN knob can duck ONLY the A+B part (see the
-    // "MAIN ducks only A+B" note near the final mix). At PLEV = 0 proc_mix
-    // stays 0 and `mix` == the old A+B-only value (bit-identical regression).
-    proc_mix = 0.f;
+    // (The old EDITOR WAVETABLE VOICE -- a separate parallel voice reading the
+    // 16x256 table at an anchor-rate proc_ph phasor, mixed in via PLEV -- is
+    // GONE: the A+B voices now read the EDITOR wavetable DIRECTLY (wte_.frames_,
+    // WteTable::lookup, see the "Wavetable samples (WTE)" block in the voice
+    // loop above). The table IS the main voice: its level is MAIN (the A+B
+    // voice level applied in the final mix below) and its morph position is the
+    // internal wave-LFO 1 (wte_morph). PMORPH/PLEV are no-ops (superseded).)
     float mix  = kMixOsc * (sum_main * env_comp_);
     // RMOD: A*B ring-mod DERIVED voice (summed per-voice), MAIN-ducked.
     const float ring_out = rmod_active ? (sum_ring * env_comp_) * p.ring_mix * p.main_level : 0.f;
@@ -771,14 +698,9 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // SUB2 (f/4) phasor: stable low-end anchor.
       sub_ph2 += sub_anchor_w0 * 0.25f;
       sub_ph2 -= fast_floorf(sub_ph2);
-      // PROCEDURAL phasor: the shared procedural wavetable voice reads at the
-      // ANCHOR rate (the same pitch as the shared sub bass, one-pole relaxed)
-      // so it is one continuous texture under/over the whole cluster, not N
-      // per-voice copies. At proc_level = 0 (default) the lookup result is
-      // multiplied by 0 in `mix` below, but the phasor still advances (cheap,
-      // and keeps the phase continuous so a PLEV raise doesn't click).
-      proc_ph += sub_anchor_w0;
-      proc_ph -= fast_floorf(proc_ph);
+      // (The old PROCEDURAL phasor (proc_ph, anchor rate) is gone with the
+      //  separate editor-wavetable voice: the A+B voices read the WTE table
+      //  directly at their own per-voice phasors, see the voice loop above.)
     }
     // Sub-octave / sub-2 (ONE shared pair; the SUBB breath gain modulates the
     // level, the anchor modulates the pitch; scaled by their levels in the mix).
@@ -788,25 +710,10 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     const float sub    = osc_sinf(sub_ph) * sub_breath_gain;
     const float sub2_out = sub2.process(sub_ph2, sub_anchor_w0, sub_breath_gain);
 
-    // ---- PROCEDURAL WAVETABLE VOICE: lookup + add to `mix` ------------------
-    // Read the procedural frame bank at (PMORPH, proc_ph) -- a bilinear
-    // crossfade of the two adjacent frames (by the fractional part of PMORPH)
-    // and the two adjacent phase points (by the fractional part of proc_ph *
-    // 256). The result ([-1,+1]) is scaled by PLEV (proc_level, its own gain,
-    // independent of MAIN) and added to `mix` BEFORE the common post-stage,
-    // so the procedural voice is driven by the same FOLD/SATU/SVF/formant/
-    // comb chain as the A+B main voice. At PLEV = 0 (default) the term is 0
-    // (bit-identical stock sound). The phasor proc_ph was advanced at the
-    // anchor rate in the sub-bass block above.
-    if (p.proc_level > 0.f)
-    {
-      const float proc_out = WteTable::lookup(wte_.frames_, p.proc_morph, proc_ph);
-      // Keep the procedural voice's contribution ISOLATED in proc_mix (a
-      // member) so the MAIN knob below can duck ONLY the A+B part. `mix` is
-      // rebuilt as A+B + proc_mix right after this block.
-      proc_mix = kMixOsc * proc_out * p.proc_level;
-      mix += proc_mix;
-    }
+    // (The old standalone PROCEDURAL WAVETABLE VOICE -- WteTable::lookup at
+    //  (PMORPH, proc_ph) * PLEV, added to `mix` here -- is gone: the A+B
+    //  voices read the WTE table directly in the voice loop above (see the
+    //  "Wavetable samples (WTE)" block). `mix` is the plain A+B sum.)
 
     // The COMMON post-stage input is `mix` (the per-voice A+B sum, computed in
     // the loop above as kMixOsc * sum_main). It is then run through the SINGLE
@@ -1069,15 +976,11 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
       // shared sub bass is NOT env_comp_ scaled, it is ONE pair). A single
       // note -> env = its own level (mono exact); N notes -> each note
       // contributes its own envelope, no shared-dip on the 1→2 boundary.
-      // MAIN ducks ONLY the A+B voice (y_filt) and its RMOD byproduct — the
-      // procedural voice (proc_mix, isolated in a member above) is NOT
-      // MAIN-ducked: it is driven by PLEV only, so MAIN=0 mutes A+B but the
-      // proc texture (if PLEV > 0) keeps sounding. Same for the constant
-      // sidechain duck: the low end sinks A+B, not the proc voice. At
-      // PLEV = 0 proc_mix == 0 and `raw` is bit-identical to the pre-proc
-      // sound (regression-safe).
+      // MAIN ducks ONLY the A+B voice (y_filt, which now IS the editor
+      // wavetable -- see the "Wavetable samples (WTE)" block in the voice
+      // loop) and its RMOD byproduct. Same for the constant sidechain duck:
+      // the low end sinks A+B, not the shared sub pair.
       const float raw = (y_filt * p.main_level * duck_gain
-                       + proc_mix
                        + sub * p.sub_level * kMixSub
                        + sub2_out * p.sub2_level * kMixSub2
                        + ring_out * kMixRing * duck_gain) * kOutDrive;

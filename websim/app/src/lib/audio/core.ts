@@ -54,13 +54,18 @@ export interface ParamGroup {
 
 // Semantic groups (UI-only; DSP enum order in osc.h is untouched). 3-column
 // Parameters layout; each group becomes one titled block in its `col`.
-// WALK-gap params (41/43/47) deliberately NOT listed: rendered only as the
-// gap row next to their Shape radio group (40/42/46), hidden unless Walk.
+// WALK-gap param (41) deliberately NOT listed: rendered only as the gap row
+// next to its Shape radio group (40), hidden unless Walk.
+//
+// The WTE wavetable (the /editor 16x256 table) is the A+B cluster's SOLE
+// wavetable source: its morph position is the internal Wave LFO 1 (35/36,
+// shape 40 + walk gap 41) and its level is MAIN (15). The old stock banks
+// (WAVE 13 / WAVE 2 14), the stream-2 LFO (37/38), WAVE_MIX (39), the
+// wave-mix LFO (42/43, 44..47) and the "PROC WAVET" group (PMORPH 55 / PLEV
+// 56) are GONE from the UI — they are DSP no-ops now (see osc_param_apply.h).
 export const PARAM_GROUPS: ParamGroup[] = [
   // ---- Column 0 ----
-  { title: "",           col: 0, items: [13, 35, 36, 40] },
-  { title: "",           col: 0, items: [14, 37, 38, 42], divider: true },
-  { title: "",           col: 0, items: [39, 44, 45, 46], divider: true },
+  { title: "WAVETABLE",  col: 0, items: [35, 36, 40] },
   { title: "",           col: 0, items: [10, 11, 12, 27, 28, 25, 26, 0], divider: true },
   { title: "FORMANT",    col: 0, items: [31, 32] },
   // ---- Column 1 ----
@@ -71,7 +76,6 @@ export const PARAM_GROUPS: ParamGroup[] = [
   { title: "FILTER",     col: 2, items: [19, 20, 54] },
   { title: "CLUSTER",    col: 2, items: [33] },
   { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52, 53] },
-  { title: "PROC WAVET", col: 1, items: [56, 55], divider: true },
 ];
 
 // ---- WAVE bank (edit 13 WAV1 / 14 WAV2) ------------------------------------
@@ -94,6 +98,8 @@ export function rawFromWaveBank(b: number): number {
 }
 
 // ---- LFO shapes / FM mod waves (radio groups, raw = band centers) ----------
+// (The old WaveBank/WaveBank2 groups are gone: the WTE wavetable is the sole
+// source and its morph LFO is the single LfoShape1 group, edit 40.)
 export const LFO_SHAPES = [
   { label: "Sin",  raw: 0   },
   { label: "S",    raw: 640 },
@@ -119,15 +125,13 @@ export function fmModWaveIdxFromRaw(raw: number): 0 | 1 | 2 | 3 | 4 {
 }
 
 // ============================ Radio groups (UI -> raw) ========================
-// UI: radio-группы (WaveBank/WaveBank2/LfoShape1..3/FmModWave). idx -> raw.
+// UI: radio-группы (LfoShape1/FmModWave). idx -> raw.
+// (The old WaveBank/WaveBank2/LfoShape2/LfoShape3 groups are no-ops now.)
 export function rawFromRadioGroup(
-  group: "WaveBank" | "WaveBank2" | "LfoShape1" | "LfoShape2" | "LfoShape3" | "FmModWave",
+  group: "LfoShape1" | "FmModWave",
   idx: number,
 ): [number, string] {
-  if (group === "WaveBank" || group === "WaveBank2") {
-    return [rawFromWaveBank(idx), WAVE_BANKS[idx]];
-  }
-  if (group === "LfoShape1" || group === "LfoShape2" || group === "LfoShape3") {
+  if (group === "LfoShape1") {
     return [LFO_SHAPES[idx].raw, LFO_SHAPES[idx].label];
   }
   if (group === "FmModWave") {
@@ -336,13 +340,20 @@ if (DEFAULT_RAW.length !== EDIT_PARAM_COUNT) {
 // ============================ Randomize (1:1 legacy) =========================
 
 /**
- * Full randomization of all 55 parameters. "Safe" (walk) parameters get the
+ * Full randomization of all parameters. "Safe" (walk) parameters get the
  * full 0..1023 range; "critical" parameters are constrained to
  * audition-friendly windows so Random always yields a playable sound
  * (1:1 port of legacy randomizeAllRaw, ~1116..1298).
+ *
+ * WTE note: the A+B voices read the /editor WTE wavetable (sole source).
+ * Randomization drives the live Wave LFO 1 (Rate/Depth/Shape/Gap — the
+ * table morph) and leaves MAIN (the table's level) in its audition window.
+ * The removed stock-bank / stream-2 / wave-mix / "proc wavet" params
+ * (13/14/37..47/55..56) are no-ops now — they keep their full 0..1023
+ * default and are NOT re-rolled.
  */
 export function randomizeAllRaw(): number[] {
-  const raws = new Array(EDIT_PARAM_COUNT).fill(0);
+  const raws = DEFAULT_RAW.slice(); // full 0..1023 defaults; no-ops untouched
   const I = (name: string) => EDIT_PARAM_NAMES.indexOf(name);
   // Guarded setter: -1 (missing name) -> loud console.warn, no silent no-op.
   const set = (name: string, raw: number) => {
@@ -358,23 +369,13 @@ export function randomizeAllRaw(): number[] {
     set(n, r1023());
   for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
     set(n, r1023());
-  {
-    const bank = Math.floor(Math.random() * 6); // 0..5
-    const bank2 = Math.floor(Math.random() * 6); // 0..5 (independent)
-    set("Wave", rawFromWaveBank(bank));
-    set("Wave 2", rawFromWaveBank(bank2));
-  }
-  for (const n of ["Wave LFO Rate", "Wave LFO Depth", "Wave 2 LFO Rate", "Wave 2 LFO Depth", "Wave Mix"])
+  // WTE morph LFO 1 (the live wavetable morph): full-rate/depth draws +
+  // SIN or WALK shape (S too niche for random). (The old Wave/Wave 2 banks,
+  // the stream-2 LFO, Wave Mix and the wave-mix LFO are no-ops now.)
+  for (const n of ["Wave LFO Rate", "Wave LFO Depth"])
     set(n, r1023());
-  for (const n of ["Wave Mix LFO Rate", "Wave Mix LFO Depth"])
-    set(n, r1023());
-  // LFO SHAPES: SIN or WALK (S too niche for random).
-  set("Wave LFO Shape", Math.random() < 0.5 ? 0 : 896);
-  set("Wave LFO Gap", rRange(171, 962));
-  set("Wave 2 LFO Shape", Math.random() < 0.5 ? 0 : 896);
-  set("Wave 2 LFO Gap", rRange(171, 962));
-  set("Wave Mix LFO Shape", Math.random() < 0.5 ? 0 : 896); // 0 = Sin, 896 = Walk
-  set("Wave Mix LFO Gap", rRange(171, 962)); // ~10..200 s
+  set("Wave LFO Shape", Math.random() < 0.5 ? 0 : 896); // 0 = Sin, 896 = Walk
+  set("Wave LFO Gap", rRange(171, 962));                // ~10..200 s
   // --- Constrained (critical) parameters -----------------------------------
   set("Detune", rRange(256, 767));     // +/-5 c
   set("Rate", rRange(204, 511));       // 20..50%
@@ -406,13 +407,9 @@ export function randomizeAllRaw(): number[] {
   set("FM Teeth", rRange(0, 614));
   set("FM Teeth Depth", rRange(256, 1023));
   set("Cutoff 24dB", rRange(0, 716));   // 0..70%
-  // ---- Editor-wavetable voice (55..56) --------------------------------------
-  // Randomize the editor-wavetable voice into a musical, audible range: a
-  // moderate level (15..50%) so Random always yields a sound that includes the
-  // editor texture, a mid morph. (The document itself is set by the editor UI;
-  // randomization only touches the level + morph position.)
-  set("Proc Level", rRange(153, 511));  // 15..50% level
-  set("Proc Morph", rRange(102, 921));  // ~10..90% morph
+  // (The old "editor-wavetable voice" (Proc Level 56 / Proc Morph 55) is gone:
+  //  the WTE table IS the main voice now, so its level = MAIN (set above) and
+  //  its morph = Wave LFO 1 (set above). 55/56 are no-ops — not re-rolled.)
   return raws;
 }
 
@@ -522,13 +519,12 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
     (function step() {
       if (i < raws.length) {
         const raw = raws[i];
-        if (i === WAVE_PARAM_IDX) {
-          bus.emit('radio:ext', { group: 'WaveBank', idx: waveBankFromRaw(raw) });
-        } else if (i === WAVE2_PARAM_IDX) {
-          bus.emit('radio:ext', { group: 'WaveBank2', idx: waveBankFromRaw(raw) });
-        } else if (i === 40 || i === 42 || i === 46) {
+        // (The old WaveBank / WaveBank2 radio sync (i === 13/14) is gone: the
+        // stock banks are no-ops now — their raw values pass through to the
+        // DSP as no-ops. The LfoShape radios keep only the LIVE one (40).)
+        if (i === 40) {
           bus.emit('radio:ext', {
-            group: i === 40 ? 'LfoShape1' : (i === 46 ? 'LfoShape3' : 'LfoShape2'),
+            group: 'LfoShape1',
             idx: lfoShapeIdxFromRaw(raw),
           });
         } else if (i === 49) {
@@ -565,26 +561,16 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
     Module.rndTrigger();
     const t0 = performance.now();
     const MORPH_SYNC_MS = 5000; // 1-bar morph + max stagger + margin (legacy)
-    let lastWaveBank = -1;
-    let lastWave2Bank = -1;
     fireSyncTimer = setInterval(() => {
       let dirty = false;
       for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
         const v = Module.getEditParamValue(i);
-        if (i === WAVE_PARAM_IDX || i === WAVE2_PARAM_IDX) {
-          const isWave1 = (i === WAVE_PARAM_IDX);
-          const lastBank = isWave1 ? lastWaveBank : lastWave2Bank;
-          const bank = waveBankFromRaw(v);
-          if (lastBank !== bank) {
-            if (isWave1) lastWaveBank = bank; else lastWave2Bank = bank;
-            bus.emit('radio:ext', { group: isWave1 ? 'WaveBank' : 'WaveBank2', idx: bank });
-            dirty = true;
-          }
-          continue;
-        }
-        if (i === 40 || i === 42 || i === 46) {
+        // (The old WaveBank / WaveBank2 radio sync (i === 13/14) is gone: the
+        // stock banks are no-ops now. The LfoShape radios keep only the
+        // LIVE one (40, the WTE-morph LFO).)
+        if (i === 40) {
           bus.emit('radio:ext', {
-            group: i === 40 ? 'LfoShape1' : (i === 46 ? 'LfoShape3' : 'LfoShape2'),
+            group: 'LfoShape1',
             idx: lfoShapeIdxFromRaw(v),
           });
           dirty = true;
@@ -946,13 +932,12 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
   for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
     const v = (Module.getEditParamValue) ? Module.getEditParamValue(i) : DEFAULT_RAW[i];
     state.params[i] = v;
-    if (i === WAVE_PARAM_IDX) {
-      bus.emit('radio:init', { group: 'WaveBank', idx: waveBankFromRaw(v) });
-    } else if (i === WAVE2_PARAM_IDX) {
-      bus.emit('radio:init', { group: 'WaveBank2', idx: waveBankFromRaw(v) });
-    } else if (i === 40 || i === 42 || i === 46) {
+    // (The old WaveBank / WaveBank2 radio init (i === 13/14) is gone: the
+    // stock banks are no-ops now. The LfoShape radios keep only the LIVE
+    // one (40, the WTE-morph LFO).)
+    if (i === 40) {
       bus.emit('radio:init', {
-        group: i === 40 ? 'LfoShape1' : (i === 46 ? 'LfoShape3' : 'LfoShape2'),
+        group: 'LfoShape1',
         idx: lfoShapeIdxFromRaw(v),
       });
     } else if (i === 49) {

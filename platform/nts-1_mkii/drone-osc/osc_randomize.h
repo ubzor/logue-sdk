@@ -161,14 +161,12 @@ static RndWindow rnd_window_for(uint8_t idx)
     case 34: w.kind=0; w.lo=0;    w.hi=614;  w.div=0; break; // SUBB  0..60% sub breath
     // (GLIDE removed: the portamento knob is gone.)
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
-    // LFO shape (40/42/46): only SIN (0) or WALK (768..1023) — S is too niche for random.
+    // LFO shape (40): only SIN (0) or WALK (768..1023) — S is too niche for
+    // random. (42/46 are no-ops now — stream 2 and the wave-mix LFO are gone;
+    // see the WTE wavetable comment below the table.)
     case 40: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // WLFS  SIN or WALK
-    case 42: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // W2FS  SIN or WALK
-    case 46: w.kind=0; w.lo=0;    w.hi=1023; w.div=0; break; // WMXS  SIN or WALK
-    // WALK gap (41/43/47): 10..200 s (a sensible random range).
+    // WALK gap (41): 10..200 s (a sensible random range). (43/47 are no-ops.)
     case 41: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WLFG  ~10..200 s
-    case 43: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // W2FG  ~10..200 s
-    case 47: w.kind=0; w.lo=171;  w.hi=962;  w.div=0; break; // WMXG  ~10..200 s
     // ---- FM modulator C (48/49/50): gentle windows ------------------------
     // FM_CR: 0..~30% (raw 0..307) -- a slow vibrato, never the full 1 Hz that
     // would "chug" on a low note; 0 (OFF) is a valid draw (most re-rolls leave
@@ -256,20 +254,18 @@ static constexpr uint8_t  kRndOrbiFamilyW[kRndOrbiFamilyCount] = {50U, 20U, 20U,
 // (CHRD/INT/CINT2/CHSAT/CHFLD/CHSAT2/CHFLD2 removed — chord concept gone;
 //  indices renumbered: 15=MAIN, 19=CUT, 20=RES, 22=RVLL, 25=JIT, 26=RMOD,
 //  27=FM1, 28=FM2, 29=RFMA, 30=RFMB, 31=FORM, 32=FVOL, 33=COMB.)
-// WAVE_MIX (39) is the wave 1 <-> wave 2 crossfade: it reshapes the harmonic
-// core (how much of each wave stream the A/B oscillators read), so it belongs
-// in the CORE family alongside the two banks (WAV1 13 / WAV2 14).
-static const uint8_t kRndOrbiFamCore[9]    = {1, 8, 9, 13, 14, 15, 26, 39};
+// (WAV1 13 / WAV2 14 / WAVE_MIX 39 and the stream-2 / wave-mix LFOs (37/38,
+// 42/43, 44..47) are no-ops now — the A+B voices read the single WTE editor
+// wavetable, so the CORE family keeps only the live core params and the MOTION
+// family only the live wave-LFO 1 (the WTE morph). The no-ops keep their full
+// 0..1023 random windows via the default case; re-rolling them is harmless.)
+static const uint8_t kRndOrbiFamCore[5]    = {1, 8, 9, 15, 26};
 static const uint8_t kRndOrbiFamTimbre[6]  = {10, 11, 12, 19, 20, 33};
-// WAVE_LFO_RATE (35) / WAVE_LFO_DEPTH (36) and WAVE2_LFO_RATE (37) /
-// WAVE2_LFO_DEPTH (38) are MOTION (the two internal wave-LFOs that drive the
-// stream 1 / stream 2 intra-bank morphs): a re-roll varies how fast / how far
-// each wavetable drifts, so they belong in the motion family. WAVE_LFO_SHAPE
-// (40) / WAVE_LFO_GAP (41) and WAVE2_LFO_SHAPE (42) / WAVE2_LFO_GAP (43) are
-// also MOTION (the LFO trajectory shape / walk density). The wave-mix LFO
-// (WMIX_LFO_RATE 44 / WMIX_LFO_DEPTH 45 / WMIX_LFO_SHAPE 46 / WMIX_LFO_GAP 47)
-// is MOTION too: it modulates the stream 1 <-> stream 2 balance over time.
-static const uint8_t kRndOrbiFamMotion[24] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22, 35, 36, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47};
+// WAVE_LFO_RATE (35) / WAVE_LFO_DEPTH (36) are MOTION (the internal wave-LFO
+// 1 that drives the WTE editor-wavetable morph across the 16 frames): a
+// re-roll varies how fast / how far the table drifts. WAVE_LFO_SHAPE (40) /
+// WAVE_LFO_GAP (41) are MOTION too (the LFO trajectory shape / walk density).
+static const uint8_t kRndOrbiFamMotion[18] = {0, 2, 3, 4, 5, 6, 7, 16, 17, 18, 21, 22, 35, 36, 40, 41};
 static const uint8_t kRndOrbiFamExtra[3]   = {9, 29, 31};
 
 // The family's parameter list + length for an Orbit fire (family 0..3).

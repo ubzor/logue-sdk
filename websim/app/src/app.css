@@ -56,6 +56,7 @@
 @import "../flyonui-patched/kbd.css";
 @import "../flyonui-patched/label.css";
 @import "../flyonui-patched/divider.css";
+@import "../flyonui-patched/tab.css";
 
 /* ------------------------------------------------------------------ */
 /* Custom bits not covered by FlyonUI (verbatim from the legacy shell) */

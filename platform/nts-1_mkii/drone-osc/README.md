@@ -31,45 +31,36 @@ env-weighted ANCHOR note — see below), then (3) applies the SINGLE common
 post-stage (so 6 notes read as one blended drone, not 6 instruments):
 
 ```
-2D WAVE MORPH (TWO independent internal LFOs + crossfade + wave-mix LFO; see osc_lfo_sim.h):
-  Stream 1 (WAVE bank, WLFR/WLFD):
-    lfo_       = lfo_sim_.process()   (sin(phase) * WLFD; phase advances by WLFR Hz)
-    lfo_morph  = bank_center(WAVE) + lfo_ * lfo_morph_depth(WAVE)
-  Stream 2 (WA2 bank, W2LR/W2LD):
-    lfo2_      = lfo_sim2_.process()  (sin(phase) * W2LD; phase advances by W2LR Hz)
-    lfo_morph2 = bank_center(WA2) + lfo2_ * lfo_morph_depth(WA2)
-  Wave-Mix LFO (WMXR/WMXD/WMXS/WMXG, the THIRD internal LFO, lfo_mix_):
-    lfo_mix    = lfo_mix_.process()   (shape * WMXD; phase advances by WMXR Hz)
-  mix_eff = clamp(WMIX + lfo_mix, -1, +1)   (WMIX is the CENTER, LFO the SWING)
-  x = 0.5 * (1 + mix_eff)  (x 0..1; 50/50 at mix_eff = 0)
-     -> each stream's intra-bank morph position (clamped to [0, bank_size-1])
-  NOTE: all three LFOs (lfo_sim_, lfo_sim2_, lfo_mix_) run INDEPENDENT phases
-        (each ShapeLfoSim owns its own);
-        so the (stream 1, stream 2) trajectory in the 2D texture space never
-        repeats for incommensurate frequencies (e.g. ~13 s / ~19 s) while the
-        sound stays perfectly smooth (interpolation happens both inside the
-        banks and between the streams via the crossfade).
+WTE WAVETABLE MORPH (ONE internal wave-LFO; see osc_lfo_sim.h + osc_wte.h):
+  The A+B voices read the 16x256 EDITOR wavetable (wte_.frames_ — the 16
+  morph frames rendered from the /editor document, or the 16-wave default on
+  hardware) as their SOLE wavetable source. The morph position across the 16
+  frames is driven by the ONE internal wave-LFO 1 (lfo_sim_, WLFR/WLFD/WLFS/
+  WLFG):
+    lfo_      = lfo_sim_.process()  (SIN/S/WALK shape * WLFD; phase advances by WLFR Hz)
+    wte_morph = 7.5 + lfo_ * 7.5    (CENTERED on the table middle, full 0..15 sweep at 100%)
+  The old TWO-stream 2D morph (stream 1 = WAVE bank, stream 2 = WAV2 bank,
+  crossfaded by WMIX + the wave-mix LFO) is GONE with the stock banks:
+  WAV1/WAV2/WMIX and the stream-2 / wave-mix LFO params (W2LR/W2LD, W2FS/
+  W2FG, WMXR/WMXD/WMXS/WMXG) are NO-OPS now (lfo_sim2_ / lfo_mix_ no longer
+  process in the audio path).
   NOTE: the platform shape-LFO (the hardware's OSC-button RATE/SHAPE knobs)
-        is a NO-OP (setShapeLfo() is a stub); the morph and the mix balance are
-        driven ENTIRELY by the THREE internal LFOs (WLFR / WLFD / W2LR / W2LD
-        for the streams, WMXR / WMXD / WMXS / WMXG for the wave-mix balance;
-        the wave-mix LFO modulates the crossfade around the static WMIX knob,
-        with the clamp parking the balance at a stream-only extreme when the
-        LFO would push it past the +/-100% edge).
+        is a NO-OP (setShapeLfo() is a stub); the WTE-table morph is driven
+        ENTIRELY by the ONE internal wave-LFO 1 (WLFR / WLFD / WLFS / WLFG).
 
 PER VOICE (x kVoiceCount = 6):
-  phasor A  ->  wavA = stream1*(1-x) + stream2*x
-                  (stream1 = WAVE bank @ lfo_morph, stream2 = WA2 bank @ lfo_morph2)
-  phasor B  ->  wavB = stream1b*(1-x) + stream2b*x   (same 2D crossfade at ph_b)
+  phasor A  ->  wavA = WteTable::lookup(wte_.frames_, wte_morph, ph_a)
+  phasor B  ->  wavB = WteTable::lookup(wte_.frames_, wte_morph, ph_b)
+                   (the 16x256 editor wavetable, bilinear crossfade of the two
+                    adjacent frames @ wte_morph and the two adjacent phase points)
                [ DETU, FM1, FMAB, JIT, S(static teeth, shape=FM Mod Wave), FM C(vibrato) (both scaled by FMAM), + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
   -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
   -> sub_env_focus = max(sub_env_focus, env)  (loudest voice = SUBB breath focus)
      (shared per-sample: the random walks, FM index, JIT are ONE drone;
-      the sub phasors / sub-2 voice are NO LONGER per-voice — see below;
-      at the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0), so the
-      crossfade of two identical waves is bit-identical to the old sound)
+      the sub phasors / sub-2 voice are NO LONGER per-voice — see below; the
+      A/B wavetables are the SHARED WTE table @ the SHARED morph (wte_morph))
 
 SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
   anchor_target = sum(env*w0) / sum(env)   (the env-weighted mean base rate)
@@ -89,7 +80,7 @@ SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
      is currently loudest). At 1 note sub_env_focus = that note's A-H-R, so
      the low end swells with the attack and sinks on the release.
 
-EDITOR WAVETABLE VOICE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; ONE shared phasor, after the sub block):
+EDITOR WAVETABLE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; the A+B voices' SOLE wavetable source):
   A 16 morph-frame × 256-point wavetable bank (16-bit int16, 8 KB) generated
   from the /editor document: each of the 16 waves is a WaveConfig recipe (4
   sources × 30 shapes + warp stacks + combine + modifiers) — the FULL /editor
@@ -99,16 +90,13 @@ EDITOR WAVETABLE VOICE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; ONE shared p
   wte_.set_doc, dirty flag) and the 16×256 frames are re-rendered at K-rate in
   blockPrepass (wteRegen, never in the audio path; sub-millisecond on the
   STM32H725 hard-FPU).
-  In the audio path ONE shared phasor (proc_ph) advances at the ANCHOR rate
-  (sub_anchor_w0, the same pitch as the shared sub bass) so the editor voice
-  is one continuous texture under/over the whole cluster (not N per-voice
-  copies). Each sample reads the bank at (PMORPH, proc_ph) via a bilinear
-  crossfade (two adjacent frames × two adjacent phase points, pure
-  shifts/masks — no libm). The result ([-1,+1]) is scaled by PLEV (the editor
-  voice's OWN level, independent of MAIN) and ADDED to `mix` BEFORE the common
-  post-stage, so the editor voice is "driven" by the same FOLD/SATU/SVF/
-  formant/comb chain as the A+B main voice. At PLEV = 0 (default) the term is
-  0 -> the stock sound is bit-identical (regression-safe).
+  This table IS the main voice: the A+B voices read it DIRECTLY at their own
+  per-voice phasors (WteTable::lookup in the per-voice loop, see the "WTE
+  wavetable morph" block above), with the SHARED morph position driven by the
+  wave-LFO 1. Its level is the MAIN knob (the A+B voice level) — the old
+  separate parallel "editor voice" (its own proc_ph phasor + the PLEV level
+  knob) was removed: PMORPH (frame position) and PLEV (voice level) are
+  NO-OPS now (superseded: morph = Wave LFO 1, level = MAIN).
 
 PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
   Each of the 6 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
@@ -133,7 +121,8 @@ PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
 
 COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   mix  = kMixOsc * (sum_main * env_comp)
-         + kMixOsc * proc_out * PLEV          (the editor-wavetable voice, PLEV = 0 -> 0)
+  (sum_main is the per-voice A+B sum reading the EDITOR wavetable directly — see the
+   "WTE wavetable morph" block; there is no separate editor-voice term any more)
   -> FLD (wavefolder, FLD)
   -> SAT/ASYM (asymmetric tanh saturator, SAT + ASYM + DWDR walk)   [ x kMixOsc ]
   -> SVF 12 dB/oct LPF (CUT/RES + WFC cutoff walk, dry/wet)
@@ -142,7 +131,6 @@ COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   = y_main
 
 out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK
-            + WTE*PLEV                          (the editor-wavetable voice; NOT MAIN/ducked)
             + sub*SUB1 + sub2_out*SUB2
             + (sum_ring*env_comp)*RMOD*MAIN*DUCK ) )
   where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
@@ -453,7 +441,7 @@ multiplexer on the two physical knobs:
 * **Slot 4 RndM** (edit-menu) -- randomization TYPE (All / Part / ORBI), see above.
 * **Slot 5 Rnd** (edit-menu) -- randomization TRIGGER (0..15, debounced), see above.
 
-All 48 editable DSP parameters (select_ index -> name), with range, factory
+All 57 editable DSP parameters (select_ index -> name), with range, factory
 default and effect:
 
 | # | Name | Display | Range | Default | Effect |
@@ -471,10 +459,10 @@ default and effect:
 | 10 | SAT | 0..300 | 0..3.0 drive | 100 (1.0x) | Main A+B saturator drive. |
 | 11 | ASYM | +/-% | -100..+100% | 0% | Saturator asymmetry (even harmonics; >0 = positive half harder). |
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
-| 13 | WAVE | letter | A..F | A | Wavetable **bank** (LFO morphs within the bank). |
-| 14 | WA2 | letter | A..F | A | **Wave 2 bank**: the second wave stream's wavetable bank (the 2D-morph y-axis). Wave-LFO 2 (W2LR / W2LD) morphs within this bank INDEPENDENTLY of stream 1 (independent LFO phase). The audio path crossfades stream 1 (WAVE) and stream 2 (WA2) by WAVE_MIX — see "2D wave morph" in the Sound path. At the factory preset WA2 = A (same bank as WAVE) and W2LR = 0 (LFO off), so stream 2 == stream 1 and the 50/50 crossfade is bit-identical to the old single-stream sound. (Was deprecated when A/B shared one wave; revived for the 2D morph.) |
-| 15 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). The procedural wavetable voice is NOT MAIN-ducked: it has its own level (PLEV), so MAIN=0 mutes only the A+B + RMOD cluster while the proc texture (if PLEV > 0) keeps sounding. |
-| 16 | TWDR | % | 0..100% | 0% (off) | *Deprecated* (no-op; LFO drives the intra-bank morph). |
+| 13 | WAVE | (legacy) A | (legacy) | *No-op* (superseded by the WTE editor wavetable — the A+B voices read the 16x256 editor table directly, see rows 35/36 and the "WTE wavetable morph" block). The stock A..F banks are gone; the param keeps its layout slot, the display still shows a bank letter. |
+| 14 | WA2 | (legacy) A | (legacy) | *No-op* (superseded by the WTE editor wavetable): the old stream-2 wave bank / 2D-morph y-axis is gone with the stock banks. Keeps its layout slot. |
+| 15 | MAIN | % | 0..100% | 100% | Main (A+B) voice level (also ducks the ring-mod voice). The A+B voices ARE the editor wavetable (WTE) now, so MAIN is the level of the editor texture as well (the old separate PLEV editor-voice level is a no-op — see row 55). MAIN = 0 mutes the A+B + RMOD cluster. |
+| 16 | TWDR | % | 0..100% | 0% (off) | *No-op* (was: random-walk depth on the wavetable morph). The WTE-table morph is now driven by the wave-LFO 1 (WLFR / WLFD / WLFS / WLFG, rows 35/36/40/41), not by the random-walk Timbre stream (which now drives only the SVF cutoff, row 21). |
 | 17 | DWDR | % | 0..100% | 0% (off) | Walk depth on saturator drive (+/-0.5). |
 | 18 | FWDR | % | 0..100% | 0% (off) | Walk depth on wavefolder depth (+/-0.5). |
 | 19 | CUT | Hz / kHz | 80 Hz..12 kHz (log) | ~9 kHz | SVF cutoff **and** dry/wet blend of the **1st** (12 dB/oct) stage (0% = raw, 100% = full LPF). The 2nd (cascaded, 12->24 dB/oct) stage is transparent by default (svf_wet2 = 0) — see the SVF cascade note below. |
@@ -495,19 +483,19 @@ default and effect:
 | 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
 | 34 | SUBB | % | 0..100% -> 0..0.6 swing | ~30% | **Sub-bass breath**: the ONE shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note) follows the LOUDEST (breath-focus) voice's A-H-R envelope. 0% = the old static low end (regression-safe); ~30% (default) = a gentle +/-18% swing — the drone's low end "breathes in" with the note that is currently loudest. The anchor (pitch) is ALWAYS the env-weighted mean (one stable fundamental under the cluster, note on/off morphs the sub pitch smoothly); only the LEVEL breathes, and only by the SUBB depth. The randomizer window is 0..60%. |
-| 35 | WLFR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG: linear knob -> exponential freq; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Internal wave-LFO frequency**: the sine that drives the WAVE-bank intra-bank morph (see `osc_lfo_sim.h`). LOG scale (raw 0 = 0 Hz / LFO OFF; else 10^(3*raw/1023 - 3) = 0.001..1 Hz across 3 decades, the same convention as the SPDx/SMTx knobs), so each equal knob step is a constant multiplier of the previous frequency — fine control near 0. 0 = static wave (the factory default). This REPLACES the hardware's OSC-button RATE knob (which is now a NO-OP, `setShapeLfo()` is a stub). |
-| 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO morph depth**: 0 = static wave (LFO off, the wave stays at the bank center), 100% = the morph sweeps the full bank (first to last table, and back). The factory default is 100%, so any non-zero WLFR drives the morph across the whole bank. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
-| 37 | W2LR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG, same scale as WLFR; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Wave-LFO 2 frequency**: the sine that drives the WAVE-2-bank (stream 2) intra-bank morph (see `osc_lfo_sim.h`, the second `ShapeLfoSim`). Runs with an INDEPENDENT phase from WLFR, so the two streams are never phase-locked: with two incommensurate frequencies (e.g. ~13 s and ~19 s) the (stream 1, stream 2) trajectory in the 2D texture space never repeats. |
-| 38 | W2LD | % | 0..100% (linear) | 100% | **Wave-LFO 2 morph depth**: 0 = stream-2 wave static (at its bank center), 100% = the morph sweeps the full stream-2 bank. Same convention as WLFD, for the second LFO. |
-| 39 | WMIX | +/-% | -100..+100% (symmetric; 50/50 at 0%) | 0% (50/50) | **Wave Mix**: the CENTRAL stream 1 (WAVE) <-> stream 2 (WA2) crossfade weight — the "initial balance" the sound sits on. It is the CENTER of the crossfade; the wave-mix LFO (WMXR / WMXD / WMXS / WMXG, below) swings it around this center. The audio path computes mix_eff = clamp(WMIX + LFO, -1, +1), x = 0.5*(1+mix_eff): -100% (raw 0) = stream 1 only, 0% (raw 511) = equal 50/50 blend, +100% (raw 1023) = stream 2 only. At the factory preset stream 2 == stream 1 (WA2 = A, W2LR = 0) and the mix LFO is OFF (WMXR = 0), so any mix value is bit-identical to the old single-stream sound. |
-| 40 | WLFS | SIN / S / WALK | SIN / S / WALK (raw 0..511 / 512..767 / 768..1023) | SIN | **Wave-LFO 1 shape**: the LFO trajectory of the stream-1 intra-bank morph (see `osc_lfo_sim.h`): SIN = classic sine, S = S-curve with a local reversal, WALK = a random-walk scene regenerated every LFO cycle (Catmull-Rom smoothed; the mean control-point gap is WLFG). |
+| 35 | WLFR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG: linear knob -> exponential freq; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Internal wave-LFO 1 frequency**: the LFO that drives the EDITOR wavetable (WTE) morph — the morph position across the 16 frames is 7.5 + lfo * 7.5 (see the "WTE wavetable morph" block in the Sound path). LOG scale (raw 0 = 0 Hz / LFO OFF; else 10^(3*raw/1023 - 3) = 0.001..1 Hz across 3 decades, the same convention as the SPDx/SMTx knobs), so each equal knob step is a constant multiplier of the previous frequency — fine control near 0. 0 = static table (the factory default). This REPLACES the hardware's OSC-button RATE knob (which is now a NO-OP, `setShapeLfo()` is a stub). |
+| 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO 1 morph depth**: 0 = the WTE table stays static at its middle frame (7.5), 100% = the morph sweeps the FULL table (frame 0 to frame 15, and back). The factory default is 100%, so any non-zero WLFR drives the morph across all 16 editor waves. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
+| 37 | W2LR | (legacy) 0 H | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream-2 wave-LFO is gone with the 2D morph. Keeps its layout slot. |
+| 38 | W2LD | (legacy) 100% | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream-2 wave-LFO depth is gone with the 2D morph. Keeps its layout slot. |
+| 39 | WMIX | (legacy) 0% | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream 1 <-> stream 2 crossfade is gone with the 2D morph. Keeps its layout slot. |
+| 40 | WLFS | SIN / S / WALK | SIN / S / WALK (raw 0..511 / 512..767 / 768..1023) | SIN | **Wave-LFO 1 shape**: the WTE-morph LFO trajectory (see `osc_lfo_sim.h`): SIN = classic sine, S = S-curve with a local reversal, WALK = a random-walk scene regenerated every LFO cycle (Catmull-Rom smoothed; the mean control-point gap is WLFG). |
 | 41 | WLFG | N s | 1..300 s (LOG) | ~30 s | **Wave-LFO 1 WALK gap**: mean seconds between random control points of the WALK scene (only used when WLFS = WALK; no effect in SIN / S). |
-| 42 | W2FS | SIN / S / WALK | SIN / S / WALK (same quantization as WLFS) | SIN | **Wave-LFO 2 shape**: same three trajectories for the stream-2 LFO (independent phase and scene from WLFS). |
-| 43 | W2FG | N s | 1..300 s (LOG) | ~30 s | **Wave-LFO 2 WALK gap**: mean WALK control-point gap for the stream-2 LFO (only used when W2FS = WALK). |
-| 44 | WMXR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG, same scale as WLFR / W2LR; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Wave-Mix LFO frequency**: the LFO that modulates the stream 1 <-> stream 2 crossfade AROUND the static WMIX value (the third internal `ShapeLfoSim`, `lfo_mix_`; see the "2D wave morph" block in the Sound path). Runs with an independent phase from both stream LFOs. raw 0 = LFO OFF (the mix stays at the static WMIX — the factory default and the regression-safe state). |
-| 45 | WMXD | % | 0..100% (linear) | 100% | **Wave-Mix LFO swing depth**: 0 = the crossfade stays at the static WMIX (no swing), 100% = the LFO swings the full -100%..+100% range of the crossfade weight (clamped by the audio path when the static WMIX is off-center, so the balance "parks" at a stream-only edge until the LFO swings back). Same convention as WLFD / W2LD, for the third LFO. |
-| 46 | WMXS | SIN / S / WALK | SIN / S / WALK (same quantization as WLFS) | SIN | **Wave-Mix LFO shape**: same three trajectories (SIN / S / WALK) for the wave-mix LFO — a walking balance drifts the stream 1 <-> stream 2 mix along a random scene. |
-| 47 | WMXG | N s | 1..300 s (LOG) | ~30 s | **Wave-Mix LFO WALK gap**: mean WALK control-point gap for the wave-mix LFO (only used when WMXS = WALK). |
+| 42 | W2FS | (legacy) SIN | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream-2 LFO shape is gone with the 2D morph. Keeps its layout slot. |
+| 43 | W2FG | (legacy) N s | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream-2 LFO WALK gap is gone with the 2D morph. Keeps its layout slot. |
+| 44 | WMXR | (legacy) 0 H | (legacy) | *No-op* (superseded by the WTE editor wavetable): the wave-mix LFO is gone with the 2D morph (stream 1 <-> stream 2 crossfade). Keeps its layout slot. |
+| 45 | WMXD | (legacy) 100% | (legacy) | *No-op* (superseded by the WTE editor wavetable): the wave-mix LFO swing depth is gone with the 2D morph. Keeps its layout slot. |
+| 46 | WMXS | (legacy) SIN | (legacy) | *No-op* (superseded by the WTE editor wavetable): the wave-mix LFO shape is gone with the 2D morph. Keeps its layout slot. |
+| 47 | WMXG | (legacy) N s | (legacy) | *No-op* (superseded by the WTE editor wavetable): the wave-mix LFO WALK gap is gone with the 2D morph. Keeps its layout slot. |
 | 48 | FMCR | 0 H / 0.NNN H / 0.N H / 1 H | LOG 0..1 Hz (raw 0 = OFF) | 0 H (OFF) | **FM modulator C frequency**: an INDEPENDENT low-frequency oscillator (the modulator) that phase-FMs the (A+B) sum (the carrier). C is NOT heard by itself -- it only bends the sum's phase for vibrato / motion colour on top of the (untouched) cross-FM A+B timbre. raw 0 = OFF (the sum is unmodulated, regression-safe). The log scale (3 decades) gives fine control near 0; 1 Hz is the ceiling (above it a SAW/SQR modulator would be heard as its own tone on a low note). |
 | 49 | FMCW | SIN / TRI / SAW / SQR / NOISE | raw band (0..341 / 342..511 / 512..682 / 683..853 / 854..1023) | SIN | **FM modulator C wave shape**: the C oscillator's waveform (SIN = smooth vibrato, **TRI = triangle — the "soft" shape, harmonics fall off as 1/n² (vs 1/n for SIN/SAW) so it draws the fewest upper sidebands → the go-to "FM complex but not screechy" choice**, SAW = metallic, SQR = hard/robotic, NOISE = chaotic tremolo). The same wave drives BOTH the C (vibrato) and S (static teeth) modulators. |
 | 50 | FMCD | % | 0..100% (LINEAR) -> 0..0.05 cycles phase peak | 0% (OFF) | **FM modulator C depth**: how strongly C bends the (A+B) sum's phase (0.05 cycles = 5% of the carrier at 100%). 0 = OFF. |
@@ -515,8 +503,8 @@ default and effect:
 | 52 | FMSA | % | 0..100% (LINEAR) -> 0..0.05 cycles peak | 100% | **FM static depth (tooth size)**: the AMPLITUDE (peak swing) of each S tooth — how strongly each tooth bends the (A+B) sum's phase. The effective per-tooth offset is FMSA × 0.05 cycles (5% of the carrier at full scale). The tooth SHAPE is shared with the C modulator (FM Mod Wave / FMCW: SIN/TRI/SAW/SQR/NOISE). 0 = no static FM (bit-identical); 100% (default) = full tooth size. |
 | 53 | FMAM | % | 0..100% (LINEAR) | 100% | **FM MOD amount (global master)**: how strongly the WHOLE FM MOD block is applied — a single multiplier on BOTH the C (vibrato) and S (static teeth) phase offsets before they are added to the A/B phasors. 100% (default) = full C+S exactly as set by FMCD/FMSA (bit-identical regression-safe); 0% = the whole FM MOD block is OFF (both offsets are exactly 0, the (A+B) sum is unmodulated) regardless of the individual C/S settings. It scales the DEVIATION only, never the C/S rates (FMCR/FMST) or shapes (FMCW) — turning FMAM down fades the modulation out smoothly while the modulator keeps running in phase. |
 | 54 | FCUT2 | % | 0..100% (LINEAR) | 0% (12 dB/oct) | **Cascaded 2nd-stage SVF wet** (the "Cutoff 24dB" slider in the web sim): the dry/wet of the SECOND (cascaded) `Svf::State` (`svf2_`). It shares the SAME cutoff (CUT) and resonance (RES) as the 1st stage — only the wet amount is settable. 0% (default) = the 2nd stage is transparent → a single 12 dB/oct SVF (bit-identical to the factory preset); 100% = a full 2nd-stage LPF → 24 dB/oct total. Raising FCUT2 gives a steeper top-end roll-off for taming FM upper sidebands (the "FM complex but not screechy" recipe). |
-| 55 | PLEV | % | 0..100% (LINEAR) | **0% (SILENT)** | **Editor-wavetable voice LEVEL**: the gain of the editor-wavetable voice. It is a NEW parallel voice added to the A+B sum BEFORE the common post-stage (FOLD/SATU/SVF/formant/comb), so it is "driven" by the same drive chain as the main voice, but with its OWN level (independent of MAIN). MAIN ducks only the A+B voice (and RMOD) — the editor texture keeps sounding even at MAIN = 0 (driven solely by PLEV). 0% (default) = the voice is muted → the stock sound is bit-identical (regression-safe). |
-| 56 | PMORPH | 0..15 | 0..100% (LINEAR) -> 0..15 frames | 50% (mid, frame 7.5) | **Editor-wavetable MORPH position**: the fractional frame index (0..15) of the 16-frame editor-wavetable bank (16 morph frames × 256 points, 16-bit; `osc_wte.h`). Frame 0 = first wave, frame 15 = last wave. The audio path crossfades the two adjacent frames (bilinear, like the Korg-bank morph). Runtime-only (no table regen). |
+| 55 | PLEV | (legacy) 0% | (legacy) | *No-op* (superseded): the separate editor-wavetable VOICE (its own phasor + level) was removed — the WTE table IS the main A+B voice now, so its level is MAIN (row 15). Keeps its layout slot. |
+| 56 | PMORPH | (legacy) 7.5 | (legacy) | *No-op* (superseded): the editor-wavetable MORPH position is now driven by the internal wave-LFO 1 (WLFR / WLFD, rows 35/36), centered on frame 7.5 (this old default). Keeps its layout slot. |
 
 (FOLD2 — second cascaded wavefolder — and DCK — sidechain-duck amount — were
 removed. DCK is now a CONSTANT: see "Non-editable (fixed) behaviour" /
@@ -537,7 +525,7 @@ Each stream is independent (own period, own time constant) and its targets are
 | Stream | Period / Smooth | Target knob(s) | Drives | RATE-gated |
 |--------|-----------------|----------------|--------|------------|
 | **Tone** | SPD1 / SM1 | (depth from RATE) | A/B detune (+/-10 c) + FM index breathing | yes |
-| **Timbre** | SPD2 / SM2 | TWDR, WFC | wavetable morph (+/-10 tables) + SVF cutoff (+/-1 half-oct) | yes |
+| **Timbre** | SPD2 / SM2 | WFC | SVF cutoff (+/-1 half-oct) | yes |
 | **Density** | SPD3 / SM3 | DWDR, FWDR | saturator drive (+/-0.5) + wavefolder depth (+/-0.5) | yes |
 | **Breath** | BRR / SMT | BRT | per-note MAIN (A+B) voice level (each note breathes independently) | **no** |
 
@@ -570,8 +558,8 @@ gently follows the loudest (breath-focus) voice's A-H-R.
 | Sub anchor relax | kSubAnchorAlpha (~250 ms) | One-pole relax of the env-weighted mean w0 (sum(env*w0)/sum(env)): note on/off MORPHS the shared sub pitch smoothly (no click). 0 notes -> anchor relaxes to 0 (the sub fades out with the cluster). |
 | Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
 | Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
-| Wavetable pitch morph | up to +10 tables at top of range | Higher notes drift toward the denser F bank. |
-| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The 2D wave morph is driven ENTIRELY by the THREE INTERNAL wave-LFOs (edit params WLFR / WLFD for stream 1, W2LR / W2LD for stream 2, WMXR / WMXD / WMXS / WMXG for the wave-mix balance; the static crossfade center is WMIX, see the Edit parameters table above and `osc_lfo_sim.h`). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
+| WTE table morph | centered on frame 7.5, full 0..15 sweep at WLFD = 100% | The editor-wavetable morph position is the wave-LFO 1 (WLFR/WLFD/WLFS/WLFG): `wte_morph = 7.5 + lfo * 7.5` (at 100% depth the LFO sweeps all 16 frames; at 0 depth the table is static at the middle). |
+| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The WTE editor-wavetable morph is driven ENTIRELY by the ONE INTERNAL wave-LFO 1 (edit params WLFR / WLFD / WLFS / WLFG; see the Edit parameters table above and `osc_lfo_sim.h`). The old two-stream 2D morph (W2LR / W2LD / WMIX / the wave-mix LFO) is gone with the stock banks (those params are no-ops now). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
@@ -614,14 +602,14 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_rnd.h | Rnd re-roll + morph engine: rndArm/rndTick (0.5 s debounce), rndMorphStart/rndMorphTick (BPM-synced morph), RndM mode state, web-sim request channels. |
 | osc_lifecycle.h | init/reset/noteOn/noteOff/allNoteOff/setPitch -- unit lifecycle; polyphonic cluster voice allocation (steal oldest), LATCH toggle-off; setPitch is a no-op. |
 | osc_mix.h | process() -- the per-sample audio path; blockPrepass() -- the K-rate per-block prepass (edit/Rnd request consumption, rndTick, rndMorphTick). |
-| osc_waves.h | Wavetable bank scanning + pitch-shifted morph + LFO-morph crossfade. |
+| osc_waves.h | Legacy stock-bank wavetable scanning + pitch-shifted morph (vestigial — the A+B voices now read the WTE editor wavetable directly, see `osc_wte.h`). |
 | osc_saturator.h | Stateless wavefolder (fold) + asymmetric tanh saturator (saturate). |
 | osc_svf.h | 12 dB/oct state-variable low-pass (cutoff/resonance/dry-wet + stability clamps). |
 | osc_random_walk.h | RandomWalk -- multi-channel wandering (exponential target cadence). |
 | osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
-| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the Osc owns THREE independent instances: `lfo_sim_` / `lfo_sim2_` driving the stream 1 / stream 2 intra-bank morphs (WLFR / WLFD and W2LR / W2LD edit parameters) and `lfo_mix_` modulating the stream 1 <-> stream 2 crossfade around the static WMIX (WMXR / WMXD / WMXS / WMXG edit parameters)). |
+| osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the LIVE instance is `lfo_sim_`, driving the WTE editor-wavetable morph via the WLFR / WLFD / WLFS / WLFG edit parameters — the morph position is 7.5 + lfo * 7.5. The old `lfo_sim2_` (stream-2 bank morph) and `lfo_mix_` (wave-mix crossfade) instances no longer process in the audio path — stream 2 / wave-mix are gone with the stock banks). |
 | osc_constants.h | All static tuning constants (max depths, scales, envelope lengths). |
 | osc_randomize.h | randomizeAll() / randomizePartial() + the shared safe-window list -- the Rnd re-roll (All / Part), fired by the Rnd trigger debounce (device) or Module.rndTrigger (sim). |
 | wasm.cc | Web-simulator glue (embind); now only consumed by the unified drone-chain simulator. |

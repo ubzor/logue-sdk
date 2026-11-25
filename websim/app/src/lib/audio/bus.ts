@@ -20,12 +20,12 @@
 // bus — транспорт, не хранилище (в плане было bus.state, отклонено:
 // двойное хранение = рассинхрон; единственный источник = stores.audioState).
 
+// (The old 'WaveBank'/'WaveBank2' (edit 13/14) and 'LfoShape2'/'LfoShape3'
+//  (edit 42/46) groups are GONE: the stock banks and stream 2 are no-ops now
+//  — the WTE wavetable is the sole source and its morph LFO is the single
+//  'LfoShape1' (edit 40).)
 export type RadioGroupKey =
-  | 'WaveBank'        // edit 13, options A..F (6)
-  | 'WaveBank2'       // edit 14, options A..F (6)
-  | 'LfoShape1'       // edit 40, options Sin/S/Walk (3)
-  | 'LfoShape2'       // edit 42, options Sin/S/Walk (3)
-  | 'LfoShape3'       // edit 46 (Wave Mix LFO), options Sin/S/Walk (3)
+  | 'LfoShape1'       // edit 40 (WTE-morph LFO), options Sin/S/Walk (3)
   | 'FmModWave'       // edit 49, options SIN/TRI/SAW/SQR/NOISE (5)
   | 'HwFltType'       // не edit-param: 0..6 (Off/HP4/HP2/BP4/BP2/LP4/LP2)
   | 'Octave';         // не edit-param: кнопки 1..5 (shift = btn - 3)

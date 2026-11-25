@@ -64,8 +64,8 @@ inline void Osc::init(float *)
     sub2.lpf_state = 0.f;
     sub2.gate = 0.f;
     sub_anchor_w0 = 0.f;
-    proc_ph = 0.f;
-    proc_mix = 0.f;
+    // (proc_ph / proc_mix are gone with the separate editor-wavetable voice:
+    //  the A+B voices read the WTE table directly now — see osc.h wte_.)
     sub_breath_gain = 1.f;
     // (glide removed: no gl_k_ / gl_want_); no last note yet.
     last_note_ = -1;

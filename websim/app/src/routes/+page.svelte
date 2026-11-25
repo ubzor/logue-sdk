@@ -61,6 +61,15 @@
 		setOctave(Number(e.currentTarget.value) - 3, 'radio');
 	}
 
+	// ---- Main view tabs ------------------------------------------------------
+	// FlyonUI tabs (flyonui/components/tab.css, staged via vite.flyonui.js):
+	// "Main" = OSC + FX stack, "Wavetable" = the wave table editor (3D view +
+	// source/combine/warp panel). State is plain Svelte ($state) — the flyonui
+	// JS tab plugin is NOT used; we just toggle .tab-active on the button and
+	// .hidden on the other panel (the plugin only adds ARIA/active-tab: sugar,
+	// which we set statically below). SSR-safe default: "main".
+	let tab = $state('main');
+
 	// Scope: два canvas-осциллографа (time-domain + FFT). Рефы через bind:this;
 	// подписываемся на $audioController — когда AudioHost опубликует
 	// контроллер (после initAudio), подключаем canvas'ы через
@@ -246,10 +255,52 @@
 		</div>
 	</div>
 
+	<!-- ================= VIEW TABS: Main / Wavetable ========================== -->
+	<!-- FlyonUI "Tabs & Pills" (docs/navigations/tabs-pills): .tabs-bordered
+	     container + .tab buttons; the active one carries .tab-active (the
+	     primary underline). State is the `tab` rune below; content panels are
+	     toggled with .hidden (flyonui's JS tab plugin is not loaded). -->
+	<nav
+		class="tabs tabs-bordered"
+		role="tablist"
+		aria-label="Simulator views"
+		aria-orientation="horizontal"
+	>
+		<button
+			type="button"
+			role="tab"
+			id="tab-main"
+			aria-controls="tabpanel-main"
+			aria-selected={tab === 'main'}
+			class="tab {tab === 'main' ? 'tab-active' : ''}"
+			onclick={() => (tab = 'main')}
+		>
+			Main
+		</button>
+		<button
+			type="button"
+			role="tab"
+			id="tab-wavetable"
+			aria-controls="tabpanel-wavetable"
+			aria-selected={tab === 'wavetable'}
+			class="tab {tab === 'wavetable' ? 'tab-active' : ''}"
+			onclick={() => (tab = 'wavetable')}
+		>
+			Wavetable
+		</button>
+	</nav>
+
 	<!-- ================= MAIN ROW: OSC 2/3 + FX 1/3 ========================= -->
-	<div class="flex gap-4 items-stretch">
-		<OscPanel />
-		<FxStack />
+	<div
+		id="tabpanel-main"
+		role="tabpanel"
+		aria-labelledby="tab-main"
+		class={tab === 'main' ? '' : 'hidden'}
+	>
+		<div class="flex gap-4 items-stretch">
+			<OscPanel />
+			<FxStack />
+		</div>
 	</div>
 
 	<!-- ================= WAVE TABLE EDITOR (bottom) ========================== -->
@@ -258,8 +309,15 @@
 	     warp editing panel for the ACTIVE frame. Every change re-serializes
 	     the document into the WASM OSC (debounced), where the 16x256 bank
 	     re-renders at K-rate; PMORPH/PLEV (OSC panel, "PROC WAVET" group)
-	     select the frame and the level of the editor voice. -->
-	<div class="flex flex-col gap-3">
+	     select the frame and the level of the editor voice. Lives in the
+	     "Wavetable" tab (see the tab strip above). -->
+	<div
+		id="tabpanel-wavetable"
+		role="tabpanel"
+		aria-labelledby="tab-wavetable"
+		class={tab === 'wavetable' ? '' : 'hidden'}
+	>
+		<div class="flex flex-col gap-3">
 		<div class="flex items-center gap-3">
 			<span class="text-sm font-semibold tracking-wide">Wave Table Editor</span>
 			<span class="badge badge-soft badge-primary badge-sm font-mono text-xs">
@@ -284,6 +342,7 @@
 
 		<!-- Source/combine/warp editing panel (disabled until a wave is active) -->
 		<SourceEdit active={wteActive} />
+		</div>
 	</div>
 
 </div>

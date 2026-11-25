@@ -64,7 +64,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // list must stay in sync with the @import block in app.css.
 const COMPONENTS = [
   'button', 'card', 'range', 'switches',
-  'badge', 'kbd', 'label', 'divider',
+  'badge', 'kbd', 'label', 'divider', 'tab',
 ];
 
 const PATCHED_DIR = path.join(__dirname, 'flyonui-patched');
