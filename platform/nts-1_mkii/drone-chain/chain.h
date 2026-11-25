@@ -329,6 +329,14 @@ public:
   volatile float osc_output_peak_ = 0.f;
   float getOscOutputPeak() const { return osc_output_peak_; }
 
+  // Web-sim: read the OSC stage's current WTE wavetable morph position (0..15)
+  // for the 3D wavetable view's white line (the live waveform the osc is
+  // producing). The OSC writes it once per block in process() (osc_mix.h);
+  // main thread reads it via getWteMorph (SHARED_MEMORY=1). Web-sim-only:
+  // Osc::getWteMorph / the sim_wte_morph_ slot are compiled out on hardware
+  // (__EMSCRIPTEN__), and this Chain class is web-simulator-only to begin with.
+  float getWteMorph() const { return osc_.getWteMorph(); }
+
   // Public stage accessors (the web-sim's wasm.cc reaches mod_ for the
   // MOD-multiplexer direct channel: modSetEditParam / modGetEditParamValue /
   // modGetSelect). The stages are otherwise private.

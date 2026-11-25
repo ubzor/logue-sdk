@@ -7,6 +7,7 @@
 	import SourceEdit from '$lib/components/SourceEdit.svelte';
 	import { onMount } from 'svelte';
 	import { audioState, audioController, setVolume, setBpm, setOctave } from '$lib/audio/stores';
+	import { audioReady } from '$lib/audio/glue-bridge';
 	import { editor, onDocChange } from '$lib/editor/store.svelte';
 	import { renderWave, EDITOR_FRAMES, EDITOR_POINTS } from '$lib/wavetable/render';
 
@@ -18,6 +19,12 @@
 	// K-rate inside blockPrepass; the audio path is untouched).
 	let wteActive = $state(null);
 	let wteTable = $derived(editor.waves.map((w, i) => renderWave(w, EDITOR_POINTS, i)));
+	// Live WTE wavetable morph position (0..15) reported by the DSP: the 3D
+	// view draws a WHITE LINE at this position (the exact waveform the osc is
+	// producing right now). The main thread polls Module.getWteMorph() (a
+	// worklet-written slot, web-sim-only — see getWteMorph in wasm.cc); the
+	// poll cadence (33 ms) decouples audio telemetry from the render loop.
+	let wteMorphPos = $state(7.5);
 
 	$effect(() => {
 		// react to any editor mutation (revision increments on every change)
@@ -83,6 +90,23 @@
 				c.attachScope(canvasWave, canvasFFT);
 			}
 		});
+		// Poll the live WTE wavetable morph position from the DSP (web-sim-only
+		// telemetry: Module.getWteMorph reads a worklet-written slot). 33 ms
+		// (≈30 fps) is plenty smooth for the slow wave-LFO morph and decouples
+		// the audio-telemetry cadence from the 3D view's own rAF render loop.
+		let morphTimer = null;
+		audioReady
+			.then(({ Module }) => {
+				if (Module && typeof Module.getWteMorph === 'function') {
+					morphTimer = setInterval(() => {
+						const m = Module.getWteMorph();
+						// Guard against NaN/undefined before the worklet's first
+						// block: keep the last good value (defaults to 7.5 middle).
+						if (Number.isFinite(m)) wteMorphPos = m;
+					}, 33);
+				}
+			})
+			.catch(() => {});
 		// Синхронизировать switch с effective theme (initTheme в +layout.ts
 		// уже применил data-theme до first paint; switch в разметке не имеет
 		// начального checked — без этого он всегда показывал OFF, даже при
@@ -90,7 +114,10 @@
 		const t = document.documentElement.dataset.theme;
 		const sw = document.querySelector('#ThemeSwitch');
 		if (sw) sw.checked = (t === 'luxury');
-		return unsub;
+		return () => {
+			if (morphTimer) clearInterval(morphTimer);
+			unsub();
+		};
 	});
 </script>
 
@@ -335,7 +362,12 @@
 		<div class="card p-2 w-fit wte-preview">
 			<div class="wte-preview-inner">
 			{#if wteTable}
-				<WaveTableView3D data={wteTable} bind:active={wteActive} onActiveChange={(i) => wteActive = i} />
+				<WaveTableView3D
+					data={wteTable}
+					morphPos={wteMorphPos}
+					bind:active={wteActive}
+					onActiveChange={(i) => wteActive = i}
+				/>
 			{:else}
 				<div class="grid place-items-center text-xs opacity-60" style="width:640px;height:480px">Loading…</div>
 			{/if}

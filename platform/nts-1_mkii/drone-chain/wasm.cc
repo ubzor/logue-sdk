@@ -393,6 +393,17 @@ extern "C" int getOscOutputPeak()
   return static_cast<int>(peak * 1000.f);
 }
 
+// Web-sim: read the OSC stage's current WTE wavetable morph position (0..15)
+// for the 3D wavetable view's white line. The OSC writes sim_wte_morph_ once
+// per audio block in process() (osc_mix.h); the main-thread UI polls this and
+// animates a white line at that position in WaveTableView3D. Web-simulator-
+// only: the underlying slot + Osc::getWteMorph are __EMSCRIPTEN__-gated, so the
+// device firmware has no such channel (Chain is web-simulator-only anyway).
+extern "C" float getWteMorph()
+{
+  return processor.getWteMorph();
+}
+
 // ---- HW FILTER (web-sim only, between OSC and MOD) ---------------------------
 // The hardware filter block emulates the physical NTS-1 filter that sits
 // between the OSC module and the MOD module. It is NOT part of any ARM unit
@@ -595,6 +606,10 @@ EMSCRIPTEN_BINDINGS(drone_ui)
   emscripten::function("getModInputPeak", &getModInputPeak);
   emscripten::function("getModOutputPeak", &getModOutputPeak);
   emscripten::function("getOscOutputPeak", &getOscOutputPeak);
+
+  // Web-sim: current WTE wavetable morph position (0..15) for the 3D view's
+  // white line (see the getWteMorph() C function above).
+  emscripten::function("getWteMorph", &getWteMorph);
 
   // HW FILTER (web-sim only, between OSC and MOD). type: 0=thru, 1=high4,
   // 2=high2, 3=band4, 4=band2, 5=low4, 6=low2. which: 0=cutoff, 1=res,

@@ -358,6 +358,12 @@ inline void Osc::process(const float *__restrict in, float *__restrict out, uint
     // params are no-ops and those LFOs no longer process.
     const float lfo_ = lfo_sim_.process();
     const float wte_morph = 7.5f + lfo_ * 7.5f; // 0..15 (clamped inside lookup)
+    // Web-sim: publish the morph position for the 3D wavetable view's white
+    // line (the UI reads it via getWteMorph). Web-simulator-only: compiled out
+    // on hardware (non-__EMSCRIPTEN__) so the device carries no UI telemetry.
+#ifdef __EMSCRIPTEN__
+    sim_wte_morph_ = wte_morph;
+#endif
 
     // ---- Per-voice loop: phasors, wavetables, ring-mod -----------------------
     // Each of the kVoiceCount cluster voices runs the SAME DSP chain with its

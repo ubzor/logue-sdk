@@ -31,6 +31,13 @@
 		data = $bindable(null),
 		points = $bindable(EDITOR_POINTS),
 		active = $bindable(null),
+		// Live WTE wavetable morph position (0..15, fractional) reported by the
+		// DSP (the web-sim polls Module.getWteMorph and feeds it here). The
+		// component draws a WHITE LINE at this Z position — the exact waveform
+		// the osc is producing right now (a bilinear slice of the surface
+		// between the two adjacent frames). Read live in the rAF loop (NOT in an
+		// $effect, so polling cadence updates don't trigger a surface rebuild).
+		morphPos = 7.5,
 		onActiveChange = (_i) => {}
 	} = $props();
 
@@ -41,6 +48,8 @@
 	let lineGroup;
 	let surfaceMesh = null; // semi-transparent mesh spanning the 16 frame-lines
 	let pickBox = null;   // single invisible box covering the whole surface (100% catch)
+	let morphLine = null;  // white line at the live morph position (0..15)
+	let morphPositions = null; // its Float32Array buffer (updated per rAF frame)
 	let themeObs;
 	let needsBuild = false; // set by $effect when data changes; consumed by init/loop
 
@@ -163,6 +172,30 @@
 		const boxGeo = new THREE.BoxGeometry(X_SPAN + pad, boxH, Z_SPAN + pad);
 		pickBox = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
 		lineGroup.add(pickBox);
+
+		// WHITE morph line: the live waveform the osc is producing (a bilinear
+		// slice of the surface at the current morph position, 0..15). Pure
+		// white, always on top (depthTest off + high renderOrder) so it reads
+		// clearly against the tinted surface. Its vertices are rewritten every
+		// rAF frame by updateMorphLine() from the live `morphPos` prop.
+		if (F > 1) {
+			const N = data[0].length;
+			morphPositions = new Float32Array(N * 3);
+			const morphGeo = new THREE.BufferGeometry();
+			morphGeo.setAttribute('position', new THREE.BufferAttribute(morphPositions, 3));
+			const morphMat = new THREE.LineBasicMaterial({
+				color: new THREE.Color(0xffffff),
+				transparent: false,
+				depthTest: false,
+			});
+			morphLine = new THREE.Line(morphGeo, morphMat);
+			morphLine.renderOrder = 20; // above the active line (10) and surface (-1)
+			lineGroup.add(morphLine);
+			updateMorphLine(); // paint the initial slice now (uses current morphPos)
+		} else {
+			morphLine = null;
+			morphPositions = null;
+		}
 
 		// Semi-transparent surface mesh: an F x N grid of vertices (the same
 		// data as the 16 frame-lines), triangulated with indexed quads. This
@@ -373,6 +406,10 @@
 				needsBuild = false;
 				buildLinesFrom();
 			}
+			// Animate the white morph line to the live morph position. Reads the
+			// `morphPos` prop live (no $effect dependency, so the ~30 fps poll
+			// from +page.svelte never triggers a surface rebuild here).
+			updateMorphLine();
 			if (controls) controls.update();
 			renderer.render(scene, camera);
 		};
@@ -411,6 +448,8 @@
 				if (o.geometry) o.geometry.dispose();
 				if (o.material) o.material.dispose();
 			});
+			morphLine = null;
+			morphPositions = null;
 			renderer?.dispose();
 			containerEl?.replaceChildren();
 			delete window.__wvt3d;
@@ -461,6 +500,36 @@
 
 	function framePositions(frame) {
 		return lines[frame]?.positions ?? null;
+	}
+
+	// Update the white morph line to sit at the live morph position `pos`
+	// (0..15, fractional). It is a bilinear slice of the surface: between
+	// frame i=floor(pos) and frame i+1, at depth frac=pos-i, each of the P
+	// points is data[i][k]*(1-frac) + data[i+1][k]*frac — exactly what
+	// WteTable::lookup does in Z. X spans one period, Z = zOfFrac(pos), Y =
+	// amplitude * Y_SPAN. Called every rAF frame (cheap: P floats rewritten).
+	function updateMorphLine() {
+		if (!morphLine || !morphPositions || !data) return;
+		const F = data.length;
+		if (F < 2) return;
+		const N = data[0].length;
+		let pos = morphPos;
+		if (!Number.isFinite(pos)) pos = (F - 1) / 2; // middle before first poll
+		if (pos < 0) pos = 0;
+		if (pos > F - 1) pos = F - 1;
+		const i = Math.min(F - 2, Math.floor(pos));
+		const frac = pos - i;
+		const z = (pos / (F - 1) - 0.5) * Z_SPAN;
+		const rowA = data[i];
+		const rowB = data[i + 1];
+		for (let k = 0; k < N; k++) {
+			const amp = rowA[k] * (1 - frac) + rowB[k] * frac;
+			const idx = k * 3;
+			morphPositions[idx]     = (k / Math.max(1, N - 1) - 0.5) * X_SPAN;
+			morphPositions[idx + 1] = amp * Y_SPAN;
+			morphPositions[idx + 2] = z;
+		}
+		morphLine.geometry.attributes.position.needsUpdate = true;
 	}
 	function markFrameDirty(frame) {
 		const L = lines[frame];

@@ -714,6 +714,23 @@ public:
   {
     wte_.set_doc(d);
   }
+  // ---- Web-sim: report the current WTE wavetable morph position (0..15) ----
+  // The A+B voices read the 16x256 editor wavetable at the SHARED morph
+  // position wte_morph = 7.5 + lfo_sim_.process() * 7.5, computed once per
+  // audio block in the "WTE wavetable morph" block of osc_mix.h. The web
+  // simulator's 3D wavetable view (WaveTableView3D.svelte) draws a white line
+  // at this position so the user sees the EXACT waveform the osc is producing
+  // right now (a bilinear slice of the surface at the live morph depth). The
+  // worklet thread writes sim_wte_morph_ once per block; the main thread (UI)
+  // reads it via getWteMorph() (SHARED_MEMORY=1, a benign aligned-float data
+  // race at worst -- a 1-block-stale value, visually indistinguishable; the
+  // same argument as the sim_rnd_request_ / sim_edit_request_ slots above).
+  // WEB-SIMULATOR-ONLY: on hardware (non-__EMSCRIPTEN__) both the member and
+  // the getter are compiled out -- the device firmware carries no UI telemetry.
+#ifdef __EMSCRIPTEN__
+  volatile float sim_wte_morph_ = 7.5f;
+  float getWteMorph() const { return sim_wte_morph_; }
+#endif
   Voice voice_[kVoiceCount];
   // Shared K-rate static-detune FACTORS (the DETU knob, applied per-voice in
   // the audio path as w0_a = v.w0 * det_f_a_). These are pure factors
