@@ -39,13 +39,24 @@
 	let renderer, scene, camera, controls, raf = 0;
 	let lines = []; // { line, positions:Float32Array, frame }
 	let lineGroup;
+	let surfaceMesh = null; // semi-transparent mesh spanning the 16 frame-lines
 	let pickBox = null;   // single invisible box covering the whole surface (100% catch)
 	let themeObs;
 	let needsBuild = false; // set by $effect when data changes; consumed by init/loop
 
 	const X_SPAN = 4.0;
-	const Z_SPAN = 2.4;
-	const Y_SPAN = 1.2;
+	// The 16 frame-lines are laid out along Z (the surface's "height"); each
+	// line spans X_SPAN along X (the surface's "width" = one period). We want
+	// the surface square: Z_SPAN == X_SPAN, so a full 16-line stack occupies
+	// the same extent as one period in EITHER axis — orientation-independent.
+	// (Previously 2.4, which made the surface wider than it was tall.)
+	const Z_SPAN = 4.0;
+	// Y_SPAN sets the vertical scale: at gain = 1 (row[i] in [-1, +1]) the
+	// peak-to-peak height of ONE period = 2 * Y_SPAN. X_SPAN is the period's
+	// width. The target proportion at gain = 1 is 1100 (wide) : 240 (tall)
+	// ~= 4.583, so 2 * Y_SPAN = X_SPAN / 4.583 = 0.873 -> Y_SPAN = 0.4365.
+	// (Previously 1.2, which made the wave ~2.8x too tall / "вытянута".)
+	const Y_SPAN = 0.4365;
 
 	function cssColor(varName, fallback) {
 		if (typeof window === 'undefined') return fallback;
@@ -120,6 +131,11 @@
 			});
 			const line = new THREE.Line(geo, mat);
 			line.userData.frame = f;
+			// Active line: skip depth test so it's visible over the surface.
+			if (isActive) {
+				mat.depthTest = false;
+				line.renderOrder = 10;
+			}
 
 			lineGroup.add(line);
 			lines.push({ line, positions: pos, frame: f });
@@ -130,9 +146,72 @@
 		// by nearest-line-in-screen-space (see pickLine), which correctly handles
 		// the overlapping lines caused by the angled camera.
 		const pad = 0.3;
-		const boxGeo = new THREE.BoxGeometry(X_SPAN + pad, Y_SPAN * 2 + pad, Z_SPAN + pad);
+		// The box must also cover waves whose gain pushes them ABOVE the base
+		// Y_SPAN scale (the data is NOT clipped to [-1, +1] in the view — only
+		// the source render clips, and a high gain still overflows). Measure the
+		// actual peak amplitude across all frames and grow the box height so a
+		// click on an over-unity crest still hits the surface.
+		let maxAbs = 1.0; // at least the base [-1, +1] span
+		for (const L of lines) {
+			const attr = L.line.geometry.attributes.position;
+			for (let i = 0; i < attr.count; i++) {
+				const a = Math.abs(attr.getY(i));
+				if (a > maxAbs) maxAbs = a;
+			}
+		}
+		const boxH = Math.max(Y_SPAN * 2, maxAbs * 2) + pad;
+		const boxGeo = new THREE.BoxGeometry(X_SPAN + pad, boxH, Z_SPAN + pad);
 		pickBox = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
 		lineGroup.add(pickBox);
+
+		// Semi-transparent surface mesh: an F x N grid of vertices (the same
+		// data as the 16 frame-lines), triangulated with indexed quads. This
+		// gives the smooth interpolation between adjacent lines that matches
+		// WteTable::lookup (bilinear in Z and X). Rendered UNDER the lines.
+		if (F > 1) {
+			const N = data[0].length;
+			const gridPos = new Float32Array(F * N * 3);
+			for (let f = 0; f < F; f++) {
+				const row = data[f];
+				for (let i = 0; i < N; i++) {
+					const idx = (f * N + i) * 3;
+					gridPos[idx]     = (i / Math.max(1, N - 1) - 0.5) * X_SPAN;
+					gridPos[idx + 1] = row[i] * Y_SPAN;
+					gridPos[idx + 2] = zOf(f);
+				}
+			}
+			const gridIdx = new Uint32Array((F - 1) * (N - 1) * 6);
+			let k = 0;
+			for (let f = 0; f < F - 1; f++) {
+				for (let i = 0; i < N - 1; i++) {
+					const a = f * N + i;
+					const b = f * N + (i + 1);
+					const c = (f + 1) * N + i;
+					const d = (f + 1) * N + (i + 1);
+					gridIdx[k++] = a; gridIdx[k++] = b; gridIdx[k++] = c;
+					gridIdx[k++] = b; gridIdx[k++] = d; gridIdx[k++] = c;
+				}
+			}
+			const surfGeo = new THREE.BufferGeometry();
+			surfGeo.setAttribute('position', new THREE.BufferAttribute(gridPos, 3));
+			surfGeo.setIndex(new THREE.BufferAttribute(gridIdx, 1));
+			surfGeo.computeVertexNormals();
+			// MeshStandardMaterial for proper lighting: the directional + ambient
+			// lights give the surface a 3D relief (peaks brighter, valleys darker).
+			// Use the primary (ochre) color at reduced brightness so the surface
+			// has a warm tint and the lines (neutral/primary) still read on top.
+			const surfColor = new THREE.Color(cols.primary);
+			surfColor.multiplyScalar(0.45);
+			const surfMat = new THREE.MeshStandardMaterial({
+				color: surfColor,
+				side: THREE.DoubleSide,
+				metalness: 0.0,
+				roughness: 0.85
+			});
+			surfaceMesh = new THREE.Mesh(surfGeo, surfMat);
+			surfaceMesh.renderOrder = -1; // draw before lines
+			lineGroup.add(surfaceMesh);
+		}
 	}
 
 	// Resolve a screen click to the nearest line. Step 1: raycast the pick box
@@ -185,15 +264,24 @@
 	}
 
 	function setActive(i, emit = true) {
-		if (active === i) return;
+		const changed = active !== i;
 		active = i;
+		// Always re-tint the lines (even if `active` didn't change, e.g. when
+		// $effect re-fires after a prop sync). The tint loop is cheap (16 lines).
 		const cols = themeColors();
 		for (const L of lines) {
 			const on = active === L.frame;
+			// The active line is drawn ON TOP of the surface mesh (depthTest off)
+			// so it is never occluded by the opaque surface between it and the camera.
+			L.line.material.depthTest = !on;
+			L.line.renderOrder = on ? 10 : 0; // active line renders last
 			L.line.material.color.set(on ? cols.primary : cols.neutral);
 			L.line.material.opacity = on ? 1.0 : 0.55;
 		}
-		if (emit) onActiveChange(i);
+		// Only emit back to the parent if the value actually changed (avoids
+		// infinite loops when $effect -> setActive -> onActiveChange -> prop
+		// -> $effect ...).
+		if (emit && changed) onActiveChange(i);
 	}
 
 	// Fixed canvas size (editor preview): 640 wide x 480 tall. The container
@@ -214,8 +302,32 @@
 		box.appendChild(renderer.domElement);
 
 		scene = new THREE.Scene();
-		camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-		camera.position.set(2.6, 2.2, 4.2);
+		// Lights for the surface mesh (MeshStandardMaterial needs them).
+		// A soft ambient + a directional from above-front gives a 3D feel
+		// without being too dramatic.
+		const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+		scene.add(ambient);
+		const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+		dirLight.position.set(3, 0, 2);
+		scene.add(dirLight);
+		const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.2);
+		dirLight2.position.set(-3, 0, 2);
+		scene.add(dirLight2);
+		// Orthographic (parallel-projection) camera: no perspective foreshortening,
+		// so the 1100:1100 square surface and 1100:240 period proportion are preserved
+		// exactly on screen regardless of viewing angle. The 'frustumSize' controls how
+		// much of the world is visible: we want the surface (X_SPAN=4 wide) to fill
+		// most of the 640x480 canvas. frustumSize = 6 gives ~2.5:1 aspect headroom.
+		const frustumSize = 6;
+		const aspect = w / h;
+		camera = new THREE.OrthographicCamera(
+			-frustumSize * aspect / 2, frustumSize * aspect / 2,
+			frustumSize / 2, -frustumSize / 2,
+			0.1, 100
+		);
+		camera.position.set(0, 3, -4.5);
+		camera.zoom = 1.9;
+		camera.updateProjectionMatrix();
 		camera.lookAt(0, 0, 0);
 
 		// OrbitControls: left-drag orbits, wheel zooms, right-drag pans. It
@@ -225,11 +337,17 @@
 		// pointerup if the pointer barely moved (< ~5px) and was held < 400ms.
 		// A drag (orbit) therefore never triggers a pick.
 		controls = new OrbitControls(camera, renderer.domElement);
+		controls.enabled = false; // temporarily disabled
 		controls.enableDamping = true;
 		controls.dampingFactor = 0.08;
 		controls.target.set(0, 0, 0);
 		// Disable pan so right-drag / two-finger doesn't fight the layout:
 		controls.enablePan = false;
+		// Log camera position to console on every change (orbit/zoom).
+		controls.addEventListener('change', () => {
+			const p = camera.position;
+			console.log(`[WVT3D] camera: x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)} zoom=${camera.zoom.toFixed(3)}`);
+		});
 
 		// (The volume reference frame / bounding box was removed: it read as a
 		// limiting "frame" around the surface. The lines stand alone now.)
@@ -309,6 +427,16 @@
 		needsBuild = true;
 	});
 
+	// Sync the active prop (from parent, e.g. the morph slider) with the
+	// internal line highlighting. setActive() is called from pointerup
+	// (clicks on lines), but when the parent changes `active` directly
+	// (slider drag), we need to re-tint the lines here.
+	$effect(() => {
+		const a = active;
+		if (!scene || !lines.length) return;
+		setActive(a, false); // don't emit back to parent
+	});
+
 	// Re-tint on live theme switches (data-theme is set by +layout.ts / the
 	// ThemeSwitch). A MutationObserver catches the attribute change; a plain
 	// $effect read of dataset.theme would not be reactive.
@@ -319,6 +447,9 @@
 			const cols = themeColors();
 			for (const L of lines) {
 				L.line.material.color.set(active === L.frame ? cols.primary : cols.neutral);
+			}
+			if (surfaceMesh) {
+				surfaceMesh.material.color.set(new THREE.Color(cols.primary).multiplyScalar(0.45));
 			}
 			renderer?.setClearColor(new THREE.Color(cols.base), 1);
 		};
@@ -342,6 +473,19 @@
 			pos[i * 3 + 1] = row[i] * Y_SPAN;
 		}
 		L.line.geometry.attributes.position.needsUpdate = true;
+		// Also update the corresponding row in the surface mesh
+		if (surfaceMesh) {
+			const F = data.length;
+			const surfAttr = surfaceMesh.geometry.attributes.position;
+			for (let i = 0; i < N; i++) {
+				const idx = (frame * N + i) * 3;
+				surfAttr.setX(idx, (i / Math.max(1, N - 1) - 0.5) * X_SPAN);
+				surfAttr.setY(idx, row[i] * Y_SPAN);
+				// Z stays the same (zOf(frame))
+			}
+			surfAttr.needsUpdate = true;
+			surfaceMesh.geometry.computeVertexNormals();
+		}
 	}
 </script>
 

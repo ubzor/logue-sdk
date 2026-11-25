@@ -332,13 +332,54 @@
 			</span>
 		</div>
 
-		<div class="card p-2 w-fit">
+		<div class="card p-2 w-fit wte-preview">
+			<div class="wte-preview-inner">
 			{#if wteTable}
 				<WaveTableView3D data={wteTable} bind:active={wteActive} onActiveChange={(i) => wteActive = i} />
 			{:else}
 				<div class="grid place-items-center text-xs opacity-60" style="width:640px;height:480px">Loading…</div>
 			{/if}
+			<!-- Vertical frame selector: right of the canvas, full canvas height.
+				     Synced with the active frame (click a line or drag this). -->
+			<div class="wte-morph">
+				<input
+					type="range"
+					min="1"
+					max="16"
+					step="1"
+					value={wteActive !== null ? wteActive + 1 : 1}
+					oninput={(e) => wteActive = parseInt(e.currentTarget.value, 10) - 1}
+					class="range range-primary wte-morph-slider"
+					title="Frame"
+				/>
+				<span class="text-[10px] font-mono opacity-60">{wteActive !== null ? wteActive + 1 : '—'}</span>
+			</div>
+			</div>
 		</div>
+
+		<style>
+			.wte-preview-inner {
+				display: flex;
+				gap: 0.5rem;
+				align-items: stretch;
+			}
+			.wte-morph {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 0.375rem;
+				height: 480px;
+				width: 32px;
+				flex-shrink: 0;
+			}
+			.wte-morph-slider {
+				writing-mode: vertical-lr;
+				direction: rtl;
+				flex: 1;
+				width: 20px;
+				cursor: ns-resize;
+			}
+		</style>
 
 		<!-- Source/combine/warp editing panel (disabled until a wave is active) -->
 		<SourceEdit active={wteActive} />
