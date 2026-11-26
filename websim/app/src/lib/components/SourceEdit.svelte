@@ -18,10 +18,12 @@
 	// Reactive prop from the parent (+page.svelte).
 	let { active = $bindable(null) } = $props();
 
-	// Slider formatting.
+	// Slider formatting. Harmonic uses a 0.25 step (subharmonics f/4, f/2
+	// plus upper harmonics), so it needs up to 2 fractional digits to show
+	// the real value (the old Math.round hid the 0.25/0.5/0.75 steps and
+	// made the slider look like it moved in integer steps).
 	function fmtVal(key, v) {
-		if (key === 'harmonic') return String(Math.round(v));
-		return v.toFixed(2);
+		return Number(v).toFixed(2);
 	}
 
 	// Add: find the first disabled slot and enable it.

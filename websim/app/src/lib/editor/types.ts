@@ -307,7 +307,12 @@ export const WARP_META: Record<WarpType, WarpMeta> = {
 
 /** Param spec for the four per-source settings (shared by all sources). */
 export const SOURCE_PARAM_SPECS: ParamSpec[] = [
-	{ key: 'harmonic', kind: 'number', min: 1, max: 16, step: 1, def: 1, label: 'Harmonic' },
+	// harmonic: min 0.25 (= f/4) so sources can be SUBHARMONICS of the note
+	// (a fractional harmonic < 1 reads as a sub-octave partial of the SAME
+	// note — the drone's low end now lives inside the wavetable). step 0.25
+	// snaps to the 8-bit wire quant (16/255 ≈ 0.0625; 0.25/0.5/0.75/1/2/...
+	// all round-trip stably). 1.0 = the note itself, >1 = upper harmonics.
+	{ key: 'harmonic', kind: 'number', min: 0.25, max: 16, step: 0.25, def: 1, label: 'Harmonic' },
 	{ key: 'phase', kind: 'number', min: 0, max: 1, step: 0.01, def: 0, label: 'Phase' },
 	{ key: 'gain', kind: 'number', min: 0, max: 2, step: 0.01, def: 1, label: 'Gain' },
 	{ key: 'bias', kind: 'number', min: -1, max: 1, step: 0.01, def: 0, label: 'Bias' },

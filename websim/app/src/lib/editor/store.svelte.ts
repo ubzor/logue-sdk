@@ -33,20 +33,51 @@ import {
 // Factories (defaults)
 // ---------------------------------------------------------------------------
 
-/**
- * A wave with a single enabled sine source (harmonic = index+1 so the 16
- * default waves read as a closed->open harmonic morph), Sum combine, no
- * modifiers, and empty warp stacks.
- */
+// The DEFAULT document is a 16-frame DRONE wavetable (mirrors wte_default_wave
+// in osc_wte_doc.h — keep the two in sync). The A+B voices read it at a shared
+// morph position (frame ~7.5 at rest = the table middle), so the "default
+// sound" is the middle waves and the Wave-LFO sweep moves across the rest.
+//
+// Each wave is a SUM of four sine sources:
+//   [0] fundamental  (h=1)            — the note itself;
+//   [1] organ colour (h=2, type Organ)— top-end openness, 0.10..1.00 across the
+//                                       table (frame 0 -> 15);
+//   [2] FM Sine      (type FM Sine)   — a slow "breathing" wobble that
+//                                       de-correlates the frames so the morph
+//                                       audibly evolves (not a flat crossfade);
+//   [3] subharmonic  (h=0.25 = f/4)   — a quiet sub-octave partial that makes
+//                                       the drone bass-heavy. Its gain swells
+//                                       at the table ENDS (frames 0 & 15) and
+//                                       dips at the middle, so a full LFO sweep
+//                                       "pumps" the low end (organic bass).
+// Gains are divided by a per-frame normalizer so every frame peaks in
+// roughly [-1, +1] (the renderer clips at +/-1) — the morph stays
+// level-stable. f/4 quantizes exactly in the 8-bit wire format (h step =
+// 16/255; 0.25 -> q 4 -> 0.249), so it is bit-stable web-sim -> wasm.
+function defaultWaveNorm(index: number): number {
+	const t = index / 15;
+	const organ = 0.1 + 0.9 * t;
+	const fm = 0.25;
+	const end = (index <= 7 ? 7 - index : index - 7) / 7;
+	const sub = 0.18 + 0.37 * end;
+	return 1.0 + organ + fm + sub;
+}
+
+/** The default drone wave at frame `index` (0..15). See the comment above. */
 export function createDefaultWave(index: number): WaveConfig {
-	const srcs: SourceConfig[] = [];
-	for (let i = 0; i < SOURCES_PER_WAVE; i++) {
-		if (i === 0) {
-			srcs.push({ ...newSource('Sine', true), harmonic: index + 1 });
-		} else {
-			srcs.push(newSource('Sine', false));
-		}
-	}
+	const t = index / 15;
+	const organ = 0.1 + 0.9 * t;
+	const fm = 0.25;
+	const end = (index <= 7 ? 7 - index : index - 7) / 7;
+	const sub = 0.18 + 0.37 * end;
+	const norm = defaultWaveNorm(index);
+	const srcs: SourceConfig[] = [
+		{ ...newSource('Sine', true), harmonic: 1, gain: 1.0 / norm },            // fundamental
+		{ ...newSource('Organ', true), harmonic: 2, gain: organ / norm },          // organ colour
+		{ ...newSource('FM Sine', true), harmonic: 1, gain: fm / norm },           // breathing wobble
+		{ ...newSource('Sine', true), harmonic: 0.25, gain: sub / norm },          // f/4 subharmonic
+	];
+	while (srcs.length < SOURCES_PER_WAVE) srcs.push(newSource('Sine', false));
 	return {
 		name: `Wave ${index + 1}`,
 		sources: srcs,

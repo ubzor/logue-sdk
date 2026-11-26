@@ -5,6 +5,7 @@
 	import Keyboard from '$lib/components/Keyboard.svelte';
 	import WaveTableView3D from '$lib/components/WaveTableView3D.svelte';
 	import SourceEdit from '$lib/components/SourceEdit.svelte';
+	import WaveLfoPanel from '$lib/components/WaveLfoPanel.svelte';
 	import { onMount } from 'svelte';
 	import { audioState, audioController, setVolume, setBpm, setOctave } from '$lib/audio/stores';
 	import { audioReady } from '$lib/audio/glue-bridge';
@@ -185,8 +186,9 @@
 			<!-- LFO F / LFO S: VESTIGIAL controls. The platform's OSC-button
 					 RATE/SHAPE knobs (the shape-LFO) are NO-OPs now - the wavetable
 					 intra-bank morph is driven by the INTERNAL wave-LFO (the
-					 "Wave LFO Rate" / "Wave LFO Depth" edit parameters in the MAIN
-					 group). These sliders send nothing to the DSP (the old
+					 "Wave LFO Rate" / "Wave LFO Depth" edit parameters in the
+					 WAVETABLE group, now in the "Wavetable" tab — see
+					 WaveLfoPanel). These sliders send nothing to the DSP (the old
 					 setLfoFreq / setLfoDepth bindings were removed from wasm.cc). -->
 			<label
 					class="flex items-center gap-3"
@@ -332,12 +334,13 @@
 
 	<!-- ================= WAVE TABLE EDITOR (bottom) ========================== -->
 	<!-- The /editor page inlined: 3D preview of the 16-frame wavetable (each
-	     frame = one editor wave, live from the store) + the source/combine/
-	     warp editing panel for the ACTIVE frame. Every change re-serializes
-	     the document into the WASM OSC (debounced), where the 16x256 bank
-	     re-renders at K-rate; PMORPH/PLEV (OSC panel, "PROC WAVET" group)
-	     select the frame and the level of the editor voice. Lives in the
-	     "Wavetable" tab (see the tab strip above). -->
+	     frame = one editor wave, live from the store) + the WaveLfoPanel
+	     (WAVETABLE group: Wave LFO Rate/Depth/Shape/Gap — user-owned, EXCLUDED
+	     from Rnd/Reset, see core.ts) to the right of the 3D view + the
+	     source/combine/warp editing panel for the ACTIVE frame. Every change
+	     re-serializes the document into the WASM OSC (debounced), where the
+	     16x256 bank re-renders at K-rate. Lives in the "Wavetable" tab (see
+	     the tab strip above). -->
 	<div
 		id="tabpanel-wavetable"
 		role="tabpanel"
@@ -359,6 +362,9 @@
 			</span>
 		</div>
 
+		<!-- 3D preview + the Wavetable LFO settings (right of the 3D view, -->
+		<!-- vertically centered). -->
+		<div class="flex items-center gap-3 wte-preview-row">
 		<div class="card p-2 w-fit wte-preview">
 			<div class="wte-preview-inner">
 			{#if wteTable}
@@ -387,9 +393,16 @@
 				<span class="text-[10px] font-mono opacity-60">{wteActive !== null ? wteActive + 1 : '—'}</span>
 			</div>
 			</div>
-		</div>
+			</div>
+			<!-- Wavetable LFO settings (Wave LFO Rate/Depth/Shape + Walk Gap;
+				     1:1 legacy "hidden unless Walk" for the Gap row). -->
+			<WaveLfoPanel />
+			</div>
 
 		<style>
+			.wte-preview-row {
+				align-items: center;
+			}
 			.wte-preview-inner {
 				display: flex;
 				gap: 0.5rem;

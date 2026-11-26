@@ -81,12 +81,13 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       break;
 
     // ---- Sub voices (SUB1 = f/2, SUB2 = f/4) ----
+    // NO-OP: the SUB1/SUB2 sub-octave voices are REMOVED -- the low end now
+    // lives INSIDE the WTE wavetable as subharmonic partials (see
+    // wte_default_wave in osc_wte_doc.h). The edit params remain in the
+    // multiplexer (stable raw indices) but no longer drive any DSP.
     case SUB1:
-      params_.sub_level = param_10bit_to_f32(value);
-      break;
     case SUB2:
-      params_.sub2_level = param_10bit_to_f32(value);
-      break;
+      break; // removed (low end is in the wavetable)
     // ---- Saturator drive / asymmetry / wavefolder (SATU / ASYM / FOLD) ----
     case SATU:
       params_.drive = param_10bit_to_f32(value) * kSatuMax;
@@ -275,17 +276,13 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
       params_.comb_fb = param_10bit_to_f32(value) * kCombFbMax;
       break;
 
-    // ---- SUBB: sub-bass "breath" depth (shared sub follows the focus voice) ----
-    // The knob maps 0..1023 -> 0..1 (linear). The audio path (osc_mix.h)
-    // converts it to a swing depth d = subb_depth * kSubBreathMax and a
-    // one-pole follower (kSubBreathTauSec) drives sub_breath_gain toward
-    // (1 + (sub_env_focus - 0.5) * 2 * d) so the low end swells with the
-    // loudest (breath-focus) voice. At 0 the gain is constant 1.0 (static
-    // low end, the old behaviour). No K-rate recompute needed (the follower
-    // state is audio-path state, relaxed per sample).
+    // ---- SUBB: sub-bass "breath" depth ----
+    // NO-OP: the shared sub bass (SUB1/SUB2) is REMOVED -- the low end now
+    // lives inside the WTE wavetable as subharmonic partials, so there is no
+    // "sub-bass breath" to drive. The edit param remains in the multiplexer
+    // (stable raw index) but no longer drives any DSP.
     case SUBB:
-      params_.subb_depth = param_10bit_to_f32(value);
-      break;
+      break; // removed (low end is in the wavetable)
 
     // ---- Internal wave-LFO frequency (WAVE_LFO_RATE) -------------------------
     // This LFO now drives the EDITOR wavetable morph: the A+B voices read the
@@ -375,9 +372,10 @@ inline void Osc::apply_edit_param(uint8_t idx, int32_t value)
 
     // NOTE: FOLD2 (second cascaded wavefolder) and DCK (sidechain-duck amount)
     // were removed from the editable parameter set. FOLD2 was judged
-    // unnecessary; DCK is now a CONSTANT (kDuckConstant, osc_constants.h) and
-    // no longer has an apply path. The audio path no longer references
-    // params_.fold2_depth / params_.duck_amt.
+    // unnecessary; the sidechain duck is gone entirely with the SUB1/SUB2 sub
+    // voices (the low end now lives inside the WTE wavetable, so there is no
+    // low-end branch to duck the main tone against). The audio path no longer
+    // references any fold2 / duck state.
 
     // ---- FM modulator C: phase-FM on the (A+B) sum --------------------------
     // C is an independent low-frequency oscillator that bends the sum's phase

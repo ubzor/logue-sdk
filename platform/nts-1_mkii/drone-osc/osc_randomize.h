@@ -139,8 +139,8 @@ static RndWindow rnd_window_for(uint8_t idx)
   {
     case 1:  w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // DET   +/-5 c
     case 0:  w.kind=0; w.lo=204;  w.hi=511;  w.div=0; break; // RATE  20..50% (cap wander)
-    case 8:  w.kind=0; w.lo=204;  w.hi=818;  w.div=0; break; // SUB1  20..80% (bass always audible)
-    case 9:  w.kind=0; w.lo=256;  w.hi=716;  w.div=0; break; // SUB2  25..70% (bass always audible)
+    // (case 8 SUB1 / case 9 SUB2 removed -- the sub voices are NO-OPS now; the
+    //  low end lives inside the WTE wavetable, so there is nothing to re-roll.)
     case 10: w.kind=0; w.lo=136;  w.hi=819;  w.div=0; break; // SAT   40..240
     case 11: w.kind=0; w.lo=256;  w.hi=767;  w.div=0; break; // ASYM  +/-50%
     case 12: w.kind=0; w.lo=0;    w.hi=613;  w.div=0; break; // FLD   0..60%
@@ -158,7 +158,7 @@ static RndWindow rnd_window_for(uint8_t idx)
     // (CH2D2/CH2F were removed — the chord/interval concept is gone.)
     case 32: w.kind=0; w.lo=0;    w.hi=512;  w.div=0; break; // FLVL  0..50% formant
     case 33: w.kind=0; w.lo=0;    w.hi=307;  w.div=0; break; // COMB  0..30% resonance
-    case 34: w.kind=0; w.lo=0;    w.hi=614;  w.div=0; break; // SUBB  0..60% sub breath
+    // (case 34 SUBB removed -- the sub bass is a NO-OP now; nothing to re-roll.)
     // (GLIDE removed: the portamento knob is gone.)
     // (FOLD2 / DCK removed: FOLD2 no longer exists, DCK is now a constant.)
     // LFO shape (40): only SIN (0) or WALK (768..1023) — S is too niche for

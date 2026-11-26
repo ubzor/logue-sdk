@@ -160,7 +160,6 @@ DSP_HEADERS := $(PROJECT_ROOT)/chain.h \
                $(PROJECT_ROOT)/../drone-osc/osc_svf.h \
                $(PROJECT_ROOT)/../drone-osc/osc_envelope.h \
                $(PROJECT_ROOT)/../drone-osc/osc_detune.h \
-               $(PROJECT_ROOT)/../drone-osc/osc_sub2.h \
                $(PROJECT_ROOT)/../drone-osc/osc_random_walk.h \
                $(PROJECT_ROOT)/../drone-osc/osc_randomize.h \
                $(PROJECT_ROOT)/../drone-osc/osc_rnd.h \

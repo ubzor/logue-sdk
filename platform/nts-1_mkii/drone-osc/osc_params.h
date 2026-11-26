@@ -50,8 +50,8 @@ struct OscParamsData
   //   [2] Density -> saturator drive (RW_DRV) + wavefolder depth (RW_FLD)
   float rw_rate[3];   // 0.f .. 1.f, edit SPD1..3: stream period (0.1 s .. 10 s, log)
   float rw_smooth[3]; // 0.f .. 1.f, edit SMT1..3: stream time constant (10 ms .. 1.5 s, log)
-  float sub_level;    // 0.f .. 1.f, edit: sub-octave (f/2) sine level
-  float sub2_level;   // 0.f .. 1.f, edit: second sub (f/4) saturated level
+  float sub_level;    // DEAD (sub voices removed): the old SUB1 f/2 sine level. Kept for struct layout; never read by the audio path (the low end is now inside the WTE wavetable).
+  float sub2_level;   // DEAD (sub voices removed): the old SUB2 f/4 level. Kept for struct layout; never read by the audio path.
   float fold_depth;   // 0.f .. 1.f, edit: pre-drive wavefolder depth
   float asym;         // -1.f .. +1.f, edit: asymmetric saturator (0 = symmetric)
   float wave_pos;     // DEAD (superseded by the WTE wavetable): the old WAVE
@@ -171,23 +171,16 @@ struct OscParamsData
 
   // ---- Enrichment-2 (formant / comb) -----------------------------------------
   // All default to OFF (transparent) so the stock sound is bit-identical.
-  // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, DCK is now a
-  //  constant (kDuckConstant, osc_constants.h); no DSP state for them here.)
+  // (FOLD2 and DCK were removed — FOLD2 was judged unnecessary, the constant
+  //  sidechain duck is gone with the SUB1/SUB2 sub voices; no DSP state here.)
   float formant_pos;  // 0.f .. 1.f, edit FORM: vowel morph position (A=0 .. U=1)
   float formant_wet;  // 0.f .. 1.f, edit FVOL: formant stage dry/wet (0 = dry)
   float comb_fb;      // 0.f .. kCombFbMax, edit COMB (feedback, < 1 = stable)
-  // ---- SUBB: sub-bass "breath" depth (the shared sub bass follows the
-  // breath-focus voice) ----
-  // The SHARED sub bass (SUB1/SUB2, one pair for the whole polyphonic cluster)
-  // can BREATHE: its level tracks the loudest (breath-focus) voice's envelope
-  // with a one-pole follower (kSubBreathTauSec), swinging in [1-d, 1+d] where
-  // d = subb_depth * kSubBreathMax. At 0 (would be regression-safe) the gain
-  // is constant 1.0 (the old static low end); the DEFAULT is 0.3 (~30% ->
-  // d ~= 0.18, a gentle "the low end follows the breathing note"). Gated
-  // INDEPENDENTLY of the BRT (RW_LVL) knob: SUBB > 0 makes the sub bass follow
-  // the loudest voice even with per-voice breathing off (the envelope max is
-  // used, so a single note = constant gain, no flutter).
-  float subb_depth;   // 0.f .. 1.f, edit SUBB (sub-bass breath depth)
+  // (SUBB: sub-bass "breath" depth -- the shared sub bass (SUB1/SUB2) BREATHEs
+  //  with the loudest voice. The whole sub bass is REMOVED (the low end now
+  //  lives inside the WTE wavetable as subharmonic partials), so SUBB is a
+  //  NO-OP. The field is kept for struct layout; never read by the audio path.)
+  float subb_depth;   // DEAD (sub voices removed): the old SUBB sub-bass breath depth. Kept for struct layout; never read by the audio path.
 
   // ---- Editor-wavetable voice (PMORPH/PLEV) — SUPERSEDED (dead fields) ------
   // The WTE table (16 morph frames x 256 points, 16-bit; see osc_wte_doc.h /
@@ -216,8 +209,8 @@ struct OscParamsData
     rw_smooth[0] = 0.5f; // SMT1 (Tone)
     rw_smooth[1] = 0.5f; // SMT2 (Timbre)
     rw_smooth[2] = 0.5f; // SMT3 (Density)
-    sub_level = 0.5f;   // default: half-level sub
-    sub2_level = 0.4f;  // default: ~40% f/4 sub (a clearly audible low-end anchor)
+    sub_level = 0.f;    // DEAD (sub voices removed): the low end is in the WTE wavetable now
+    sub2_level = 0.f;   // DEAD (sub voices removed): the low end is in the WTE wavetable now
     fold_depth = 0.f;   // default: wavefolder off
     asym = 0.f;         // default: symmetric saturator
     wave_pos = 0.f;     // vestigial (no-op, superseded by the WTE wavetable)
@@ -268,8 +261,7 @@ struct OscParamsData
       formant_pos  = 0.5f;  // default: middle vowel (A-E-I-O-U morph midpoint)
       formant_wet  = 0.f;   // default: formant OFF (dry = transparent)
       comb_fb      = 0.f;   // default: comb resonator off
-      subb_depth   = 0.3f;  // default: ~30% (d ~= 0.18) — the shared sub bass gently
-                            // follows the breath-focus note (see the SUBB comment)
+      subb_depth   = 0.f;   // DEAD (sub voices removed): the low end is in the WTE wavetable now
       // ---- Editor-wavetable defaults (vestigial no-ops) ----------------------
       // The WTE table IS the main voice now (morph = Wave LFO 1, level =
       // MAIN); the old PMORPH/PLEV edit params are no-ops. The values are

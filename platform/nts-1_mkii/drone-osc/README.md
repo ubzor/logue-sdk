@@ -3,11 +3,11 @@
 A dual wavetable drone generator for the **NTS-1 mkII** (Logue SDK).
 
 The unit is a single-voice evolving drone: two detuned wavetable voices at the
-base note, two sub-octave voices, an asymmetric saturator + wavefolder, an
-internal 12 dB/oct SVF, and four independent random-walk "wandering" streams
-that make the tone, timbre, density and voice levels breathe over time. There
-is no per-sample branching on audio data and no dynamic allocation -- all state
-lives inside the Osc class.
+base note (the wavetable carries the low end as subharmonic partials), an
+asymmetric saturator + wavefolder, an internal 12 dB/oct SVF, and four
+independent random-walk "wandering" streams that make the tone, timbre,
+density and voice levels breathe over time. There is no per-sample branching on
+audio data and no dynamic allocation -- all state lives inside the Osc class.
 
 ---
 
@@ -56,29 +56,11 @@ PER VOICE (x kVoiceCount = 6):
                [ DETU, FM1, FMAB, JIT, S(static teeth, shape=FM Mod Wave), FM C(vibrato) (both scaled by FMAM), + walk detune ]
   -> sum_main += (wavA*lvlA + wavB*lvlB)   (lvl = per-voice breath level)
   -> sum_ring += wavA*wavB
-  -> anchor_w_num += env*w0        (env-weighted ANCHOR for the shared sub bass)
-  -> sub_env_focus = max(sub_env_focus, env)  (loudest voice = SUBB breath focus)
-     (shared per-sample: the random walks, FM index, JIT are ONE drone;
-      the sub phasors / sub-2 voice are NO LONGER per-voice — see below; the
-      A/B wavetables are the SHARED WTE table @ the SHARED morph (wte_morph))
-
-SHARED SUB BASS (ONE sub pair for the whole cluster, after the per-voice loop):
-  anchor_target = sum(env*w0) / sum(env)   (the env-weighted mean base rate)
-  sub_anchor_w0 = one-pole relax (kSubAnchorAlpha, ~250 ms) of anchor_target
-     -> note on/off MORPHS the sub pitch smoothly (no click); 0 notes -> 0
-     (the sub fades out with the cluster).
-  SUB1: phasor advances at sub_anchor_w0 * kSubW0Scale (f/2, -4 c, NO LFO-FM)
-        -> sub = sin(phasor) * sub_breath_gain
-  SUB2: phasor advances at sub_anchor_w0 * 0.25 (f/4)
-        -> sub2_out = Sub2Voice::process(phasor, sub_anchor_w0, sub_breath_gain)
-  SUBB (sub-bass "breath"): sub_breath_gain = one-pole follower
-     (kSubBreathTauSec, ~0.75 s) of (1 + (sub_env_focus - 0.5)*2 * (SUBB*kSubBreathMax)),
-     floored at kSubBreathFloor (0.2), capped at 1 + kSubBreathMax (1.6).
-     SUBB = 0 -> gain constant 1.0 (the OLD static low end — regression-safe);
-     default ~30% -> the low end gently follows the LOUDEST (breath-focus)
-     voice's envelope (the drone's low end "breathes in" with the note that
-     is currently loudest). At 1 note sub_env_focus = that note's A-H-R, so
-     the low end swells with the attack and sinks on the release.
+      (shared per-sample: the random walks, FM index, JIT are ONE drone; the
+       A/B wavetables are the SHARED WTE table @ the SHARED morph (wte_morph);
+       the low end is carried by the WTE table's subharmonic partials — there
+       is NO separate sub-bass branch any more, see the "EDITOR WAVETABLE"
+       block below)
 
 EDITOR WAVETABLE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; the A+B voices' SOLE wavetable source):
   A 16 morph-frame × 256-point wavetable bank (16-bit int16, 8 KB) generated
@@ -97,6 +79,27 @@ EDITOR WAVETABLE (osc_wte.h, osc_wte_doc.h, osc_wte_render.h; the A+B voices' SO
   separate parallel "editor voice" (its own proc_ph phasor + the PLEV level
   knob) was removed: PMORPH (frame position) and PLEV (voice level) are
   NO-OPS now (superseded: morph = Wave LFO 1, level = MAIN).
+
+  DEFAULT WAVETABLE (wte_default_doc / wte_default_wave in osc_wte_doc.h; the
+  on-hardware / pre-document recipe, mirrored 1:1 in the web editor's
+  createDefaultWave, store.svelte.ts). The 16 frames are NOT 16 bare sines:
+  each frame is a SUM of four sine sources, normalized per frame so the table
+  peaks in ~[-1, +1] (level-stable across the morph):
+    [0] fundamental  (harmonic 1,        Sine)  — the note itself, gain 1/norm
+    [1] organ colour (harmonic 2,        Organ) — top-end openness, gain
+        (0.10 + 0.90*t)/norm, t = frame/15 (0.10 at frame 0 -> 1.00 at frame 15)
+    [2] breathing    (harmonic 1,        FM Sine) — a slow wobble that
+        de-correlates the frames so the morph audibly evolves, gain 0.25/norm
+    [3] SUBHARMONIC  (harmonic 0.25 = f/4, Sine) — the LOW END. gain
+        (0.18 + 0.37*end)/norm, where end = |frame-7.5|/7.5 (1 at frames 0/15,
+        0 at the middle). A full Wave-LFO sweep therefore PUMPS the low end
+        (swells at the table ends, dips at the middle) — organic bass movement
+        under the static note.
+  This is the whole reason the SUB1/SUB2 "sub voices" were REMOVED: the drone's
+  low end now lives INSIDE the wavetable as a subharmonic partial of the same
+  note (f/4 quantizes exactly in the 8-bit wire format, step 16/255 -> 0.249,
+  bit-stable web-sim <-> wasm). The editor's harmonic control allows < 1 (min
+  0.25, step 0.25) so any source can be a subharmonic.
 
 PER-VOICE ENVELOPE + POLYPHONIC LOUDNESS (osc_mix.h, osc_constants.h):
   Each of the 6 voices is gated by its OWN A-H-R envelope (v.eg.env) in the
@@ -130,34 +133,32 @@ COMMON POST-STAGE (once, on the compensated, per-voice-enveloped sums):
   -> COMB (IIR resonator, COMB feedback, fixed delay)
   = y_main
 
-out = tanh( kOutSat * kOutDrive * ( y_main*MAIN*DUCK
-            + sub*SUB1 + sub2_out*SUB2
-            + (sum_ring*env_comp)*RMOD*MAIN*DUCK ) )
-  where DUCK = constant sidechain (kDuckConstant = 0.5, floored at 0.7)
-        and the per-voice envelopes are already folded into the sums
-        (each sum_main/ring term was multiplied by that voice's v.eg.env in
-        the loop); the shared sub bass is ONE pair (no per-voice gating —
-        the anchor + SUBB gain handle the cluster-level breathing). There is
-        NO common output envelope: N notes each fade in/out on their own,
-        the cluster reads as one blended drone whose level is the sum of the
-        individually-enveloped voices.
+out = tanh( kOutSat * kOutDrive * ( y_main*MAIN
+            + (sum_ring*env_comp)*RMOD*MAIN ) )
+  where the per-voice envelopes are already folded into the sums (each
+        sum_main/ring term was multiplied by that voice's v.eg.env in the
+        loop). There is NO separate sub/sub2 low-end branch and NO sidechain
+        DUCK any more (both were removed with the SUB1/SUB2 sub voices — the
+        low end is now inside the WTE wavetable, see the "DEFAULT WAVETABLE"
+        block). There is NO common output envelope: N notes each fade in/out
+        on their own; the cluster reads as one blended drone whose level is
+        the sum of the individually-enveloped voices.
 
-Mono-exactness: with 1 note, that voice's env gates its own contribution,
-env_comp = 1/1 = 1, and the shared sub bass anchor = that note's w0 (exactly
-the old per-voice sub pitch), so the single-note path is numerically
-identical to the pre-cluster mono unit EXCEPT the SUBB knob (default ~30%)
-now gently breathes the low end with the note's A-H-R (the "the low end
-follows the breathing note" behaviour). Per-voice envelope + 1/N loudness +
-the shared anchor are what make the polyphonic cluster both level-independent
-of note count AND free of the 1->2 note boundary dip.
+Mono-exactness: with 1 note, that voice's env gates its own contribution and
+env_comp = 1/1 = 1, so the single-note path is numerically identical to the
+pre-cluster mono unit EXCEPT the old SUB1/SUB2 sub voices + SUBB breath +
+sidechain duck (all removed — the low end now lives inside the WTE wavetable).
+Per-voice envelope + 1/N loudness are what make the polyphonic cluster both
+level-independent of note count AND free of the 1->2 note boundary dip.
 ```
 
 The CPU cost scales ~linearly with the number of ACTIVE notes, not with
-kVoiceCount: the heavy SVF/formant/comb/duck saturator run only ONCE on the
+kVoiceCount: the heavy SVF/formant/comb saturator run only ONCE on the
 summed signal (shared post-stage); each active note adds only its lightweight
-source (2 wavetable scans + FM-smooth + envelope + accumulators). The ONE
-shared sub bass (SUB1/SUB2 pair + anchor + SUBB gain) runs once, outside the
-per-voice loop, at a constant cost independent of note count.
+source (2 wavetable scans + FM-smooth + envelope + accumulators). (The old
+shared sub bass — SUB1/SUB2 pair + anchor + SUBB gain — is gone; the low end
+now lives inside the WTE wavetable, so there is no separate per-sample bass
+pass.)
 Measured (web-sim, `Osc::process` only, no FX, median of 5 runs): the shared
 floor (post-stage + 6 idle-voice envelope passes) is ~95 ns/sample, and each
 ADDED active note costs ~77 ns/sample. So: 1 note ≈ 172 ns/smp, 4 notes ≈ 410
@@ -174,33 +175,14 @@ comparison, which is what matters for the voice-count trade-off.)
 
 
 
-SUB1 (shared)  : sine at ANCHOR/2 (one octave below the cluster's env-weighted
-                 mean base rate, -4 c detune, LFO-FM) -> * SUBB-breath-gain    <-- SHARED (not per-voice)
-SUB2 (shared)  : sine at ANCHOR/4 -> soft tanh -> 200 Hz LPF -> pitch gate
-                 -> * SUBB-breath-gain                                         <-- SHARED (not per-voice)
-ANCHOR         : one-pole relaxed (kSubAnchorAlpha, ~250 ms) env-weighted mean
-                 of the sounding voices' base rates: sum(env*w0)/sum(env).
-                 0 notes -> ANCHOR relaxes to 0 (the sub fades out with the
-                 cluster). Note on/off -> the sub pitch MORPHS smoothly.
-SUBB-breath    : one-pole follower (kSubBreathTauSec, ~0.75 s) of
-                 (1 + (sub_env_focus - 0.5)*2 * (SUBB * kSubBreathMax)),
-                 floored at kSubBreathFloor (0.2), capped at 1 + kSubBreathMax
-                 (1.6). SUBB = 0 -> gain constant 1.0 (the OLD static low
-                 end). Default ~30% -> the low end gently follows the LOUDEST
-                 (breath-focus) voice's A-H-R (the drone's low end "breathes
-                 in" with the note that is currently loudest).
+(SUB1 / SUB2 / ANCHOR / SUBB-breath / DUCK: REMOVED — the separate sub-octave
+sub voices and the constant sidechain duck are gone. The low end now lives
+INSIDE the WTE wavetable as a subharmonic partial (f/4), and the main + RMOD
+mix is un-ducked. See the "DEFAULT WAVETABLE" block above.)
 RING voice : (wavA * wavB) * RMOD * MAIN   (A*B ring-mod, ducked by MAIN)
 
-DUCK: CONSTANT sidechain — envelope follower of |SUB1 + SUB2| (one-pole
-      abs-peak) ducks y_main + y_ring by a fixed kDuckConstant (0.5), floored
-      at 0.7 (~-3 dB), ~75 ms tau: the low end is the anchor of the drone, the
-      main tone "sinks" out of the way of the low end. Always on. (The
-      follower now tracks the SHARED sub pair — one |sub+sub2|, not the sum of
-      N per-voice subs.)
-
 The A-H-R envelope (2 s / 2 s) gates each voice in the accumulation loop
-(note attack/release); the shared sub bass is NOT per-voice gated (the anchor
-+ SUBB gain handle the cluster-level breathing).
+(note attack/release). There is no separate low-end branch to gate any more.
 ```
 
 Key facts about the path:
@@ -454,8 +436,8 @@ default and effect:
 | 5 | SM2 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Timbre** stream time constant. |
 | 6 | SPD3 | % | 0..100% -> 0.1 s..10 s (log) | 50% | **Density** stream period. |
 | 7 | SM3 | % | 0..100% -> 10 ms..1.5 s (log) | 50% | **Density** stream time constant. |
-| 8 | SUB1 | % | 0..100% | 50% | Sub-octave (f/2) sine level. |
-| 9 | SUB2 | % | 0..100% | ~40% | Second sub (f/4) saturated level (0 = off). The bass is the drone's anchor, so the randomizer keeps it always audible (window 25..70%). |
+| 8 | SUB1 | (no-op) | — | — | **REMOVED**: the SUB1 f/2 sub-octave sine voice is gone. The low end now lives INSIDE the WTE wavetable as a subharmonic partial (the f/4 source in the default recipe — see the "DEFAULT WAVETABLE" block). The raw index is kept so the parameter layout is stable; the knob no longer drives any DSP and is not rendered in the web UI. |
+| 9 | SUB2 | (no-op) | — | — | **REMOVED**: the SUB2 f/4 sub-2 voice is gone (low end is in the WTE wavetable). Raw index kept for a stable parameter layout; no DSP, not rendered. |
 | 10 | SAT | 0..300 | 0..3.0 drive | 100 (1.0x) | Main A+B saturator drive. |
 | 11 | ASYM | +/-% | -100..+100% | 0% | Saturator asymmetry (even harmonics; >0 = positive half harder). |
 | 12 | FLD | % | 0..100% | 0% (off) | Pre-drive wavefolder depth (metallic edge). |
@@ -482,7 +464,7 @@ default and effect:
 | 31 | FMVT | A/E/I/O/U | 0..100% -> 5 vowels (A-E-I-O-U morph) | 50% (mid) | Formant vowel position: morphs BOTH comb delays (the vowel's F1+F2 pair). The stage is OFF until FLVL>0, so this dials the vowel silently. |
 | 32 | FLVL | % | 0..100% | 0% (off) | Formant stage level: shared feedback (0..0.9) + parallel-add gain of the two comb resonators (F1 peak 135..365 Hz, F2 peak 435..1145 Hz, gain 1.0). 0 = transparent. |
 | 33 | COMB | % | 0..100% -> 0..0.9 fb (fixed ~190 Hz delay) | 0% (off) | Comb resonator: IIR feedback peak + harmonics (wooden/cavernous tint). |
-| 34 | SUBB | % | 0..100% -> 0..0.6 swing | ~30% | **Sub-bass breath**: the ONE shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note) follows the LOUDEST (breath-focus) voice's A-H-R envelope. 0% = the old static low end (regression-safe); ~30% (default) = a gentle +/-18% swing — the drone's low end "breathes in" with the note that is currently loudest. The anchor (pitch) is ALWAYS the env-weighted mean (one stable fundamental under the cluster, note on/off morphs the sub pitch smoothly); only the LEVEL breathes, and only by the SUBB depth. The randomizer window is 0..60%. |
+| 34 | SUBB | (no-op) | — | — | **REMOVED**: the shared sub bass (SUB1/SUB2) is gone, so there is no "sub-bass breath" to breathe. The low end now lives INSIDE the WTE wavetable as a subharmonic partial (and a full Wave-LFO sweep pumps it — see the "DEFAULT WAVETABLE" block). Raw index kept for a stable parameter layout; no DSP, not rendered. |
 | 35 | WLFR | 0 H / 0.NNN H / 0.N H / 1 H | 0..1 Hz (LOG: linear knob -> exponential freq; raw 0 = 0 Hz / OFF) | 0 H (LFO OFF) | **Internal wave-LFO 1 frequency**: the LFO that drives the EDITOR wavetable (WTE) morph — the morph position across the 16 frames is 7.5 + lfo * 7.5 (see the "WTE wavetable morph" block in the Sound path). LOG scale (raw 0 = 0 Hz / LFO OFF; else 10^(3*raw/1023 - 3) = 0.001..1 Hz across 3 decades, the same convention as the SPDx/SMTx knobs), so each equal knob step is a constant multiplier of the previous frequency — fine control near 0. 0 = static table (the factory default). This REPLACES the hardware's OSC-button RATE knob (which is now a NO-OP, `setShapeLfo()` is a stub). |
 | 36 | WLFD | % | 0..100% (linear) | 100% | **Internal wave-LFO 1 morph depth**: 0 = the WTE table stays static at its middle frame (7.5), 100% = the morph sweeps the FULL table (frame 0 to frame 15, and back). The factory default is 100%, so any non-zero WLFR drives the morph across all 16 editor waves. This REPLACES the hardware's OSC-button SHAPE knob (now a NO-OP). |
 | 37 | W2LR | (legacy) 0 H | (legacy) | *No-op* (superseded by the WTE editor wavetable): the stream-2 wave-LFO is gone with the 2D morph. Keeps its layout slot. |
@@ -542,24 +524,19 @@ decrease by BRT / (n_active - 1), so the SUM of all levels stays constant (the
 overall loudness does not pump). The transition is SMOOTH: each voice's level
 tracks its target with the SMT time constant (exponential, non-linear). With
 only 1 note, breathing is off (level stays at 1.0). The per-voice BREATH
-(BRT) breathes only the MAIN (A+B) voice level; the SHARED sub bass
-(SUB1/SUB2, ONE pair for the whole cluster) breathes independently via the
-**SUBB** knob (sub-bass breath depth) — see the SUBB row in the parameter
-table and the "SHARED SUB BASS" block in the Sound path. At SUBB = 0 the low
-end stays fully static (the old behaviour); at the default ~30% the low end
-gently follows the loudest (breath-focus) voice's A-H-R.
+(BRT) breathes only the MAIN (A+B) voice level. (The old SHARED sub bass
+(SUB1/SUB2) + its independent **SUBB** "sub-bass breath" are REMOVED — the
+low end now lives INSIDE the WTE wavetable as a subharmonic partial, and a
+full Wave-LFO sweep pumps it; see the "DEFAULT WAVETABLE" block.)
 
 ### Non-editable (fixed) behaviour
 
 | Behaviour | Value | Notes |
 |-----------|-------|-------|
 | Attack / release | 2 s / 2 s | Exponential A-H-R, own envelope (platform EG open). |
-| Sub-1 detune | -4 c | One octave below the ANCHOR, fixed. |
-| Sub anchor relax | kSubAnchorAlpha (~250 ms) | One-pole relax of the env-weighted mean w0 (sum(env*w0)/sum(env)): note on/off MORPHS the shared sub pitch smoothly (no click). 0 notes -> anchor relaxes to 0 (the sub fades out with the cluster). |
-| Sub breath follower | kSubBreathTauSec (~0.75 s), depth kSubBreathMax (0.6), floor kSubBreathFloor (0.2) | One-pole follower for the SUBB knob: gain wanders in [floor, 1+kSubBreathMax] around the loudest (breath-focus) voice's A-H-R. SUBB=0 -> gain constant 1.0 (the old static low end). |
-| Sub-2 pitch gate | ANCHOR < ~120 Hz (f/4 < 30 Hz) | Gate closes; first-order smoothed. (The gate now tracks the shared ANCHOR, not any single voice's base.) |
+| Low end | inside the WTE wavetable (f/4 subharmonic) | The old SUB1 (f/2) / SUB2 (f/4) sub voices, the env-weighted ANCHOR, the SUBB breath, and the constant sidechain duck are all REMOVED. The drone's low end is now the f/4 subharmonic partial of the note carried by the default wavetable recipe (see the "DEFAULT WAVETABLE" block); it is read out of the table by the A+B voices, so it is gated per-voice like the rest of the table. |
 | WTE table morph | centered on frame 7.5, full 0..15 sweep at WLFD = 100% | The editor-wavetable morph position is the wave-LFO 1 (WLFR/WLFD/WLFS/WLFG): `wte_morph = 7.5 + lfo * 7.5` (at 100% depth the LFO sweeps all 16 frames; at 0 depth the table is static at the middle). |
-| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The WTE editor-wavetable morph is driven ENTIRELY by the ONE INTERNAL wave-LFO 1 (edit params WLFR / WLFD / WLFS / WLFG; see the Edit parameters table above and `osc_lfo_sim.h`). The old two-stream 2D morph (W2LR / W2LD / WMIX / the wave-mix LFO) is gone with the stock banks (those params are no-ops now). The old +/-5 c sub-octave FM (LFO on the SUB1 phasor) is DISABLED. |
+| Platform shape-LFO | NO-OP | The platform's OSC-button RATE/SHAPE knobs (delivered via `setShapeLfo()`) are IGNORED — the callback is a stub. The WTE editor-wavetable morph is driven ENTIRELY by the ONE INTERNAL wave-LFO 1 (edit params WLFR / WLFD / WLFS / WLFG; see the Edit parameters table above and `osc_lfo_sim.h`). The old two-stream 2D morph (W2LR / W2LD / WMIX / the wave-mix LFO) is gone with the stock banks (those params are no-ops now). (The old +/-5 c sub-octave FM on the SUB1 phasor is GONE with the sub voices.) |
 | Output makeup | kOutDrive (~+8 dB) then tanh (kOutSat) | Saturates to 1.0; tune kOutDrive, not the mix budget. |
 | Formant stops | A 730/1090, E 530/1840, I 270/2290, O 450/1020, U 300/870 Hz | F1/F2 per vowel; two one-pole IIR combs (delay = sr/(2*f) -> peaks at 135..365 / 435..1145 Hz), shared feedback by FLVL, parallel-add gain 1.0; morphed by FMVT. |
 | Comb delay | 250 smp (~190 Hz peak) | Fixed IIR-comb delay length; feedback (0..0.9) by the COMB knob. |
@@ -606,7 +583,7 @@ downstream MOD / DELAY / REVERB FX apply to the whole DRONE output.
 | osc_saturator.h | Stateless wavefolder (fold) + asymmetric tanh saturator (saturate). |
 | osc_svf.h | 12 dB/oct state-variable low-pass (cutoff/resonance/dry-wet + stability clamps). |
 | osc_random_walk.h | RandomWalk -- multi-channel wandering (exponential target cadence). |
-| osc_sub2.h | Sub2Voice -- f/4 saturated, LPF'd, pitch-gated sub. |
+| (osc_sub2.h removed) | The f/4 Sub2Voice is gone — the low end now lives inside the WTE wavetable as a subharmonic partial (see the "DEFAULT WAVETABLE" block). |
 | osc_detune.h | Detune::factor() -- 2^(cents/1200) Taylor expansion (no libm). |
 | osc_envelope.h | AhEnvelope -- single-voice A-H-R state machine. |
 | osc_lfo_sim.h | INTERNAL wave-LFO synthesizer (`ShapeLfoSim`; the LIVE instance is `lfo_sim_`, driving the WTE editor-wavetable morph via the WLFR / WLFD / WLFS / WLFG edit parameters — the morph position is 7.5 + lfo * 7.5. The old `lfo_sim2_` (stream-2 bank morph) and `lfo_mix_` (wave-mix crossfade) instances no longer process in the audio path — stream 2 / wave-mix are gone with the stock banks). |

@@ -143,66 +143,22 @@
   // sits near the A+B level (not louder, not quieter).
   static constexpr float    kMixRing = 0.5f;
 
-// ---- Sub-octave sine (low-end body) ------------------------------------------
-// The sub voice is a fixed sine one octave below the base note (w0/2). It is
-// slightly detuned below the true octave (-4 cents) so it does not comb-filter
-// against the fundamental, and its PHASOR is FM'd by the platform shape-LFO
-// (setShapeLfo, L-rate) at up to kSubLfoFmCents cents, giving a slow, organic
-// "swell" to the low end. It is mixed in parallel with the saturator (after
-// the A+B mix), so it adds body without feeding the drive stage.
-  // Fixed detune of the sub-octave sine (cents). Slightly below -4 c so the
-  // sub sits just under the fundamental instead of combing with it.
-  static constexpr float    kSubDetuneCents = -4.f;
-  // Maximum phase-FM depth applied to the sub phasor by the shape-LFO (cents).
-  // The LFO value is (-1, 1), so the sub phasor is modulated by
-  // lfo * kSubLfoFmCents * TWO_PI / 1200 radians/sample -> a gentle, slow
-  // pitch wobble. 5 c keeps the low end musical (no warble).
-  static constexpr float    kSubLfoFmCents = 5.f;
-
-// ---- Polyphonic sub anchor (ONE shared sub bass for the whole cluster) ------
-// Since the polyphonic build, SUB1 (f/2) and SUB2 (f/4) are NOT per-voice any
-// more: the whole kVoiceCount cluster feeds ONE shared sub pair. The anchor
-// frequency is the ENV-WEIGHTED mean of the sounding voices' base rates
-// (w0_sub_anchor = sum(env_i * w0_i) / sum(env_i)), followed by a one-pole
-// relax (kSubAnchorAlpha) so a note off/on morphs the sub bass pitch smoothly
-// instead of stepping (or clicking). This is the drone's "low end = anchor":
-// one stable fundamental under the whole cluster. The level of that shared sub
-// bass BREATHEs with the loudest (breath-focus) voice: the SUBB knob (0..1)
-// sets the swing depth of a one-pole follower (kSubBreathTauSec) that tracks
-// (1 - depth .. 1 + depth) around the focus voice's envelope. At SUBB = 0 the
-// gain is constant 1.0 (regression-safe: the old static low end). At 0 notes
-// (env_sum = 0) the anchor relaxes to 0 (the sub fades out with the cluster).
-  // One-pole anchor-w0 relax coefficient (per sample): ~250 ms at 48 kHz.
-  // Fast enough to track a single note's A-H-R (2 s) without lag, slow enough
-  // to smooth the 1->N note-count transitions into a glide, not a step.
-  static constexpr float    kSubAnchorAlpha  = 0.005f;
-  // Maximum swing of the sub-bass breath gain (SUBB knob, 0..1 -> 0..kSubBreathMax
-  // depth): the gain wanders in [1 - d, 1 + d] around 1.0. 0.6 = +/-60%: a
-  // clearly audible "the low end follows the breathing note" without pumping.
-  static constexpr float    kSubBreathMax    = 0.6f;
-  // One-pole follower time constant (~0.75 s): slow enough to follow the
-  // breath focus rotation (breath stream period ~3 s) but not its wobble.
-  static constexpr float    kSubBreathTauSec = 0.75f;
-  // Floor for the sub-bass breath gain (the low end never fully vanishes while
-  // a note sounds, even when the focus voice is at its quietest).
-  static constexpr float    kSubBreathFloor  = 0.2f;
+// (The sub-octave / sub-2 "sub bass" constants -- kSubDetuneCents,
+//  kSubLfoFmCents, kSubAnchorAlpha, kSubBreathMax/TauSec/Floor, kMixSub,
+//  kMixSub2 -- and kSubW0Scale (below) are REMOVED: the SUB1 (f/2) / SUB2 (f/4)
+//  sub voices are gone. The low end now lives INSIDE the WTE wavetable as
+//  subharmonic partials (the f/4 source in wte_default_wave, osc_wte_doc.h),
+//  so there is no separate bass branch, anchor, breath gain, or mix gain.)
 
 // ---- Final-mix gains ----------------------------------------------------------
-// Worst-case peaks (see the budget comment in process()):
-//   A+B saturator out * kMixOsc < 0.5
-//   SUB1 * kMixSub < 0.5
-//   SUB2 * kMixSub2 < 0.4
-// against the driven A+B voice); the sub-voice cluster lands in the -12dBFS
-// .. 0dBFS dynamic range without ever over-driving the final hard clip
-// (which only triggers when the branches peak simultaneously).
+// Worst-case peaks (see the budget comment in process()): the A+B branch is
+// the only main branch now (the sub/sub2 low-end branches are gone -- the low
+// end is in the WTE wavetable), plus the RMOD derived voice.
 // (kMixChordDirect was removed — the chord/interval concept is gone.)
   // A+B mixed output (pre-saturator) scale.
   static constexpr float    kMixOsc  = 0.5f;
-  // Sub-octave sine (parallel) scale.
-  static constexpr float    kMixSub  = 0.5f;
-  // Second sub (f/4) scale.
-  static constexpr float    kMixSub2 = 0.4f;
-  // (kMixChordDirect was removed — the chord/interval concept is gone.)
+  // (kMixSub / kMixSub2 removed with the sub voices -- the low end is in the
+  //  WTE wavetable now.)
   // (kMixRing for the RMOD parallel voice is defined in the RMOD block above,
   // next to kJitMaxCycles / kFm*, so the enrichment constants stay together.)
 
@@ -237,10 +193,8 @@
   static constexpr float    kRefHz        = 880.f;           // A4
   // 2*pi for phasor increments and the sub sine.
   static constexpr float    kTwoPi        = 6.283185307179586f;
-  // Precomputed scale factor for the sub-octave phasor:
-  //   w0_sub_ = w0_ * kSubW0Scale  (== w0/2 * 2^(kSubDetuneCents/1200))
-  // so the audio path does not recompute 2^(-4/1200) on every setPitch().
-  static constexpr float    kSubW0Scale   = 0.4988460883f; // 0.5 * 2^(-4/1200)
+  // (kSubW0Scale removed with the sub voices -- the sub-octave phasor is gone;
+  //  the low end now lives inside the WTE wavetable as subharmonic partials.)
   // (Note glide / portamento removed: kGlide* constants and the kTwoPow 2^i
   //  LUT are gone. Each cluster note now starts at its exact pitch with a
   //  random per-voice start phase — no glide, no per-sample w0 slide.)
@@ -364,26 +318,10 @@
   };
   static constexpr float    kFormantGain  = 1.0f;  // parallel-add gain (formant color on top of main)
 
-// ---- Sidechain ducking (sub-bass -> main voice, the drone's "pump") ---------
-// CONSTANT sidechain duck (formerly the DCK knob, removed from the editable
-// set): the drone's body lives in the low end, so the low end must always read
-// as the STABLE anchor. An envelope follower tracks the |SUB1 + SUB2 output|
-// energy (a cheap one-pole abs-peak follower, computed every sample) and the
-// follower then DUCKS the MAIN voice (A+B + RMOD). The sub-bass becomes the
-// constant "anchor" and the main tone "sinks" out of the way of the low end,
-// the classic sidechain "pump" in reverse: dense SUB1/SUB2 push the main tone
-// down a few dB so the low end owns the spectrum.
-//
-// The duck AMOUNT is a fixed constant (kDuckConstant = 0.5) -- a clearly
-// audible sidechain. The duck gain is floored at kDuckFloor (0.7, ~-3 dB) so
-// the main tone only "sinks", it never disappears (a drone must keep its pitch
-// anchor), and the follower's one-pole time constant (kDuckFollowTauSec,
-// ~75 ms attack/release) sets how fast the sink releases -- slow enough to
-// read as a smooth "breath" on the low end instead of a clicky gate.
-  static constexpr float    kDuckConstant     = 0.5f;   // fixed duck amount (50%)
-  static constexpr float    kDuckFollowTauSec = 0.075f; // follower time constant (~75 ms)
-  static constexpr float    kDuckFloor        = 0.7f;   // duck gain floor (~-3 dB, never silent)
-  static constexpr float    kDuckScale        = 1.0f;   // follower -> duck-gain scaling
+// (The CONSTANT SIDECHAIN DUCK -- kDuckConstant / kDuckFollowTauSec /
+//  kDuckFloor / kDuckScale -- is REMOVED with the SUB1/SUB2 sub voices: there
+//  is no separate low-end branch to duck the MAIN voice against (the low end
+//  now lives inside the WTE wavetable), so the main + RMOD mix is un-ducked.)
 
 // -----------------------------------------------------------------------------
 // Polyphonic-cluster LOUDNESS compensation (Variant A; see osc_mix.h)

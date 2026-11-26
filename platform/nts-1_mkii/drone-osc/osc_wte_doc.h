@@ -215,28 +215,84 @@ struct WTEDoc
 };
 
 // ---- Factories (defaults) -----------------------------------------------------
+//
+// The DEFAULT document is a 16-frame DRONE wavetable, NOT 16 bare sines. The
+// A+B voices read this table at a SHARED morph position (wte_morph = 7.5 at
+// rest -- the table middle, frame 7/8 -- when the Wave LFO is off). So the
+// "default sound" is the MIDDLE waves, and the LFO sweep moves across the rest.
+//
+// Each default wave is a SUM of up to four sine sources:
+//   [0] fundamental  (harmonic 1) -- the note itself;
+//   [1] organ colour (harmonic 2, type Organ = f + 0.5*2f + 0.33*3f) -- the
+//       "openness" of the top end, grown from 0 (frame 0) to full (frame 15);
+//   [2] FM Sine      (type FM Sine: sin(2pi(x + 0.5 sin 4pi x))) -- a slow
+//       "breathing" wobble that de-correlates the 16 frames so the morph
+//       audibly evolves instead of crossfading two identical shapes;
+//   [3] SUBHARMONIC  (harmonic 0.25 = f/4, type Sine) -- a quiet sub-octave
+//       partial that makes the drone bass-heavy. Its gain swells at the table
+//       ENDS (frames 0 and 15) and dips at the middle (frame 7.5): a full
+//       Wave-LFO sweep therefore "pumps" the low end, which reads as organic
+//       bass movement under the static note.
+//
+// The subharmonic (f/4) is a FRACTIONAL harmonic (< 1): the wavetable's phase
+// phasor runs at the note rate, so a fractional harmonic reads as a sub-octave
+// partial of the SAME note. f/4 quantizes EXACTLY in the 8-bit wire format
+// (harmonic step = 16/255; 0.25 -> q = 4 -> 0.249), so it is bit-stable across
+// the web-sim -> wasm round-trip. f/3 does NOT (0.333 -> q 9 -> 0.566, a
+// different pitch), so we use only f/4. (The old SUB1/SUB2 "sub voices" are
+// gone -- the low end now lives inside the wavetable itself, per the user.)
+//
+// Gains are scaled by a per-frame normalizer so every frame peaks in
+// roughly [-1, +1] (the renderer clips at +/-1): the organ source at full
+// depth (frame 15) alone peaks near 1.0, so its gain is the reference. This
+// keeps the morph level-stable (no loudness "breathing" as the LFO sweeps).
+//
+// Mirrored 1:1 in the web editor (createDefaultWave in
+// websim/app/src/lib/editor/store.svelte.ts) -- keep the two in sync.
 
-// A wave with a single enabled sine source (harmonic = index+1 so the 16
-// default waves read as a closed->open harmonic morph), Sum combine, no
-// modifiers, and empty warp stacks (mirror of createDefaultWave in
-// store.svelte.ts).
+// Per-frame normalizer (sum of the enabled source gains) so the table is
+// level-stable across the morph. Computed from the same source recipe, so it
+// is a pure function of the index.
+inline float wte_default_norm(uint8_t index)
+{
+  const float t = static_cast<float>(index) / 15.f;
+  const float organ = 0.10f + 0.90f * t;
+  const float fm = 0.25f;
+  const float end = static_cast<float>((index <= 7U) ? (7U - index) : (index - 7U)) / 7.f;
+  const float sub = 0.18f + 0.37f * end;
+  return 1.0f + organ + fm + sub;
+}
+
+// The default drone wave at frame `index` (0..15). Sum combine, no modifiers,
+// empty warp stacks. See the comment above wte_default_norm for the recipe.
 inline void wte_default_wave(uint8_t index, WTEWaveDoc *w)
 {
-  for (uint8_t s = 0; s < WTE_SOURCES_PER_WAVE; s++)
-  {
-    WTESourceDoc *src = &w->sources[s];
-    src->enabled = (s == 0U) ? 1U : 0U;
-    src->type = 0U; // Sine
-    src->harmonic = (s == 0U) ? static_cast<float>(index + 1U) : 1.f;
-    src->phase = 0.f;
-    src->gain = 1.f;
-    src->bias = 0.f;
-  }
+  const float t = static_cast<float>(index) / 15.f;            // 0..1 (openness)
+  const float organ = 0.10f + 0.90f * t;                       // top-end colour
+  const float fm    = 0.25f;                                   // breathing wobble
+  const float end   = static_cast<float>((index <= 7U) ? (7U - index) : (index - 7U)) / 7.f; // 1..0..1
+  const float sub   = 0.18f + 0.37f * end;                     // f/4 subharmonic
+  const float norm  = wte_default_norm(index);
+
+  WTESourceDoc *s;
+  s = &w->sources[0]; // fundamental
+  s->enabled = 1U; s->type = 0U; // Sine
+  s->harmonic = 1.f; s->phase = 0.f; s->gain = 1.0f / norm; s->bias = 0.f;
+  s = &w->sources[1]; // organ colour (harmonic 2)
+  s->enabled = 1U; s->type = 26U; // Organ
+  s->harmonic = 2.f; s->phase = 0.f; s->gain = organ / norm; s->bias = 0.f;
+  s = &w->sources[2]; // FM Sine (breathing wobble)
+  s->enabled = 1U; s->type = 12U; // FM Sine
+  s->harmonic = 1.f; s->phase = 0.f; s->gain = fm / norm; s->bias = 0.f;
+  s = &w->sources[3]; // subharmonic (f/4)
+  s->enabled = 1U; s->type = 0U; // Sine
+  s->harmonic = 0.25f; s->phase = 0.f; s->gain = sub / norm; s->bias = 0.f;
+
   w->combine = WTE_COMBINE_SUM;
   w->invert = 0U;
   w->mirror = 0U;
-  for (uint8_t s = 0; s < WTE_SOURCES_PER_WAVE; s++)
-    w->psr_cnt[s] = 0U;
+  for (uint8_t i = 0; i < WTE_SOURCES_PER_WAVE; i++)
+    w->psr_cnt[i] = 0U;
   w->out_cnt = 0U;
 }
 

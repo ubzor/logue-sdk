@@ -54,8 +54,12 @@ export interface ParamGroup {
 
 // Semantic groups (UI-only; DSP enum order in osc.h is untouched). 3-column
 // Parameters layout; each group becomes one titled block in its `col`.
-// WALK-gap param (41) deliberately NOT listed: rendered only as the gap row
-// next to its Shape radio group (40), hidden unless Walk.
+//
+// The WAVETABLE group (35/36/40 + walk-gap 41) is NOT here anymore: it was
+// moved to the "Wavetable" tab (WaveLfoPanel.svelte, to the right of the 3D
+// surface view). It is also EXCLUDED from randomization/reset — Rnd/Rnd-Osc/
+// Rnd-All/Reset never re-roll 35/36/40/41 (see randomizeAllRaw + the sync
+// loops below, which skip those indices).
 //
 // The WTE wavetable (the /editor 16x256 table) is the A+B cluster's SOLE
 // wavetable source: its morph position is the internal Wave LFO 1 (35/36,
@@ -65,14 +69,18 @@ export interface ParamGroup {
 // 56) are GONE from the UI — they are DSP no-ops now (see osc_param_apply.h).
 export const PARAM_GROUPS: ParamGroup[] = [
   // ---- Column 0 ----
-  { title: "WAVETABLE",  col: 0, items: [35, 36, 40] },
   { title: "",           col: 0, items: [10, 11, 12, 27, 28, 25, 26, 0], divider: true },
   { title: "FORMANT",    col: 0, items: [31, 32] },
   // ---- Column 1 ----
   { title: "WANDER",     col: 1, items: [1, 2, 3, 4, 5, 6, 7] },
   { title: "WANDER TGT", col: 1, items: [16, 21, 17, 18, 29, 30] },
   // ---- Column 2 ----
-  { title: "VOLUME",     col: 2, items: [15, 22, 23, 24, 8, 9, 34] },
+  // (Sub 1 / Sub 2 (8,9) and Sub Bass Bre (34) are GONE from the VOLUME group:
+  //  the sub-octave sub voices + their breath/duck were removed -- the low end
+  //  now lives INSIDE the WTE wavetable as subharmonic partials. Their raw
+  //  indices stay in EDIT_PARAM_NAMES/DEFAULT_RAW (stable 57-param layout) but
+  //  no slider is rendered and they are excluded from randomization/reset.)
+  { title: "VOLUME",     col: 2, items: [15, 22, 23, 24] },
   { title: "FILTER",     col: 2, items: [19, 20, 54] },
   { title: "CLUSTER",    col: 2, items: [33] },
   { title: "FM MOD",     col: 2, items: [49, 48, 50, 51, 52, 53] },
@@ -346,11 +354,12 @@ if (DEFAULT_RAW.length !== EDIT_PARAM_COUNT) {
  * (1:1 port of legacy randomizeAllRaw, ~1116..1298).
  *
  * WTE note: the A+B voices read the /editor WTE wavetable (sole source).
- * Randomization drives the live Wave LFO 1 (Rate/Depth/Shape/Gap — the
- * table morph) and leaves MAIN (the table's level) in its audition window.
- * The removed stock-bank / stream-2 / wave-mix / "proc wavet" params
- * (13/14/37..47/55..56) are no-ops now — they keep their full 0..1023
- * default and are NOT re-rolled.
+ * The Wave LFO 1 group (35/36/40/41 — the table morph) is NOT re-rolled:
+ * the user owns it in the "Wavetable" tab (WaveLfoPanel) and Rnd/Reset leave
+ * it untouched (raws keeps the current state values, see the loops below).
+ * MAIN (the table's level) stays in its audition window. The removed
+ * stock-bank / stream-2 / wave-mix / "proc wavet" params (13/14/37..47/55..56)
+ * are no-ops now — they keep their full 0..1023 default and are NOT re-rolled.
  */
 export function randomizeAllRaw(): number[] {
   const raws = DEFAULT_RAW.slice(); // full 0..1023 defaults; no-ops untouched
@@ -369,18 +378,16 @@ export function randomizeAllRaw(): number[] {
     set(n, r1023());
   for (const n of ["Morph Wander", "Drive Wander", "Fold Wander", "Cutoff Wander"])
     set(n, r1023());
-  // WTE morph LFO 1 (the live wavetable morph): full-rate/depth draws +
-  // SIN or WALK shape (S too niche for random). (The old Wave/Wave 2 banks,
-  // the stream-2 LFO, Wave Mix and the wave-mix LFO are no-ops now.)
-  for (const n of ["Wave LFO Rate", "Wave LFO Depth"])
-    set(n, r1023());
-  set("Wave LFO Shape", Math.random() < 0.5 ? 0 : 896); // 0 = Sin, 896 = Walk
-  set("Wave LFO Gap", rRange(171, 962));                // ~10..200 s
+  // (The WTE morph LFO 1 — "Wave LFO Rate/Depth/Shape/Gap", 35/36/40/41 — is
+  //  deliberately NOT re-rolled: the group now lives in the "Wavetable" tab
+  //  (WaveLfoPanel) and the user owns it there. Rnd/Reset keep the current
+  //  state values, which `raws` (the base slice) already carries.)
   // --- Constrained (critical) parameters -----------------------------------
   set("Detune", rRange(256, 767));     // +/-5 c
   set("Rate", rRange(204, 511));       // 20..50%
-  set("Sub 1", rRange(204, 818));      // 20..80%
-  set("Sub 2", rRange(256, 716));      // 25..70%
+  // (Sub 1 / Sub 2 re-roll removed -- the sub voices are NO-OPS now; the low
+  //  end lives inside the WTE wavetable, so randomize leaves 8/9/34 at the
+  //  base slice value and the UI never shows them.)
   set("Drive", rRange(136, 819));      // 40..240
   set("Asym", rRange(256, 767));       // +/-50%
   set("Fold", rRange(0, 613));         // 0..60%
@@ -516,33 +523,28 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
     state.activePreset = presetLabel;
     bus.emit('preset:active', { name: presetLabel });
     let i = 0;
-    (function step() {
-      if (i < raws.length) {
-        const raw = raws[i];
-        // (The old WaveBank / WaveBank2 radio sync (i === 13/14) is gone: the
-        // stock banks are no-ops now — their raw values pass through to the
-        // DSP as no-ops. The LfoShape radios keep only the LIVE one (40).)
-        if (i === 40) {
-          bus.emit('radio:ext', {
-            group: 'LfoShape1',
-            idx: lfoShapeIdxFromRaw(raw),
-          });
-        } else if (i === 49) {
-          bus.emit('radio:ext', { group: 'FmModWave', idx: fmModWaveIdxFromRaw(raw) });
-        } else {
-          bus.emit('param:ext', { i, v: raw });
-        }
-        if (Module.setEditParam) Module.setEditParam(i, raw);
-        state.params[i] = raw;
-        ++i;
-        presetApplyTimer = setTimeout(step, 8);
+    while (i < raws.length) {
+      // The Wavetable LFO group (35/36/40/41, WaveLfoPanel in the "Wavetable"
+      // tab) is excluded from randomization/reset: skip the DSP write and
+      // the UI sync (param:ext / radio:ext) so the panel's state is
+      // preserved. (The old WaveBank / WaveBank2 radio sync (i === 13/14)
+      // is gone: the stock banks are no-ops now — their raw values pass
+      // through to the DSP as no-ops.)
+      if (i === 35 || i === 36 || i === 40 || i === 41) { ++i; continue; }
+      const raw = raws[i];
+      if (i === 49) {
+        bus.emit('radio:ext', { group: 'FmModWave', idx: fmModWaveIdxFromRaw(raw) });
       } else {
-        presetApplyTimer = null;
-        // UI-thread apply bypasses the audio re-roll stabilization — sync the
-        // C++ Orbit "stable state" snapshot with the freshly applied sound.
-        if (Module.stableSync) Module.stableSync();
+        bus.emit('param:ext', { i, v: raw });
       }
-    })();
+      if (Module.setEditParam) Module.setEditParam(i, raw);
+      state.params[i] = raw;
+      ++i;
+    }
+    presetApplyTimer = null;
+    // UI-thread apply bypasses the audio re-roll stabilization — sync the
+    // C++ Orbit "stable state" snapshot with the freshly applied sound.
+    if (Module.stableSync) Module.stableSync();
   }
 
   let fireSyncTimer: ReturnType<typeof setInterval> | null = null;
@@ -564,18 +566,15 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
     fireSyncTimer = setInterval(() => {
       let dirty = false;
       for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
+        // The Wavetable LFO group (35/36/40/41) is user-owned (WaveLfoPanel in
+        // the "Wavetable" tab) and excluded from randomization: never read it
+        // back from the DSP (it would overwrite the live state while a morph
+        // of other params is in flight).
+        if (i === 35 || i === 36 || i === 40 || i === 41) continue;
         const v = Module.getEditParamValue(i);
         // (The old WaveBank / WaveBank2 radio sync (i === 13/14) is gone: the
         // stock banks are no-ops now. The LfoShape radios keep only the
-        // LIVE one (40, the WTE-morph LFO).)
-        if (i === 40) {
-          bus.emit('radio:ext', {
-            group: 'LfoShape1',
-            idx: lfoShapeIdxFromRaw(v),
-          });
-          dirty = true;
-          continue;
-        }
+        // LIVE one (49, the FM mod wave).)
         if (i === 49) {
           bus.emit('radio:ext', { group: 'FmModWave', idx: fmModWaveIdxFromRaw(v) });
           dirty = true;
@@ -930,17 +929,16 @@ export function initAudio(bundle: { context: AudioContext; node: AudioWorkletNod
   // subscribes at import time (before initAudio runs), so all :init events
   // are caught.
   for (let i = 0; i < EDIT_PARAM_COUNT; ++i) {
+    // The Wavetable LFO group (35/36/40/41) is user-owned (WaveLfoPanel in the
+    // "Wavetable" tab) and excluded from randomization/reset: do NOT publish
+    // its values on :init — the UI state (user's settings) is authoritative.
+    if (i === 35 || i === 36 || i === 40 || i === 41) continue;
     const v = (Module.getEditParamValue) ? Module.getEditParamValue(i) : DEFAULT_RAW[i];
     state.params[i] = v;
     // (The old WaveBank / WaveBank2 radio init (i === 13/14) is gone: the
     // stock banks are no-ops now. The LfoShape radios keep only the LIVE
-    // one (40, the WTE-morph LFO).)
-    if (i === 40) {
-      bus.emit('radio:init', {
-        group: 'LfoShape1',
-        idx: lfoShapeIdxFromRaw(v),
-      });
-    } else if (i === 49) {
+    // one (49, the FM mod wave).)
+    if (i === 49) {
       bus.emit('radio:init', { group: 'FmModWave', idx: fmModWaveIdxFromRaw(v) });
     } else {
       bus.emit('param:init', { i, v });

@@ -12,32 +12,30 @@
 		savePreset, deletePreset,
 	} from '$lib/audio/stores';
 	import {
-		PARAM_GROUPS, EDIT_PARAM_NAMES, LFO_SHAPES, FM_MOD_WAVES,
+		PARAM_GROUPS, EDIT_PARAM_NAMES, FM_MOD_WAVES,
 		formatParamValue,
 	} from '$lib/audio/core';
 
 	// Radio-индексы edit-параметров. (The old 13/14 (WaveBank/WaveBank2) and
 	// 42/46 (LfoShape2/3) groups are gone with the stock banks / stream 2 —
-	// the WTE wavetable is the sole source; its morph LFO shape is the single
-	// live group, 40.)
-	const RADIO_IDX = new Set([40, 49]);
+	// the WTE wavetable is the sole source. Its morph LFO shape (edit 40) is
+	// NOT here anymore: the whole WAVETABLE group (35/36/40/41) moved to the
+	// "Wavetable" tab — WaveLfoPanel.svelte, right of the 3D view.)
+	const RADIO_IDX = new Set([49]);
 	// edit-idx -> radio group name.
 	const IDX_TO_GROUP = {
-		40: 'LfoShape1',
 		49: 'FmModWave',
 	};
 	// Radio-группа -> edit-индекс (для setParam).
 	const GROUP_TO_IDX = {
-		LfoShape1: 40,
 		FmModWave: 49,
 	};
 
 	// Radio-группа -> список подписей кнопок:
-	// Wave LFO Shape (the WTE-morph LFO) — Sin/S/Walk (LFO_SHAPES),
 	// FM Mod Wave — SIN/TRI/SAW/SQR/NOISE (FM_MOD_WAVES).
+	// (Wave LFO Shape, the WTE-morph LFO, is rendered in WaveLfoPanel now.)
 	// Ключи — те же, что в IDX_TO_GROUP.
 	const RADIO_OPTS = {
-		LfoShape1: LFO_SHAPES.map((s) => s.label),
 		FmModWave: FM_MOD_WAVES.map((s) => s.label),
 	};
 	const radioOpts = (group) => RADIO_OPTS[group] ?? [];
@@ -107,7 +105,10 @@
 							<div class="flex flex-col gap-2">
 								{#if g.title}<div class="text-xs uppercase tracking-wide opacity-60 mt-1">{g.title}</div>{/if}
 								{#each g.items as i (i)}
-									{#if RADIO_IDX.has(i)}
+									{#if i === 35 || i === 36 || i === 40 || i === 41}
+									<!-- Wavetable LFO group (35/36/40/41) moved to the "Wavetable"
+										     tab (WaveLfoPanel) — never rendered in Main. -->
+									{:else if RADIO_IDX.has(i)}
 										{@const group = IDX_TO_GROUP[i]}
 										<div class="flex items-center gap-3 '{$audioState.morphing.has(i) ? 'param-row--morphing' : ''}">
 											<span class="w-32 text-sm font-medium shrink-0 truncate">{EDIT_PARAM_NAMES[i]}</span>
@@ -149,8 +150,9 @@
 	   flyonui btn btn-outline btn-primary btn-sm (1:1 legacy). */
 	.preset-status { font-size: 0.7rem; opacity: 0.6; margin-left: 0.25rem; }
 
-	/* Radio groups (WAVE/WAVE 2 A..F, LFO Shape Sin/S/Walk, FM Mod Wave
-		 SIN/TRI/SAW/SQR/NOISE): FlyonUI "join radio with btn" pattern — the
+	/* Radio groups (FM Mod Wave SIN/TRI/SAW/SQR/NOISE; the Wave LFO Shape
+		 Sin/S/Walk group now lives in WaveLfoPanel): FlyonUI "join radio with
+		 btn" pattern — the
 		 same geometry as .octave-join (app.css), re-asserted locally so the
 		 component stays self-contained (Svelte scoped styles can't reach
 		 app.css custom properties from another module). */

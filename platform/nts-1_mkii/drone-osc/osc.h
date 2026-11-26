@@ -22,14 +22,15 @@
  *
  *  The remaining building blocks are helper structs in their own headers
  *  (osc_waves.h, osc_saturator.h, osc_svf.h, osc_random_walk.h,
- *  osc_envelope.h, osc_sub2.h, osc_chord.h, osc_detune.h, osc_lfo_sim.h),
+ *  osc_envelope.h, osc_detune.h, osc_lfo_sim.h, osc_wte.h),
  *  and the live DSP state lives in OscParamsData (osc_params.h).
  *
- *  Sound overview: two wavetable phasors (A/B) at the base note with a static
- *  symmetric detune (DETU), a pre-drive wavefolder (FOLD) and an asymmetric
- *  soft-clip saturator (SATU/ASYM), a third "chord" voice (CHRD/CINT) with its
- *  own drive/fold (CHSAT/CHFLD), sub-octave (SUB1) and sub-2 (SUB2) voices, an
- *  internal 12 dB/oct SVF (FCUT/RESO), and four independent random-walk streams
+ *  Sound overview: two wavetable phasors (A/B) at the base note (the A+B
+ *  cluster reads the 16-frame EDITOR wavetable, whose default recipe carries
+ *  the low end as subharmonic partials -- see wte_default_wave in
+ *  osc_wte_doc.h) with a static symmetric detune (DETU), a pre-drive wavefolder
+ *  (FOLD) and an asymmetric soft-clip saturator (SATU/ASYM), an internal
+ *  12 dB/oct SVF (FCUT/RESO), and four independent random-walk streams
  *  (Tone/Timbre/Density/Breath) plus static phase-FM (FM1/FM2) and their
  *  random-walk breathing (RFMA/RFMB). No dynamic
  *  allocation: all state lives in members of this class.
@@ -42,11 +43,11 @@
 
 // Forward declaration (defined further down, after the helper headers): a fast
 // float->float floor for modular phasor wrap. It must be declared BEFORE the
-// helper headers (osc_sub2.h etc.) because they call it from inline methods.
+// helper headers (osc_detune.h etc.) because they call it from inline methods.
 inline float fast_floorf(float x);
 
 // Forward declaration (defined further down): 1 - e^x via a small-x Taylor
-// series. Must be declared BEFORE the helper headers (osc_sub2.h etc.) because
+// series. Must be declared BEFORE the helper headers (osc_detune.h etc.) because
 // they call it from inline methods (K-rate coefficient setup).
 inline float one_minus_expf(float x);
 
@@ -56,7 +57,8 @@ inline float one_minus_expf(float x);
 #include "osc_saturator.h"    // Saturator: pre-drive wavefolder + asymmetric soft-clip
 #include "osc_svf.h"          // Svf: 12 dB/oct state-variable filter (post-saturator)
 #include "osc_random_walk.h"  // RandomWalk: multi-channel wandering
-#include "osc_sub2.h"         // Sub2Voice: f/4 saturated, LPF'd, gated sub voice
+// (osc_sub2.h / Sub2Voice removed: the f/4 sub-2 voice is gone -- the low end
+//  now lives inside the WTE wavetable as subharmonic partials.)
 #include "osc_detune.h"       // Detune: w0 detuning / factor (4th-order Taylor)
 #include "osc_lfo_sim.h"      // LfoSim: web-sim-only shape-LFO synthesizer
 #include "osc_constants.h"    // global-scope tuning constants (kSatuMax, kMix*, ...)
@@ -144,15 +146,15 @@ public:
     SMT2,           // Timbre stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
     SPD3,           // Density stream period (0..100% -> 0.1 s..10 s, log, default 50%)
     SMT3,           // Density stream time constant (0..100% -> 10 ms..1.5 s, log, default 50%)
-    SUB1,           // sub-octave sine level (0..100%, default 50%)
-    SUB2,           // second sub (f/4) very-soft-saturated level (0..100%, default 0% = off)
+    SUB1,           // (NO-OP, removed: the SUB1 f/2 sub-octave sine voice is gone -- the low end now lives INSIDE the WTE wavetable as subharmonic partials, see wte_default_wave in osc_wte_doc.h. Kept in the enum so the parameter layout / raw indices are stable.)
+    SUB2,           // (NO-OP, removed: the SUB2 f/4 sub-2 voice is gone -- the low end now lives inside the WTE wavetable. Kept in the enum for a stable parameter layout.)
     SATU,           // saturator drive (0..3.0, default 2.0 = moderate)
     ASYM,           // asymmetric saturator (−100%..+100%, default 0% = symmetric)
     FOLD,           // pre-drive wavefolder depth (0..100%, default 0% = off)
     WAV1,           // oscillator A wavetable BANK (raw 0..1023 -> bank A..F, 0..5; the internal wave-LFO 1 morphs within the bank)
     WAV2,           // oscillator B wavetable BANK (raw 0..1023 -> bank A..F, 0..5; the internal wave-LFO 2 morphs within the bank). Was deprecated (A/B shared one wave); revived as the second wave stream for the 2D crossfade (see WAVE_MIX).
     // (WAV3 / CHORD / CHRD_INT were removed — the chord/interval concept is
-    //  gone; the main A+B voice + SUB1/SUB2 remain.)
+    //  gone; the main A+B voice remains, the SUB1/SUB2 sub voices are no-ops.)
     MAIN,           // main (A+B mixed) voice level (0..100%, default 100% = full)
     RW_WAV,         // random-walk depth on wavetable morph (0..100%, default 0% = off)
     RW_DRV,         // random-walk depth on saturator drive (0..100%, default 0% = off)
@@ -179,12 +181,12 @@ public:
     // (CHSAT2 / CHFLD2 were removed — the chord/interval concept is gone.)
     // All default to OFF (transparent), so the stock sound is bit-identical
     // until the user turns one on. NOTE: FOLD2 (cascaded wavefolder) and DCK
-    // (sidechain-duck amount) were REMOVED — DCK is now a CONSTANT (see
-    // kDuckConstant in osc_constants.h) and FOLD2 was judged unnecessary.
+    // (sidechain-duck amount) were REMOVED — FOLD2 was judged unnecessary and
+    // the sidechain duck is gone with the SUB1/SUB2 sub voices.
     FORM,           // formant vowel position (0..1, morph across A-E-I-O-U)
     FVOL,           // formant stage dry/wet (0..1, 0 = dry / transparent)
     COMB,           // comb resonator feedback (0..1 -> 0..kCombFbMax)
-    SUBB,           // sub-bass "breath" depth (0..100% -> 0..kSubBreathMax): the SHARED sub bass (SUB1/SUB2) level follows the loudest (breath-focus) voice. 0% = static low end (regression-safe).
+    SUBB,           // (NO-OP, removed: the SHARED sub bass (SUB1/SUB2) is gone -- the low end now lives inside the WTE wavetable as subharmonic partials, so there is no "sub-bass breath" to breathe. Kept in the enum for a stable parameter layout.)
     // ---- Internal WAVE LFO (independent of the platform shape-LFO) ----------
     // The EDITOR WAVETABLE morph is driven by an INTERNAL LFO, not the platform
     // shape-LFO (the hardware's OSC-button RATE/SHAPE knobs are now NO-OPs --
@@ -311,7 +313,7 @@ public:
   //   30 FMBB (RFM_B: random-walk depth on FM B, RATE-gated)
   //   31 FMVT (formant vowel position)  32 FLVL (formant dry/wet)
   //   33 COMB (comb resonator)
-  //   34 SUBB (shared sub-bass breath depth, follows the breath-focus voice)
+  //   34 SUBB (NO-OP: the shared sub bass is removed; the low end is in the WTE wavetable)
   //   35 WLFO R (WAVE_LFO_RATE: internal wave-LFO 1 frequency, log 0..1 Hz)
   //   36 WLFO D (WAVE_LFO_DEPTH: internal wave-LFO 1 morph depth, 0..100%)
   //   37 W2LFO R (WAVE2_LFO_RATE: wave-LFO 2 frequency, log 0..1 Hz)
@@ -341,10 +343,10 @@ public:
   // RWFC 0, RW_LVL 0 (breath off), RW_LSP 511, RW_LSM 511.
   // Enrichment-2 defaults (indices 31..33): FORM 511 (middle vowel, but the
   // formant stage is OFF until FVOL > 0), FVOL 0 (dry / transparent),
-  // COMB 0 (all off, regression-safe). SUB2 (index 9) defaults to 410 (~40%).
-  // SUBB (index 34) defaults to 307 (~30%): the shared sub bass breathes
-  // gently (depth 0.18) by default — the low end follows the breath-focus
-  // note subtly instead of staying fully static.
+  // COMB 0 (all off, regression-safe). SUB1 (index 8) / SUB2 (index 9) /
+  // SUBB (index 34) are NO-OPS now (the shared sub bass is removed; the low
+  // end lives inside the WTE wavetable) — their cached raw values (511/410/307)
+  // are vestigial and never drive any DSP.
   // WAVE_LFO_RATE (index 35) defaults to 0: raw 0 = 0 Hz (LFO OFF -- the WTE
   // table stays static at its middle frame, 7.5). Turning the knob up sweeps
   // 0.001..1 Hz on a LOG scale (10^(3*raw/1023 - 3), 3 decades, finer near
@@ -596,16 +598,10 @@ public:
   // random-walk maximum deviation in cents at RATE AMT = 100% (full knob).
   // The detune never strays further from the DETUNE knob value than this.
 
-  // Fixed sub-octave detune: the sub sine runs slightly flat (−4 cents) so
-  // it "breathes" against the saws instead of locking to them. A few cents
-  // at one octave below gives a slow, organic beat without sounding sloppy.
-  static constexpr float kSubDetuneCents = -4.f;
-
-  // LFO → FM depth on the sub phasor. The platform shape-LFO arrives in
-  // lfo_ in (-1, 1); we scale it to ±5 cents of frequency modulation on the
-  // sub-octave sine, giving it a subtle "wobble" the external LFO module
-  // can't reach (it only sees the whole unit, not the internal sub voice).
-  static constexpr float kSubLfoFmCents = 5.f;
+  // (kSubDetuneCents / kSubLfoFmCents removed with the SUB1/SUB2 sub voices:
+  //  the sub-octave sine is gone -- the low end now lives inside the WTE
+  //  wavetable as subharmonic partials, see wte_default_wave in
+  //  osc_wte_doc.h.)
 
   // (The LFO -> WTE-table morph geometry lives in osc_mix.h: wte_morph =
   //  7.5 + lfo_sim_.process() * 7.5, the full 16-frame sweep.)
@@ -660,20 +656,12 @@ public:
     uint32_t gen = 0;         // monotonically increasing: used for "oldest" steal
   };
 
-  // ---- Shared sub bass (ONE sub pair for the whole cluster) -----------------
-  // Since the polyphonic build, SUB1 (f/2) and SUB2 (f/4) are no longer
-  // per-voice: the cluster's N notes feed ONE shared sub pair whose pitch is
-  // the ENV-WEIGHTED ANCHOR of the sounding voices (see sub_anchor_w0_). This
-  // makes the low end one stable "fundamental under the drone" instead of N
-  // incoherent sub voices, and note on/off morphs the sub pitch smoothly
-  // (one-pole relax) instead of clicking. The sub bass LEVEL breathes with the
-  // loudest (breath-focus) voice at a depth set by the SUBB knob
-  // (sub_breath_gain_, see the kSubBreath* constants in osc_constants.h).
-  float      sub_ph   = 0.f;   // shared sub-octave (f/2) phasor (0..1)
-  float      sub_ph2  = 0.f;   // shared sub-2 (f/4) phasor (0..1)
-  Sub2Voice  sub2;             // shared f/4 saturated / LPF'd / gated sub voice
-  float      sub_anchor_w0 = 0.f; // one-pole relaxed anchor rate (0..w0) — the pitch the sub phasors advance at
-  float      sub_breath_gain = 1.f;  // one-pole relaxed SUBB breath gain (1.0 = static)
+  // (The SHARED SUB BASS state -- sub_ph / sub_ph2 / Sub2Voice sub2 /
+  //  sub_anchor_w0 / sub_breath_gain -- is REMOVED: the low end now lives
+  //  INSIDE the WTE wavetable as subharmonic partials (the f/4 source in
+  //  wte_default_wave, osc_wte_doc.h), so the drone's bass is read straight
+  //  out of the table by the A+B voices. There is no separate bass branch any
+  //  more, hence no phasors / anchor / breath gain.)
   float      fm_c_ph = 0.f;   // FM modulator C phasor (0..1): independent LFO-style oscillator that phase-FMs the (A+B) sum
   float      fm_s_ph = 0.f;   // FM modulator S phasor (0..1): carrier-locked "static teeth" oscillator (N teeth per A cycle) that phase-FMs the (A+B) sum
   // ---- Editor wavetable (WTE: 16 waves from the /editor doc) -----------------
@@ -966,15 +954,10 @@ private:
   float    comb_buf_[kCombDelayMaxSmp];  // ring buffer (zeroed in init())
   uint32_t comb_w_  = 0;                 // write cursor
 
-  // Envelope follower / sidechain ducking: a one-pole abs-peak follower of
-  // the combined SUB1+SUB2 output energy, and the per-sample duck gain. The
-  // duck is now CONSTANT (kDuckConstant, see osc_constants.h) -- it is always
-  // active, the follower advances every sample, and duck_gain in osc_mix.h
-  // settles to 1 - kDuckConstant * env_follower (floored at kDuckFloor). The
-  // duck gain applies to the MAIN voice (A+B + RMOD), NOT the subs: the low
-  // end is the constant anchor, the main tone yields.
-  float duck_alpha_ = 0.f;     // one-pole follower coefficient (1 - exp(-1/tau))
-  float env_follower_ = 0.f;   // smoothed |sub1 + sub2| energy
+  // (The envelope follower / sidechain ducking members -- duck_alpha_ /
+  //  env_follower_ -- are REMOVED with the SUB1/SUB2 sub voices: there is no
+  //  separate low-end branch to duck the MAIN voice against, so the main + RMOD
+  //  mix is now un-ducked (see the final mix in osc_mix.h).)
 
   // Formant: TWO parallel one-pole IIR comb resonators (F1 + F2), each a
   // ring-buffer delay line with a single feedback tap (ALWAYS STABLE, |fb| < 1).

@@ -44,11 +44,12 @@ const __unit_header unit_header_t unit_header = {
         //   5: SM2  - Timbre stream time constant (log), default 511
         //   6: SPD3 - Density stream period (log), default 511
         //   7: SM3  - Density stream time constant (log), default 511
-        //   8: SUB1 - SHARED sub-octave (f/2) sine level (0..100%), default 511 (50%)
-        //   9: SUB2 - SHARED second sub (f/4) saturated level (0..100%), default 410 (~40%)
-        //     (SUB1/SUB2 are ONE shared pair for the whole polyphonic cluster —
-        //      the cluster's env-weighted ANCHOR note; see the "Shared sub
-        //      bass" block in osc_mix.h and the README Sound path.)
+        //   8: SUB1 - (NO-OP, removed: the f/2 sub-octave voice is gone — the
+        //            low end now lives INSIDE the WTE wavetable as a
+        //            subharmonic partial; see wte_default_wave in osc_wte_doc.h
+        //            and the README "DEFAULT WAVETABLE" block.)
+        //   9: SUB2 - (NO-OP, removed: the f/4 sub-2 voice is gone — the low
+        //            end is in the WTE wavetable.)
         //   10: SAT  - saturator drive (0..300), default 341 (100 = 1.0x, gentle)
         //   11: ASYM - asymmetric saturator (-100%..+100%), default 511 (0%)
         //   12: FLD  - pre-drive wavefolder depth (0..100%), default 0 (off)
@@ -73,11 +74,9 @@ const __unit_header unit_header_t unit_header = {
         //   31: FMVT - formant vowel position (A-E-I-O-U morph), default 511 (mid, but stage OFF until FLVL>0)
         //   32: FLVL - formant stage dry/wet (0..100%), default 0 (off / transparent)
         //   33: COMB - comb resonator feedback (0..100% -> 0..0.9 fb), default 0 (off)
-        //   34: SUBB - SHARED sub-bass "breath" depth (0..100% -> 0..0.6 swing): the
-        //     one shared SUB1/SUB2 pair (the cluster's env-weighted ANCHOR note)
-        //     follows the LOUDEST (breath-focus) voice's envelope. 0% = the old
-        //     static low end (regression-safe); default 307 (~30% -> ~+/-18% swing,
-        //     the low end gently follows the breathing note).
+        //   34: SUBB - (NO-OP, removed: the shared sub bass (SUB1/SUB2) is gone,
+        //     so there is no "sub-bass breath" to breathe — the low end now lives
+        //     inside the WTE wavetable as a subharmonic partial.)
         //   35: WLFR - internal wave-LFO frequency (LOG 0.001..1 Hz, finer near
         //     0; default 341 = 0.1 Hz). Drives the WAVE-bank intra-bank morph.
         //   36: WLFD - internal wave-LFO morph depth (LINEAR 0..100%; default
